@@ -214,6 +214,30 @@ export function createToolset({ registry, engine, log }) {
 		},
 
 		{
+			name: "leave_worker",
+			description: "Stop talking to the active worker and put the user back with you, without ending anything. The worker keeps running, keeps its transcript, and can be switched back to. Use this when the user wants to come back to you rather than to close something down.",
+			inputSchema: { type: "object", properties: {}, additionalProperties: false },
+			run: (_args, { session }) => {
+				// Not an error when there is nobody to leave. The user asking to
+				// come back to Jarvis while already with him has got what they
+				// asked for, and a refusal would read as a fault they have to
+				// understand before they can go on.
+				const left = session.worker;
+				if (!left) {
+					return { kind: "workerSwitched", text: "You are already talking to Jarvis.", data: { active: null, left: null } };
+				}
+				setActive(session, null);
+				// Deliberately only this session. Another device talking to that
+				// worker is having its own conversation and did not ask to leave.
+				return {
+					kind: "workerSwitched",
+					text: `Left ${left}. It keeps running. You are back with Jarvis.`,
+					data: { active: null, left }
+				};
+			}
+		},
+
+		{
 			name: "end_worker",
 			description: "End a worker. Its transcript is kept but it is no longer listed and its name becomes free again.",
 			inputSchema: {

@@ -46,8 +46,9 @@ that path works, the server can expose MCP directly and the adapter disappears.
 | tool | arguments | returns |
 |---|---|---|
 | `list_workers` | — | name, id, model, cwd, busy, last activity |
-| `spawn_worker` | `name`, `model?`, `cwd?`, `prompt?` | the new worker, and switches to it |
+| `spawn_worker` | `name`, `systemPrompt`, `model?`, `cwd?`, `prompt?` | the new worker, and switches to it |
 | `switch_worker` | `name` | the now-active worker |
+| `leave_worker` | — | confirmation; back with Jarvis, worker left running |
 | `end_worker` | `name` | confirmation |
 | `read_worker` | `name`, `turns?` | recent transcript of another worker |
 | `rename_worker` | `name`, `newName` | confirmation |
@@ -67,7 +68,9 @@ A name collision must fail loudly rather than silently reuse an existing worker.
 
 ### Model selection
 
-`spawn_worker(model)` accepts what the user says — "opus", "sonnet", "haiku",
+`spawn_worker(systemPrompt)` is required, not optional: measured, Jarvis otherwise
+wrote the worker's standing instructions into `prompt`, where they are said once
+and scroll away. `spawn_worker(model)` accepts what the user says — "opus", "sonnet", "haiku",
 "opus 5" — and maps it to a model id. An unknown model is an error with the
 list of valid ones, not a silent fallback to the default: being given a
 different model than you asked for is worse than being told no.

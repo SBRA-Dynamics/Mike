@@ -78,8 +78,8 @@ try {
 	section("verktygen — PRD 2 'Tools'");
 	const listed = await mcp.listTools();
 	const names = listed.result.tools.map((t) => t.name).sort();
-	check("exakt de sex verktygen finns",
-		JSON.stringify(names) === JSON.stringify(["end_worker", "list_workers", "read_worker", "rename_worker", "spawn_worker", "switch_worker"]),
+	check("exakt de sju verktygen finns",
+		JSON.stringify(names) === JSON.stringify(["end_worker", "leave_worker", "list_workers", "read_worker", "rename_worker", "spawn_worker", "switch_worker"]),
 		JSON.stringify(names));
 	check("inget skal-verktyg exponeras", !names.some((n) => /bash|shell|exec|run/.test(n)));
 	check("varje verktyg har ett schema", listed.result.tools.every((t) => t.inputSchema?.type === "object"));
@@ -236,6 +236,33 @@ try {
 	}
 
 	// -------------------------------------------------------------- persistence
+	// Leaving is not ending. The distinction is the whole point of the tool: a
+	// user with their hands busy who wants to come back to Jarvis must not have
+	// to destroy the conversation they were in to do it.
+	section("att lämna en arbetare är inte att avsluta den");
+	{
+		await mcp.call("spawn_worker", { name: "Ester", systemPrompt: "Du sköter en uppgift i testriggen." });
+		const left = await mcp.call("leave_worker", {});
+		check("att lämna lyckas", left.isError === false, JSON.stringify(left));
+		check("och säger att arbetaren lever", /keeps running/i.test(left.text), left.text);
+		check("arbetaren finns kvar i listan", /Ester/.test((await mcp.call("list_workers")).text));
+
+		// The tool saying so is not the same as the session being so.
+		const reattached = await connect(server, { sessionId });
+		check("sessionen pekar inte längre på någon arbetare", reattached.readyMsg.worker === null, JSON.stringify(reattached.readyMsg.worker));
+		check("men arbetaren står kvar i ready-listan",
+			reattached.readyMsg.workers.some((w) => w.name === "Ester"), JSON.stringify(reattached.readyMsg.workers));
+		reattached.close();
+
+		const again = await mcp.call("leave_worker", {});
+		check("att lämna när man redan är hos Jarvis är inget fel", again.isError === false, JSON.stringify(again));
+
+		const back = await mcp.call("switch_worker", { name: "Ester" });
+		check("man kan växla tillbaka till den", back.isError === false, JSON.stringify(back));
+		await mcp.call("end_worker", { name: "Ester" });
+		check("efter avslut är den borta", !/Ester/.test((await mcp.call("list_workers")).text));
+	}
+
 	// A schema that says a field is required, and a server that runs the tool
 	// without it, is a schema the model is free to ignore. Measured: spawn_worker
 	// asked for a system prompt, did not get one, and answered "ok" — every time.
