@@ -158,6 +158,36 @@ try {
 			check(`"${text}" i läge ${mode}`, r.kind === "mode" && r.to === to, JSON.stringify(r));
 		}
 	}
+	// The phrasing in the PRD is one way of saying it, not the only way anybody
+	// says it. A command nobody guesses is a command that does not exist.
+	section("lägeskommandon tål att sägas som folk säger dem");
+	for (const [text, to] of [
+		["byt till always", MODES.ALWAYS], ["sätt läget till alltid", MODES.ALWAYS],
+		["change mode to always", MODES.ALWAYS], ["switch to always", MODES.ALWAYS],
+		["gå till alltid", MODES.ALWAYS], ["always mode", MODES.ALWAYS],
+		// Said out loud by Robin, and dropped: "always ON" is how the mode is
+		// named in speech, and the command did not know the word.
+		["ändra mode till always on", MODES.ALWAYS], ["byt till alltid på", MODES.ALWAYS],
+		["byt till via namn", MODES.BYNAME], ["namnläge", MODES.BYNAME],
+		["växla till håll in", MODES.PUSHTOTALK], ["byt till knapp", MODES.PUSHTOTALK],
+		["sluta lyssna", MODES.IGNORE], ["börja lyssna", "previous"]
+	]) {
+		const r = route(text, { worker: "Bosse" });
+		check(`"${text}"`, r.kind === "mode" && r.to === to, JSON.stringify(r));
+	}
+
+	// And the other half, which matters more: these are matched before the
+	// addressing gate, so a false positive costs a sentence the user has to say
+	// again. The whole utterance must BE the command.
+	section("men bara när hela meningen är kommandot");
+	for (const text of ["byt till alltid när du felsöker", "gå till alltid samma katalog",
+		"switch to always using arrow functions", "stoppa lyssnandet på porten 3000",
+		"alltid", "namn", "pausa filmen", "byt till main-branchen",
+		"sätt alltid på loggningen i main", "always on for the new files"]) {
+		const r = route(text, { worker: "Bosse", origin: ORIGIN.TYPED });
+		check(`"${text}" är inte ett kommando`, r.kind !== "mode", JSON.stringify(r));
+	}
+
 	check("att prata OM kommandot utlöser det inte",
 		route("Jarvis, what happens if I say pause input to you", { worker: null }).kind === "jarvis");
 	check("fortsätt går tillbaka till läget före pausen, inte till standard",

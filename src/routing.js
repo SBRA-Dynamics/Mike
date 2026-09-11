@@ -151,14 +151,46 @@ export const isAddressedTo = (text, name) => stripAddress(text, name) !== null;
 // phrase inside a sentence, or discussing the feature would trigger it.
 
 const VERB = "(?:change|set|switch|put|andra|satt|byt|stall)";
-const MODE_COMMANDS = [
-	{ to: MODES.IGNORE, re: new RegExp(`^(?:${VERB} )?(?:pause|paus|pausa|stop|stoppa|mute|tysta) (?:the )?(?:input|inputen|ingangen|lyssnandet)$`) },
-	{ to: "previous", re: new RegExp(`^(?:${VERB} )?(?:continue|resume|unpause|fortsatt|fortsatta|aterta|aterupta) (?:the )?(?:input|inputen|ingangen|lyssnandet)$`) },
-	{ to: MODES.ALWAYS, re: new RegExp(`^(?:${VERB} )?(?:the )?input (?:to|till) (?:always|alltid|allt)$`) },
-	{ to: MODES.BYNAME, re: new RegExp(`^(?:${VERB} )?(?:the )?input (?:to|till) (?:by ?name|byname|via namn|namn)$`) },
+// The words for the thing being changed, and the words for what to change it
+// to. Written as two lists rather than as a dozen literal sentences, because
+// the sentences are the cross product and a user who says "change mode to
+// always" instead of "change input to always" is not making a mistake.
+const NOUN = "(?:input|inputen|ingangen|lyssnandet|mode|modet|laget|lage|lyssningen)";
+const TO = "(?:to|till)";
+const GO = `(?:${VERB}|go|ga|byt|vaxla|switch|set|satt|stall)`;
+
+// A trailing particle is allowed, and only these: "always ON", "alltid PÅ" is
+// how the mode is actually said out loud. Measured — Robin said "ändra mode
+// till always on" and the command fell through to Jarvis, who explained the
+// exact word that did not match. The alternative, allowing any trailing word,
+// would throw away the anchoring that keeps "byt till alltid när du felsöker"
+// out of the command path, and that anchoring is worth more than reach.
+const TARGETS = {
+	[MODES.ALWAYS]: "(?:always|alltid|allt)(?: (?:on|pa|igang))?",
+	[MODES.BYNAME]: "(?:by ?name|byname|via namn|namn|namnet)",
 	// "håll in" folds to "hall in", and a hyphenated "push-to-talk" folds to
 	// three words — so the optional spaces cover the written form too.
-	{ to: MODES.PUSHTOTALK, re: new RegExp(`^(?:${VERB} )?(?:the )?input (?:to|till) (?:push ?to ?talk|hall in|halla in|hall inne|tryck och tala)$`) }
+	[MODES.PUSHTOTALK]: "(?:push ?to ?talk|hall in|halla in|hall inne|tryck och tala|knapp)"
+};
+
+/** Every way of saying "make it X" that is still unambiguous.
+ *
+ *  A bare target is deliberately NOT one of them: "alltid" and "namn" are
+ *  ordinary words, and these are matched before the addressing gate, so a false
+ *  positive costs the user a sentence they have to say again. Either a verb or
+ *  the noun has to be present — someone who says only "always" gets their word
+ *  passed through, which is the safe way to be wrong. */
+const MODE_COMMANDS = [
+	{ to: MODES.IGNORE, re: new RegExp(`^(?:${VERB} )?(?:pause|paus|pausa|stop|stoppa|mute|tysta) (?:the )?${NOUN}$`) },
+	{ to: MODES.IGNORE, re: new RegExp(`^(?:stop|sluta|stanna) (?:listening|lyssna|att lyssna)$`) },
+	{ to: "previous", re: new RegExp(`^(?:${VERB} )?(?:continue|resume|unpause|fortsatt|fortsatta|aterta|aterupta) (?:the )?${NOUN}$`) },
+	{ to: "previous", re: new RegExp(`^(?:start|borja|fortsatt) (?:listening|lyssna|att lyssna)$`) },
+	...Object.entries(TARGETS).flatMap(([mode, target]) => [
+		// "change the input to always", "byt läge till alltid", "switch to always"
+		{ to: mode, re: new RegExp(`^${GO} (?:the )?(?:${NOUN} )?(?:${TO} )?${target}$`) },
+		// "always mode", "namnläge" — the target naming the noun directly
+		{ to: mode, re: new RegExp(`^${target} ?${NOUN}$`) }
+	])
 ];
 
 /** Turning the microphone on and off by voice.
