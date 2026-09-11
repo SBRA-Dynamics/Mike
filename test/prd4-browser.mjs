@@ -89,6 +89,32 @@ try {
 	check("ingen rad är bredare än femtio kolumner (krav 2)",
 		rows.every((r) => r.length <= 50), JSON.stringify(rows.filter((r) => r.length > 50)));
 
+	// The settings drawer, on a phone-sized viewport. Robin could not reach
+	// Reconnect or New conversation: the drawer is the tallest thing in the app,
+	// it opens at the bottom, and nothing scrolled.
+	section("inställningspanelen går att nå på en telefon");
+	const drawer = await evaluate(`(() => {
+		const d = document.querySelector("details.settings");
+		d.open = true;
+		const body = d.querySelector(".body");
+		const cs = getComputedStyle(body);
+		const buttons = [...d.querySelectorAll("button")].map((b) => b.textContent);
+		const last = [...d.querySelectorAll("button")].pop();
+		last.scrollIntoView({ block: "center" });
+		const r = last.getBoundingClientRect();
+		return {
+			overflow: cs.overflowY,
+			scrolls: body.scrollHeight > body.clientHeight,
+			reachable: r.top >= 0 && r.bottom <= innerHeight,
+			appTaller: document.getElementById("app").getBoundingClientRect().height <= innerHeight + 1,
+			buttons
+		};
+	})()`);
+	check("lådan rullar av sig själv", drawer.overflow === "auto", drawer.overflow);
+	check("den sista knappen går att få fram", drawer.reachable === true, JSON.stringify(drawer));
+	check("och appen är inte högre än fönstret", drawer.appTaller === true, JSON.stringify(drawer));
+	check("skanningsknappen finns", drawer.buttons.includes("Scan QR"), JSON.stringify(drawer.buttons));
+
 	check("inga fel i konsolen under hela varvet", consoleErrors.length === 0, JSON.stringify(consoleErrors.slice(0, 3)));
 	check("inga ouppfångade undantag i servern", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
 

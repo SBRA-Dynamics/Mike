@@ -6,6 +6,11 @@
 // changes the store, the store repaints both faces from the same frame.
 
 import { pcmToBase64, Voice } from "./audio/voice.ts";
+import { Scanner, settingsFromScan } from "./qr.ts";
+
+/** The camera, while it is reading a code. Null the rest of the time — a
+ *  scanner left alive is a camera light left on. */
+let scanner: Scanner | null = null;
 import { Connection, wsUrlFrom } from "./connection.ts";
 import { Glasses } from "./glasses.ts";
 import { renderLens } from "./lens/render.ts";
@@ -117,6 +122,28 @@ const companion = new Companion(root, {
 	},
 	interrupt: () => { connection?.interrupt(); },
 	setMode: (mode) => { connection?.control(CONTROL.SET_MODE, { mode }); },
+
+	scanQr: (ui) => {
+		scanner?.stop();
+		scanner = new Scanner({
+			video: ui.video,
+			canvas: ui.canvas,
+			onError: (message) => { ui.show(false); companion.note(message); },
+			onResult: (text) => {
+				scanner?.stop();
+				ui.show(false);
+				const read = settingsFromScan(text);
+				if (!read.ok) { companion.note(read.error); return; }
+				// Straight into the same path the ?token= link uses. Scanning is
+				// an input device, not a second way of being configured.
+				companion.note(`Scanned ${read.host}. Connecting…`);
+				void applySettings({ server: read.settings.server, token: read.settings.token });
+			}
+		});
+		ui.show(true);
+		void scanner.start().then((ok) => { if (!ok) ui.show(false); });
+	},
+	cancelScan: () => { scanner?.stop(); scanner = null; },
 	switchWorker: (name) => { connection?.control(CONTROL.SWITCH_WORKER, { name: name || null }); },
 	whoIs: () => { connection?.control(CONTROL.WHO_IS, {}); },
 	reconnect: () => { connection?.poke("manual"); },

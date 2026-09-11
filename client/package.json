@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Jarvis client \u2014 Even Hub plugin: lens view + companion view (PRD 4)",
+  "description": "Jarvis client — Even Hub plugin: lens view + companion view (PRD 4)",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && node -e \"require('fs').copyFileSync('app.json','../public/app.json')\"",
@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.15",
-    "@evenrealities/pretext": "^0.1.4"
+    "@evenrealities/pretext": "^0.1.4",
+    "jsqr": "^1.4.0"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

@@ -22,6 +22,10 @@ export type CompanionActions = {
 	reconnect: () => void;
 	newSession: () => void;
 	saveSettings: (patch: { token?: string; server?: string }) => void;
+	/** Read the server's link off a QR code instead of typing it. The view
+	 *  hands over the elements; the camera and the decoding belong to qr.ts. */
+	scanQr: (ui: { video: HTMLVideoElement; canvas: HTMLCanvasElement; show: (on: boolean) => void }) => void;
+	cancelScan: () => void;
 	/** The microphone switch — PRD 5a R5a.1. The only thing that asks for
 	 *  permission, because it is the only thing the user touched. */
 	setMic: (on: boolean) => void;
@@ -231,6 +235,16 @@ export class Companion {
 
 	#buildSettings(): HTMLElement {
 		const d = el("details", "settings");
+		// A field the keyboard covers is a field nobody can check what they typed
+		// in. The panel sits at the bottom of a column layout, so opening the
+		// keyboard slides it out of view entirely — scrolling the focused row
+		// into the middle of what is left is the whole fix.
+		const keepVisible = (e: Event) => {
+			const t = e.target as HTMLElement | null;
+			setTimeout(() => t?.scrollIntoView({ block: "center", behavior: "smooth" }), 250);
+		};
+		d.addEventListener("focusin", keepVisible);
+		d.addEventListener("toggle", () => { if (d.open) setTimeout(() => d.scrollIntoView({ block: "end", behavior: "smooth" }), 50); });
 		const summary = el("summary", "", "Settings");
 		const body = el("div", "body");
 
@@ -271,7 +285,30 @@ export class Companion {
 		apply.type = "button";
 		apply.addEventListener("click", () => this.#actions.saveSettings({ server: server.value.trim(), token: token.value.trim() }));
 		serverRow.append(server, token, apply);
-		serverWrap.append(serverRow);
+
+		// The way in that needs no keyboard. Typing a host and a 64-character
+		// token on a phone is the worst input this app asks for — the field
+		// hides behind the keyboard, and one wrong character reads as
+		// "unauthorized" with nothing to say which one.
+		const scanRow = el("div", "row scanrow");
+		const scan = el("button", "", "Scan QR");
+		scan.type = "button";
+		const scanNote = el("div", "note", "Point it at the link the server printed.");
+		scanRow.append(scan, scanNote);
+
+		const shot = el("div", "scanner");
+		shot.hidden = true;
+		const video = el("video", "scanvideo") as HTMLVideoElement;
+		const canvas = el("canvas") as HTMLCanvasElement;
+		canvas.hidden = true;
+		const cancel = el("button", "", "Cancel");
+		cancel.type = "button";
+		shot.append(video, canvas, cancel);
+
+		scan.addEventListener("click", () => this.#actions.scanQr({ video, canvas, show: (on) => { shot.hidden = !on; } }));
+		cancel.addEventListener("click", () => this.#actions.cancelScan());
+
+		serverWrap.append(serverRow, scanRow, shot);
 
 		const actions = el("div", "row");
 		const reconnect = el("button", "", "Reconnect");

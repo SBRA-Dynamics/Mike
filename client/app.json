@@ -18,6 +18,10 @@
     {
       "name": "network",
       "desc": "Connects to your own Jarvis server, which is the only thing this app talks to. The address is yours and is set by you."
+    },
+    {
+      "name": "camera",
+      "desc": "Reads the QR code your server prints, so you do not have to type a web address and a long token on a phone. The camera is opened only while you are scanning."
     }
   ],
   "supported_languages": [

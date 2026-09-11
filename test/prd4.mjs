@@ -25,6 +25,7 @@ import { startProxy } from "./netcut.mjs";
 import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS } from "../client/src/lens/render.ts";
 import { Connection, wsUrlFrom } from "../client/src/connection.ts";
 import { Store, NOTICE_MS } from "../client/src/state.ts";
+import { settingsFromScan, decodeFrame } from "../client/src/qr.ts";
 import { readUrlSettings, SettingsStore } from "../client/src/settings.ts";
 import { Glasses, hasHostChannel } from "../client/src/glasses.ts";
 import { getTextWidth } from "../client/node_modules/@evenrealities/pretext/dist/font_measure.js";
@@ -873,6 +874,44 @@ try {
 } finally {
 	for (const s of servers) { try { s.stop(); } catch { } }
 	await sleep(150);
+}
+
+section("QR i stället för att skriva in server och token");
+{
+	// Typing a host and a 64-character token on a phone is the worst input this
+	// app asks for. The link already exists; the camera is the honest way in.
+	const url = "https://kontoret.onvo.se:3456/?token=" + "a1b2c3d4".repeat(8);
+	const read = settingsFromScan(url);
+	check("en skannad länk ger både adress och token", read.ok && !!read.settings.token, JSON.stringify(read));
+	check("adressen blir en ws-adress mot samma värd",
+		read.ok && read.settings.server === "wss://kontoret.onvo.se:3456/ws", JSON.stringify(read.settings));
+	check("och värdnamnet kan visas för användaren", read.ok && read.host === "kontoret.onvo.se:3456", JSON.stringify(read));
+
+	// A packaged app is served from somewhere else entirely, so an explicit
+	// server has to win over the origin the code was read from.
+	const explicit = settingsFromScan("https://a.example/?token=x&server=wss://b.example/ws");
+	check("en utskriven server vinner över ursprunget",
+		explicit.ok && explicit.settings.server === "wss://b.example/ws", JSON.stringify(explicit.settings));
+
+	for (const [bad, why] of [["", "tomt"], ["inte en länk", "inte en URL"],
+		["https://host/", "utan token"], ["mailto:robin@example.com", "fel protokoll"]]) {
+		const r = settingsFromScan(bad);
+		check(`${why} avvisas med något läsbart`, r.ok === false && r.error.length > 0 && r.error.length < 60, JSON.stringify(r));
+	}
+
+	// The decoder, against a real QR rendered by a different program than the
+	// one reading it — otherwise this only proves jsQR agrees with itself.
+	const { execFileSync } = await import("node:child_process");
+	const png = "/tmp/prd4-qr-test.png";
+	execFileSync("qrencode", ["-t", "PNG32", "-o", png, "-s", "6", "-m", "2", url]);
+	const { readFileSync } = await import("node:fs");
+	const { decodePng } = await import("./png.mjs");
+	const pixels = decodePng(readFileSync(png));
+	// jsQR wants a Uint8ClampedArray; the decoder hands back a Buffer over the
+	// same bytes.
+	const text = decodeFrame(new Uint8ClampedArray(pixels.data.buffer, pixels.data.byteOffset, pixels.data.length),
+		pixels.width, pixels.height);
+	check("avkodaren läser en riktig QR-bild", text === url, String(text));
 }
 
 console.log(failed() === 0 ? "\nPASS\n" : `\nFAIL (${failed()})\n`);
