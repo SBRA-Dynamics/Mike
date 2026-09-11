@@ -1,0 +1,177 @@
+# PRD 3 — Jarvis and workers
+
+The orchestration layer: who you are talking to, how the system knows, and how
+work gets delegated.
+
+## Goal
+
+One agent, always the same conversation, who is what you reach when you start or
+resume a session — and who can put you in front of a worker, take you back, and
+act on what the worker said.
+
+## The model
+
+**Jarvis** is a single long-lived Claude Code session with a stable id. He is
+never replaced, never forked, and survives server restarts. He owns the MCP
+tools from PRD 2.
+
+**Workers** are Claude Code sessions doing the actual work. Each has a spoken
+name, a model, a working directory, and its own transcript. Workers have no
+tools beyond Claude Code's own; they do not know the orchestration exists.
+
+**The active worker** is who your words go to. Exactly one, or none — in which
+case you are talking to Jarvis directly.
+
+## Routing
+
+Every utterance is classified before anything else sees it:
+
+1. **Addressed to Jarvis** — begins with his name ("Jarvis, ...", "Hey Jarvis",
+   "Jarvis: ..."). Goes to Jarvis with worker context attached.
+2. **No active worker** — goes to Jarvis. Starting a session means talking to him.
+3. **Otherwise** — goes to the active worker verbatim.
+
+Name-prefix routing is deliberate and not an LLM decision. It is instant, free,
+predictable, and the user controls it by how they speak. A classifier in the
+path would add latency to every turn and be wrong occasionally, which is worse
+than a rule that is wrong never.
+
+The prefix is stripped before Jarvis sees the text. Dictation variants
+("Jarvis." / "Jarvis," / "jarvis") all count, and the check runs after the same
+normalisation used everywhere else.
+
+### Escape hatch
+
+If the prefix is ever ambiguous — a worker legitimately discussing someone named
+Jarvis — the rule stays as written. Predictability is worth more than the rare
+false positive, and the user can rephrase.
+
+## Jarvis sees the worker conversation
+
+Requirement 6 says Jarvis must always see the conversation and act when asked.
+
+He is **not** fed every worker turn as it happens. That would double token spend
+on every exchange, fill his context with work he is not doing, and make him
+slower at the one thing he is for.
+
+Instead, when addressed, the last N turns of the active worker are injected
+ahead of the user's words:
+
+```
+[The user is currently talking to worker "Bosse" (opus, /home/user/projects/MyProject).
+ Recent exchange:
+   user: ...
+   Bosse: ...]
+
+The user says: list the files in the folder we are talking about
+```
+
+Observably identical to him having watched, at a fraction of the cost. N is
+configurable; start at 6 turns, truncated to a token budget.
+
+This is what makes *"list the files in the folder we are talking about"* work:
+the folder is in the injected context, and Jarvis has `Bash`.
+
+## Jarvis's system prompt
+
+The prompt is a product surface, not an implementation detail. It must establish:
+
+- **Identity**: he is Jarvis, the orchestrator. Concise, dry, not chatty.
+- **Delegation**: his instinct is to route work to a worker, not do it himself.
+  Without this he will start editing files, which is exactly what workers are for.
+- **Brevity**: replies are read on a 50×10 lens. Two lines is a good answer.
+- **Tool use**: create, switch, list and end workers through the tools rather
+  than describing what he would do.
+- **Context handling**: when given worker context, treat it as the subject; the
+  user is asking about that, not about the orchestration.
+- **Language**: reply in whichever language he was addressed in.
+- **Dictation**: the input is spoken. Read for intent, prefer assuming over
+  asking, because a clarifying question costs the user a spoken round trip.
+
+The prompt ships as a file, versioned, editable without a rebuild.
+
+## Worker lifecycle
+
+| | |
+|---|---|
+| create | `spawn_worker`, or implicitly when Jarvis is asked to start work |
+| name | spoken, unique, case- and dictation-insensitive |
+| model | per worker, named by the user, validated |
+| cwd | inherited from Jarvis's default, overridable per worker |
+| resume | a worker is a Claude Code session; `--resume <id>` reattaches |
+| end | explicit; transcript is kept |
+
+A worker that has not been addressed for a long time is not killed. Claude Code
+sessions are cheap at rest, and losing one you were going to come back to is
+worse than an idle process.
+
+## PC ↔ glasses handoff
+
+Requirement 3: switch between PC and G2 inside the same conversation.
+
+Workers are Claude Code sessions with ids the server owns, and their transcripts
+live where Claude Code puts them. So:
+
+- **Server → PC**: `claude --resume <worker id>` in a terminal continues the
+  same conversation. Jarvis can be asked for the id.
+- **PC → server**: a session started in a terminal can be adopted as a worker by
+  id, taking a spoken name.
+
+**Constraint to verify first**: two drivers of one session at the same time. A
+terminal and the server both resuming the same id concurrently is likely to
+interleave writes to one transcript. Handoff is the supported model; simultaneous
+use probably is not. Test before promising it — this is test T1 and it shapes
+what requirement 3 can honestly mean.
+
+## Requirements
+
+### R3.1
+Starting or resuming a session with no active worker puts the user in front of
+Jarvis.
+
+### R3.2
+A prefixed utterance reaches Jarvis with worker context attached, whatever
+worker is active.
+
+### R3.3
+*"Jarvis, start a new worker called Bosse"* mid-conversation creates it, switches
+the active conversation to it, and tells the user in one short line.
+
+### R3.4
+*"Jarvis, list the files in the folder we are talking about"* answers about the
+active worker's directory, without the user naming it.
+
+### R3.5
+The active worker is visible to the client at all times and carried in the
+`state` message, so both the lens and the phone can show who is listening.
+
+### R3.6
+Switching workers never loses a transcript. Coming back resumes where it left off.
+
+### R3.7
+Jarvis survives a server restart with his conversation intact.
+
+## End-to-end test
+
+A scripted run, no glasses, driving the WebSocket directly:
+
+1. Connect; assert Jarvis greets
+2. "Jarvis, start a worker called Bosse with sonnet" → worker exists, is active,
+   model is correct
+3. Ask Bosse something; assert the answer comes tagged as Bosse
+4. "Jarvis, what is Bosse working on?" → answer references the exchange
+5. "Jarvis, list the files in the folder we are talking about" → real listing
+6. "Jarvis, start a worker called Kalle" → switches; Bosse still exists
+7. "Jarvis, switch back to Bosse" → transcript continues, not restarts
+8. Restart the server; reconnect; Jarvis and both workers are still there
+9. `claude --resume <Bosse id>` in a terminal shows the same conversation
+
+## Open questions
+
+- When Jarvis is addressed mid-worker, should the **answer** come from Jarvis
+  and then control return to the worker automatically? Assumed yes: a Jarvis
+  aside does not change the active worker unless he switched it.
+- Should workers be told they are workers? Probably not — it invites them to
+  discuss the orchestration instead of working.
+- What happens to a worker's in-flight turn when the user switches away? Assumed:
+  it completes and its output is kept, just not shown live.
