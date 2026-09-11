@@ -64,6 +64,11 @@ Continuous capture from the glasses' mic array via `audioControl(true,
 AudioInputSource.Glasses)`. Requires `g2-microphone` in `app.json` and a created
 startup page. Phone mic as a fallback where the glasses are unavailable.
 
+`PushToTalk` (R5.4) is the exception: there capture is opened on a held
+touchpad and closed on release, so the microphone is off the rest of the time.
+Everything downstream — filtering, segmentation, transcription — is the same
+either way; only who decides when audio starts differs.
+
 Audio must stop on exit, backgrounding and error. Leaving the mic running on the
 hardware is both a battery and a trust problem.
 
@@ -90,13 +95,14 @@ wearer talking to someone else*, which in a kitchen is most of what he says. So
 an addressing rule is still required — but the right rule depends on the
 situation, and the user must be able to change it by voice.
 
-Three modes:
+Four modes:
 
-| mode | what reaches the conversation |
-|---|---|
-| **Ignore** | nothing — input is paused |
-| **ByName** | only utterances beginning with "Jarvis" or the active worker's name |
-| **Always** | everything the wearer says |
+| mode | what reaches the conversation | mic |
+|---|---|---|
+| **Ignore** | nothing — input is paused | open |
+| **ByName** | only utterances beginning with "Jarvis" or the active worker's name | open |
+| **Always** | everything the wearer says | open |
+| **PushToTalk** | only what is said while the touchpad is held | closed until held |
 
 The table is about **spoken** input, which is the only kind with an ambient
 problem. Typed input is never gated by the mode — see PRD 3, "The prefix
@@ -104,6 +110,43 @@ requirement is conditional". Everything else here applies to both.
 
 `ByName` is the default. `Always` is for sitting down to work, when every
 sentence is meant for the system. `Ignore` is for a dinner conversation.
+`PushToTalk` is for a room where an open microphone is not acceptable at all.
+
+#### PushToTalk
+
+The other three modes all leave the microphone running and decide in software
+what to keep. That is the right trade for a kitchen and the wrong one for a
+meeting, a client's office, or anywhere the wearer would have to explain what
+the glasses are doing. **`Ignore` is not the same thing: it keeps listening and
+discards.** `PushToTalk` is the only mode where the hardware is actually off,
+and that difference is the whole reason it exists.
+
+It is also the fallback R5.2 needs. If `Unknown` dominates the `speakerRole`
+ratio — the failure condition that requirement already says to log — always-on
+is not viable for that user and this is where they land, rather than losing the
+system.
+
+**Capture spans the hold.** Audio flows from `LONG_PRESS_EVENT` (9) to
+`LONG_PRESS_RELEASE_EVENT` (10); the SDK reports press and release separately,
+which is exactly what this needs. The companion view has a press-and-hold button
+that does the same thing, so the mode works with the phone alone.
+
+**No prefix is required while held.** Holding the touchpad *is* the address, and
+the same reasoning applies as in `Always`: the user has said, with their hand,
+that this sentence is for the system. A prefix still overrides, so "Jarvis, ..."
+during a hold reaches him even when a worker is active.
+
+**Cost to measure before promising.** `audioControl(true)` is a BLE round trip,
+and the fixed per-call cost measured on this hardware is ~160 ms. A user who
+starts speaking as they press will lose the first syllable. Two mitigations, to
+be chosen after measuring the real lead-in: keep the mic open for a short tail
+after release so trailing words survive, and show capture state on the lens the
+moment it is live. Do not ship a hold-to-talk whose start the user cannot see —
+there is no speaker on the glasses, so the screen is the only feedback there is.
+
+**Segmentation is simpler here.** The hold delimits the utterance, so R5.3's
+voice activity detection is not what ends the segment; the release is. VAD still
+runs, to trim silence off both ends before whisper sees it.
 
 #### The mode commands are always live
 
@@ -112,18 +155,33 @@ on.** This is a safety property, not a convenience: there must be no state the
 user can reach from which they cannot speak their way out. They are matched
 before the mode gate, never after it.
 
+`PushToTalk` is the one mode where that sentence needs care. The microphone is
+off, so nothing spoken can be heard until the touchpad is held — the escape is
+to **hold and say the command**, which works because the commands are matched
+before the gate there too. The invariant survives, but it now depends on the
+gesture, so the gesture is the one input that must never be conditional on
+anything: no page state, no active worker, no connection status may stop a hold
+from opening the mic. The companion view's mode control is the second way out,
+and the typed path a third (typing is never gated at all).
+
 | said | effect |
 |---|---|
 | "Hey Jarvis, pause input" / "pausa input" | → Ignore |
 | "Hey Jarvis, continue input" / "fortsätt input" | → the mode in use before it was paused |
 | "Hey Jarvis, change input to always" / "ändra input till alltid" | → Always |
 | "Hey Jarvis, change input to by name" / "ändra input till via namn" | → ByName |
+| "Hey Jarvis, change input to push to talk" / "ändra input till håll in" | → PushToTalk |
 
 Transitions available in each mode, as specified by the user:
 
 - **Ignore** → continue (back to the previous mode)
-- **ByName** → pause, or change to always
-- **Always** → pause, or change to by name
+- **ByName** → pause, or change to always or push to talk
+- **Always** → pause, or change to by name or push to talk
+- **PushToTalk** → said during a hold: pause, or change to by name or always
+
+"Continue" can restore `PushToTalk` like any other mode: pausing from it and
+resuming must not silently drop the user into an open microphone, which is the
+one mistake this mode exists to prevent.
 
 "Continue" restores the mode that was active before pausing rather than a fixed
 default: pausing during a work session and resuming into `ByName` would silently
@@ -142,7 +200,10 @@ The same commands work when typed, so the desktop and the glasses behave alike.
 
 After a reply, a short window may follow during which `ByName` does not require
 the prefix, so a back-and-forth does not need his name every turn. This is a
-timeout on top of the mode, not a fourth mode, and it never applies in `Ignore`.
+timeout on top of the mode, not a mode of its own, and it never applies in
+`Ignore`. It does not apply in `PushToTalk` either: the hold already says which
+words are meant for the system, and a timed window that opened the microphone
+without a gesture would break the promise the mode makes.
 
 #### Visibility and persistence
 
@@ -150,8 +211,17 @@ The current mode is part of the `state` message, shown by the client, and shown
 on the lens status line when it is anything other than the default. A mode the
 user cannot see is a mode they will be surprised by.
 
+`PushToTalk` needs one thing more: whether capture is live *right now*, not just
+which mode is set. A hold-to-talk the user cannot confirm is listening is a mode
+they will speak into and lose.
+
 The mode is per session and survives a server restart. It defaults from config
 for a fresh session.
+
+*Implementation note, 2026-09-11:* `src/routing.js` implements three modes.
+`PushToTalk` is specified here and lands with the voice pipeline, because it is
+the only mode whose behaviour is a microphone decision rather than a routing
+one — the routing half of it is `Always`, scoped to the hold.
 
 ### R5.5 — Transcription service
 
