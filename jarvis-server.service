@@ -21,9 +21,20 @@ EnvironmentFile=/etc/jarvis.env
 # PRD 2's MCP tool surface binds its own listener on 127.0.0.1 with an
 # ephemeral port. Nothing outside the process needs to find it — each Claude
 # Code invocation is handed the URL in its grant — so no port is opened for it.
+# PRD 3 drives a real `claude` per turn. The defaults are opus for Jarvis,
+# sonnet for a worker, and this WorkingDirectory for both; add
+#   --worker-cwd /home/user/projects --jarvis-cwd /home/user/projects
+# to start workers somewhere worth working. `--engine stub` keeps the whole
+# thing alive without spending money, which is the safe way to run it while
+# something else is being debugged.
 ExecStart=/home/robin/.nvm/versions/node/v24.16.0/bin/node /home/robin/jarvis/server.js \
   --port 3470 --host 127.0.0.1
 Restart=always
+# The server reaps its own `claude` children on SIGTERM; this is the backstop
+# for the case where it cannot, because a turn in flight is a model session
+# that keeps spending after the thing that was reading it has gone.
+KillMode=control-group
+TimeoutStopSec=15
 RestartSec=5
 # A real file, never an inherited tty. A previous server wrote 69 GB of one
 # stacktrace after its terminal closed, because every console.log then threw

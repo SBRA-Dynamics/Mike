@@ -18,7 +18,10 @@ import { normalizeName, displayName, checkName } from "../src/names.js";
 const refusals = [];
 const refused = (label, r) => { if (r.isError) refusals.push({ label, text: r.text }); return r; };
 
-const server = await startServer();
+// `--engine stub`: PRD 2's suite is about the tool surface, and the stub is the
+// seam it was written against — it answers turns without spending money and
+// without a `claude` process anywhere near the assertions.
+const server = await startServer(["--engine", "stub"]);
 
 try {
 	// -------------------------------------------------------------- model names

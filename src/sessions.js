@@ -28,6 +28,10 @@ export class Session {
 		// State later phases own; carried here so it survives a restart.
 		this.worker = meta.worker ?? null;
 		this.mode = meta.mode ?? "byname";
+		// What "continue input" goes back to (PRD 5 R5.4). Durable for the same
+		// reason `mode` is: a restart that resumed into ByName would silently
+		// undo a setting the user chose before pausing.
+		this.previousMode = meta.previousMode ?? null;
 
 		this.recent = [];              // { seq, msg } for replay
 		this.sockets = new Set();      // live connections attached to this session
@@ -74,14 +78,19 @@ export class Session {
 	meta() {
 		return {
 			id: this.id, createdAt: this.createdAt, updatedAt: this.updatedAt,
-			title: this.title, seq: this.seq, worker: this.worker, mode: this.mode
+			title: this.title, seq: this.seq, worker: this.worker,
+			mode: this.mode, previousMode: this.previousMode
 		};
 	}
 }
 
 export class SessionStore {
-	constructor(dir) {
+	/** `defaultMode` is the addressing mode a FRESH session starts in (PRD 5
+	 *  R5.4 "defaults from config for a fresh session"). An existing session
+	 *  keeps whatever it was last set to — the whole point of persisting it. */
+	constructor(dir, { defaultMode = "byname" } = {}) {
 		this.dir = dir;
+		this.defaultMode = defaultMode;
 		this.sessions = new Map();
 		mkdirSync(this.dir, { recursive: true });
 		this.#loadAll();
@@ -139,7 +148,7 @@ export class SessionStore {
 		// id becomes a filename here and this must not depend on a caller
 		// remembering to validate.
 		if (!isSessionId(id)) throw new Error(`refusing to create session with unsafe id ${JSON.stringify(id)}`);
-		const s = new Session(this, { id, createdAt: Date.now() });
+		const s = new Session(this, { id, createdAt: Date.now(), mode: this.defaultMode });
 		this.sessions.set(id, s);
 		this.touch(s);
 		return s;

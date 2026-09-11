@@ -29,7 +29,9 @@ let token = externalToken;
 
 if (!externalUrl) {
 	const { startServer } = await import("./harness.mjs");
-	server = await startServer();
+	// `--handler echo`: this suite pins PRD 1's transport, and a model in the
+	// path would make it slow, expensive and non-deterministic for no gain.
+	server = await startServer(["--handler", "echo"]);
 	wsUrl = server.wsUrl;
 	token = server.token;
 	console.log(`lokal server på ${wsUrl}`);

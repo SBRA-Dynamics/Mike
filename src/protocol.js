@@ -23,7 +23,14 @@ export const CONTROL = {
 	SET_TITLE: "setTitle",
 	// PRD 2: hand this connection a short-lived credential for the MCP tool
 	// surface, so a Claude Code invocation bound to this session can act on it.
-	MCP_GRANT: "mcpGrant"
+	MCP_GRANT: "mcpGrant",
+
+	// PRD 3. These are conversation-level, so the transport passes them through
+	// to the handler rather than answering them itself — but they live here
+	// because R1.6 says one shared schema file, and the client imports this one.
+	SET_MODE: "setMode",            // { mode: "ignore" | "byname" | "always" }
+	SWITCH_WORKER: "switchWorker",  // { name } or { name: null } to go back to Jarvis
+	WHO_IS: "whoIs"                 // { name? } -> the worker's Claude Code session id
 };
 
 /** Server -> client */

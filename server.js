@@ -28,13 +28,15 @@ import { WebSocketServer } from "ws";
 import { log } from "./src/log.js";
 import { SessionStore } from "./src/sessions.js";
 import { attachConnection } from "./src/connection.js";
-import { createEchoHandler } from "./src/handler.js";
+import { createEchoHandler, createJarvisHandler } from "./src/handler.js";
 import { PROTOCOL_VERSION } from "./src/protocol.js";
 import { WorkerRegistry } from "./src/workers.js";
-import { createStubWorkerEngine } from "./src/workerEngine.js";
+import { createStubWorkerEngine, createClaudeWorkerEngine } from "./src/workerEngine.js";
 import { createToolset } from "./src/tools.js";
 import { createMcpServer } from "./src/mcp.js";
-import { isKnownModel, MODEL_LIST } from "./src/models.js";
+import { isKnownModel, MODEL_LIST, resolveModel } from "./src/models.js";
+import { createJarvis, DEFAULT_CONTEXT_TURNS, DEFAULT_CONTEXT_BUDGET_TOKENS } from "./src/jarvis.js";
+import { DEFAULT_MODE, isMode, MODES } from "./src/routing.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VERSION = "0.1.0";
@@ -58,6 +60,16 @@ if (has("help")) {
   --mcp-port <n>       loopback port for the MCP tool surface (default: ephemeral)
   --worker-model <m>   default model for a new worker (default sonnet)
   --worker-cwd <dir>   default working directory for a new worker
+  --handler <h>        jarvis (default) or echo, which pins PRD 1's transport
+  --engine <e>         claude (default) or stub, which spends no money
+  --claude-bin <path>  the Claude Code binary to drive (default: claude)
+  --jarvis-model <m>   the model Jarvis runs (default opus)
+  --jarvis-cwd <dir>   where Jarvis's own Bash runs (default: --worker-cwd)
+  --jarvis-prompt <f>  his system prompt file (default ./prompts/jarvis.md)
+  --context-turns <n>  worker turns quoted to Jarvis when addressed (default 6)
+  --context-budget <n> token budget for that quote (default 1200)
+  --turn-timeout <ms>  how long one model turn may take (default 600000)
+  --mode <m>           addressing mode for a fresh session (default byname)
   --help
 `);
 	process.exit(0);
@@ -82,8 +94,24 @@ const config = {
 	// the expensive one, workers are many and long-lived.
 	workerModel: flag("worker-model", process.env.JARVIS_WORKER_MODEL || "sonnet"),
 	workerCwd: flag("worker-cwd", process.env.JARVIS_WORKER_CWD || process.cwd()),
+
+	// PRD 3. Two seams, both named on the command line rather than inferred:
+	// `--handler echo` is how the PRD 1 suites still pin the transport without a
+	// model in the path, and `--engine stub` is how everything above the engine
+	// is tested without spending money. Production is the default of both.
+	handler: flag("handler", process.env.JARVIS_HANDLER || "jarvis"),
+	engine: flag("engine", process.env.JARVIS_ENGINE || "claude"),
+	claudeBin: flag("claude-bin", process.env.JARVIS_CLAUDE_BIN || "claude"),
+	jarvisModel: flag("jarvis-model", process.env.JARVIS_MODEL || "opus"),
+	jarvisCwd: flag("jarvis-cwd", process.env.JARVIS_CWD || null),
+	jarvisPrompt: flag("jarvis-prompt", process.env.JARVIS_PROMPT || path.join(HERE, "prompts", "jarvis.md")),
+	contextTurns: parseInt(flag("context-turns", process.env.JARVIS_CONTEXT_TURNS ?? String(DEFAULT_CONTEXT_TURNS)), 10),
+	contextBudget: parseInt(flag("context-budget", process.env.JARVIS_CONTEXT_BUDGET ?? String(DEFAULT_CONTEXT_BUDGET_TOKENS)), 10),
+	turnTimeoutMs: parseInt(flag("turn-timeout", process.env.JARVIS_TURN_TIMEOUT ?? "600000"), 10),
+	defaultMode: flag("mode", process.env.JARVIS_MODE || DEFAULT_MODE),
 	version: VERSION
 };
+config.jarvisCwd = config.jarvisCwd || config.workerCwd;
 
 const tokenWasGenerated = !flag("token", null) && !process.env.JARVIS_TOKEN;
 
@@ -93,9 +121,15 @@ if (!Number.isInteger(config.mcpPort) || config.mcpPort < 0 || config.mcpPort > 
 // Checked at startup, not at the first spawn_worker, because at the first
 // spawn the user is waiting on a lens for an answer about their own typo.
 if (!isKnownModel(config.workerModel)) { log.error(`--worker-model "${config.workerModel}" is unknown; use ${MODEL_LIST}`); process.exit(1); }
+if (!isKnownModel(config.jarvisModel)) { log.error(`--jarvis-model "${config.jarvisModel}" is unknown; use ${MODEL_LIST}`); process.exit(1); }
+if (!isMode(config.defaultMode)) { log.error(`--mode must be one of ${Object.values(MODES).join(", ")}`); process.exit(1); }
+if (!["jarvis", "echo"].includes(config.handler)) { log.error(`--handler must be jarvis or echo`); process.exit(1); }
+if (!["claude", "stub"].includes(config.engine)) { log.error(`--engine must be claude or stub`); process.exit(1); }
+for (const [name, v] of [["--context-turns", config.contextTurns], ["--context-budget", config.contextBudget], ["--turn-timeout", config.turnTimeoutMs]]) {
+	if (!Number.isInteger(v) || v <= 0) { log.error(`${name} must be a positive number`); process.exit(1); }
+}
 
-const store = new SessionStore(path.join(config.dataDir, "sessions"));
-const handler = createEchoHandler({ log });
+const store = new SessionStore(path.join(config.dataDir, "sessions"), { defaultMode: config.defaultMode });
 
 // ------------------------------------------------------------- workers + tools
 // PRD 2. The registry is the state the tools mutate; the engine is the seam
@@ -105,9 +139,33 @@ const registry = new WorkerRegistry({
 	file: path.join(config.dataDir, "workers.json"),
 	log, defaultModel: config.workerModel, defaultCwd: config.workerCwd
 });
-const engine = createStubWorkerEngine({ log });
+const engine = config.engine === "stub"
+	? createStubWorkerEngine({ log })
+	: createClaudeWorkerEngine({ log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.turnTimeoutMs });
 const toolset = createToolset({ registry, engine, log });
 const mcp = createMcpServer({ store, toolset, registry, log });
+
+// ------------------------------------------------------------------- jarvis
+// PRD 3. He is built even when `--handler echo` pins the transport, because
+// building him is what proves his identity file survived the restart, and it
+// costs nothing until something says a word to him.
+const jarvis = createJarvis({
+	log, dataDir: config.dataDir, mcp, registry, engine,
+	bin: config.claudeBin,
+	// The resolved id, not the spoken label. models.js pins full model names on
+	// purpose — an alias silently follows whatever is promoted to "latest", and
+	// Jarvis's model should not change under him between two restarts.
+	model: resolveModel(config.jarvisModel).id,
+	cwd: config.jarvisCwd,
+	promptFile: config.jarvisPrompt,
+	contextTurns: config.contextTurns,
+	contextBudgetTokens: config.contextBudget,
+	timeoutMs: config.turnTimeoutMs
+});
+
+const handler = config.handler === "echo"
+	? createEchoHandler({ log })
+	: createJarvisHandler({ log, jarvis, registry, engine });
 
 // ----------------------------------------------------------------- TLS certs
 // Re-read on mtime change so a certbot renewal lands without a restart
@@ -198,7 +256,11 @@ const onRequest = (req, res) => {
 			ok: true, version: VERSION, protocol: PROTOCOL_VERSION,
 			uptime: process.uptime(), sessions: store.sessions.size,
 			connections: [...store.sessions.values()].reduce((n, s) => n + s.connectionCount, 0),
-			workers: registry.size, mcpPort: mcp.port
+			workers: registry.size, mcpPort: mcp.port,
+			// Enough to tell, from outside, which build is running and whether
+			// Jarvis is the same conversation he was before the restart (R3.7).
+			handler: config.handler, engine: engine.name,
+			jarvis: { sessionId: jarvis.sessionId, model: jarvis.model, turns: jarvis.turns }
 		});
 		res.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) });
 		return res.end(body);
@@ -261,6 +323,8 @@ server.listen(config.port, config.host, () => {
 	log.info(`client: ${config.devProxy ? `dev proxy ${config.devProxy}` : config.staticDir}`);
 	log.info(`sessions: ${store.sessions.size} loaded from ${config.dataDir}`);
 	log.info(`workers: default model ${config.workerModel}, default cwd ${config.workerCwd}`);
+	log.info(`handler ${config.handler}, engine ${engine.name} (${config.claudeBin}), jarvis ${config.jarvisModel} session ${jarvis.sessionId.slice(0, 8)} cwd ${config.jarvisCwd}`);
+	log.info(`routing: default mode ${config.defaultMode}, ${config.contextTurns} worker turns quoted to Jarvis`);
 	if (tokenWasGenerated) log.info(`token (generated): ${config.token}`);
 	if (scheme === "http") log.warn("no --cert/--key: serving plain HTTP");
 });
@@ -272,6 +336,10 @@ const shutdown = (signal) => {
 	shuttingDown = true;
 	log.info(`${signal} — shutting down`);
 	for (const client of wss.clients) { try { client.close(4004, "server restarting"); } catch { } }
+	// Before the listener, not after: a `claude` child outliving this process is
+	// a model session nobody is reading and, on a restart loop, money.
+	try { jarvis.dispose(); } catch { }
+	try { engine.dispose?.(); } catch { }
 	mcp.close();
 	server.close(() => process.exit(0));
 	setTimeout(() => process.exit(0), 3000).unref();
@@ -283,4 +351,4 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("uncaughtException", (e) => log.error(`UNCAUGHT: ${e.stack || e.message}`));
 process.on("unhandledRejection", (r) => log.error(`UNHANDLED REJECTION: ${r?.stack || r}`));
 
-export { config, store, wss, server, registry, mcp };
+export { config, store, wss, server, registry, mcp, jarvis, engine };

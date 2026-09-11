@@ -4,7 +4,9 @@ import { startServer, connect, check, failed, section, sleep } from "/home/robin
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const server = await startServer();
+// `--handler echo`: this suite pins PRD 1's transport, and a model in the
+// path would make it slow, expensive and non-deterministic for no gain.
+const server = await startServer(["--handler", "echo"]);
 section("seq återanvänds inte efter en krasch");
 const c = await connect(server);
 const id = c.readyMsg.sessionId;

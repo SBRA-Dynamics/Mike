@@ -32,10 +32,15 @@ process.on("exit", killAll);
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { killAll(); process.exit(130); });
 process.on("uncaughtException", (e) => { killAll(); console.error(e); process.exit(1); });
 
-/** A server in its own temp data directory, so tests never see each other's sessions. */
-export async function startServer(extraArgs = []) {
+/** A server in its own temp data directory, so tests never see each other's sessions.
+ *
+ *  `env` is merged over the parent's, which is how PRD 3's suites point the
+ *  server's `claude` at the stand-in binary: the path is a flag, but the
+ *  stand-in's state directory has to be per-run or two suites share one. */
+export async function startServer(extraArgs = [], { env: extraEnv = {} } = {}) {
 	const dataDir = mkdtempSync(join(tmpdir(), "jarvis-test-"));
 	const token = "test-token-" + Math.random().toString(16).slice(2, 10);
+	const env = { ...process.env, ...extraEnv };
 
 	// Port 0: the OS hands out one that is free, and tells us which.
 	//
@@ -47,7 +52,7 @@ export async function startServer(extraArgs = []) {
 	// servers around (and a crashing suite leaks one every time) that was a
 	// flake nobody could reproduce in isolation.
 	const proc = spawn("node", ["server.js", "--port", "0", "--host", "127.0.0.1",
-		"--token", token, "--data", dataDir, ...extraArgs], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+		"--token", token, "--data", dataDir, ...extraArgs], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
 	track(proc);
 
 	let logText = "";
@@ -83,14 +88,14 @@ export async function startServer(extraArgs = []) {
 	}
 
 	return {
-		port, token, dataDir, proc, base,
+		port, token, dataDir, proc, base, env,
 		wsUrl: `ws://127.0.0.1:${port}/ws`,
 		log: () => logText,
 		async restart() {
 			proc.kill("SIGTERM");
 			await sleep(600);
 			// Same port on purpose: a reconnect test needs the URL to stay valid.
-			const next = await startServerOn(port, token, dataDir, extraArgs);
+			const next = await startServerOn(port, token, dataDir, extraArgs, env);
 			Object.assign(this, { proc: next.proc, log: next.log });
 			return this;
 		},
@@ -102,9 +107,9 @@ export async function startServer(extraArgs = []) {
 	};
 }
 
-async function startServerOn(port, token, dataDir, extraArgs) {
+async function startServerOn(port, token, dataDir, extraArgs, env = process.env) {
 	const proc = spawn("node", ["server.js", "--port", String(port), "--host", "127.0.0.1",
-		"--token", token, "--data", dataDir, ...extraArgs], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+		"--token", token, "--data", dataDir, ...extraArgs], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
 	track(proc);
 	let logText = "";
 	proc.stdout.on("data", (d) => { logText += d.toString(); });

@@ -67,6 +67,18 @@ the real hostname and port, for **10 minutes**, with a message exchanged at the
 start and end. If it dies, fall back to the proven topology — plain HTTP on
 loopback behind a raw TLS bridge — and treat that as the supported deployment.
 
+**Downgraded to a routine check (decided 2026-09-11).** Not a gate on the
+phases after it. MyProject already holds WebSockets open indefinitely over the same
+network to the same phone, which is the strongest evidence available, and the
+suspected culprit — even-terminal's non-standard SSE client, which was never an
+EventSource — is out of the system entirely. The one observation that does not
+fit the client theory is that the A/B swapped the *server* front end with the
+client unchanged and the stream went from 30 s to >90 s; so the honest reading
+is an interaction, not a settled cause. WebSocket is a different mechanism from
+SSE either way. Run the test when there are real turns to keep alive, not
+echoes: `node test/longevity.mjs --url wss://<host>/ws --token <token>
+--minutes 10` from the phone's network.
+
 ### R1.5 — Sessions
 
 - A session has a stable id (UUID) chosen by the server

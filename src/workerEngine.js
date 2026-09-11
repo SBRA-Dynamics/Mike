@@ -1,14 +1,16 @@
 // The worker seam.
 //
-// PRD 2 owns the tool surface, not the workers. A worker is a real Claude Code
-// session — `claude --session-id --model --resume` driven by the server — and
-// building that is PRD 3. This file is to PRD 2 what handler.js is to PRD 1:
-// a stub with a documented contract, so the tools can be written, tested and
-// exercised end to end against something that genuinely changes state, and
-// PRD 3 swaps the implementation without touching workers.js, tools.js, mcp.js
-// or server.js.
+// PRD 2 owns the tool surface, not the workers, so it shipped a stub here with
+// a documented contract — the same thing handler.js was to PRD 1. PRD 3 filled
+// it in: createClaudeWorkerEngine below drives real Claude Code sessions, and
+// nothing in workers.js, tools.js or mcp.js changed to let it.
 //
-// The contract a real engine must honor:
+// Both live here on purpose. The stub is what `--engine stub` selects, and it
+// is what PRD 2's suite is pinned to: a tool surface should be testable without
+// a model in the path, and a seam that only has one implementation left has
+// stopped being a seam.
+//
+// The contract either engine honors:
 //
 //   async start(worker, { prompt })  -> { engineSessionId }
 //        Bring the worker's session into existence. Called once, from
@@ -26,6 +28,15 @@
 //   async stop(worker)               -> void
 //        End the session. The transcript is kept (PRD 3 "end: explicit;
 //        transcript is kept"); only the process goes away.
+//
+//   interrupt(worker)                -> boolean
+//        Stop a turn in flight, for PRD 1's `interrupt`. True when there was
+//        one. Added by PRD 3: a turn that takes minutes has to be stoppable
+//        from the lens, and the stub answers it honestly with false.
+//
+//   dispose()                        -> void
+//        Reap everything. A server that exits leaving `claude` processes
+//        behind is spending money nobody is reading.
 //
 // Nothing in the contract knows about MCP, sessions, or the wire protocol. An
 // engine that spawns processes and one that echoes are interchangeable, which
@@ -87,6 +98,263 @@ export function createStubWorkerEngine({ log } = {}) {
 		async stop(worker) {
 			log?.info(`worker stop ${worker.name} (stub engine)`);
 			// Transcript intentionally kept: PRD 3 keeps it too.
+		},
+
+		// The seam is only a seam if both sides answer the same calls. The stub
+		// has nothing running, so both of these are honestly nothing.
+		interrupt() { return false; },
+		dispose() { }
+	};
+}
+
+// ---------------------------------------------------------------------------
+// The real engine: one Claude Code session per worker, one process per turn.
+// ---------------------------------------------------------------------------
+//
+// Two things the stub could pretend about and this cannot:
+//
+//  * `engineSessionId`. It is generated here and handed back to the registry so
+//    a restart can `--resume` it and so Jarvis can read it out for the PC
+//    handoff. It is OUR uuid, passed to `--session-id` on the first turn — not
+//    something parsed out of the CLI afterwards, because a worker must have an
+//    id the moment it exists, before it has said anything.
+//
+//  * The transcript. Claude Code keeps its own under ~/.claude/projects, and
+//    parsing it was the obvious idea and the wrong one: T1 measured an
+//    interactive session writing nothing there at all, and the file is a tree
+//    once anything has forked it. What `read_worker` and PRD 3's context
+//    injection need is "the turns the server drove", which the server knows
+//    first-hand. So the engine keeps its own JSONL per worker, keyed by the
+//    worker's server-side uuid. A spoken name never becomes a filename.
+//
+// Turns are serialised per worker. That is the direct consequence of T1: two
+// drivers of one session fork it and one of them is silently unsaid, so the
+// server never becomes the second driver of its own worker.
+
+import { randomUUID } from "node:crypto";
+import { mkdirSync, appendFileSync, readFileSync, existsSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+
+import { createClaudeRunner, ChildTracker } from "./claudeCli.js";
+
+/** Kept in memory per worker; the file on disk is the authority across a
+ *  restart. Bounded for the same reason TRANSCRIPT_DEPTH is. */
+const MEMORY_DEPTH = TRANSCRIPT_DEPTH;
+
+/** How much of a worker's turn we are willing to quote. A worker that answers
+ *  with a 40 kB file listing must not blow out Jarvis's context when he is
+ *  asked what it is doing. */
+const MAX_QUOTED_CHARS = 4000;
+
+const clip = (s, n = MAX_QUOTED_CHARS) => {
+	const t = String(s ?? "");
+	return t.length <= n ? t : t.slice(0, n) + ` …[${t.length - n} more characters]`;
+};
+
+/**
+ * A real worker engine.
+ *
+ * `dataDir` is where transcripts live; `runner` is injectable so tests can
+ * drive the real engine against a stand-in binary rather than the real CLI.
+ */
+export function createClaudeWorkerEngine({
+	log, dataDir, bin = "claude", runner, tracker = new ChildTracker(),
+	timeoutMs, env
+} = {}) {
+	if (!dataDir) throw new Error("createClaudeWorkerEngine needs a dataDir for transcripts");
+	const dir = join(dataDir, "transcripts");
+	mkdirSync(dir, { recursive: true });
+
+	const cli = runner ?? createClaudeRunner({ bin, log, tracker, timeoutMs, env });
+
+	const threads = new Map();    // worker.id -> [{ role, text, at }]
+	const queues = new Map();     // worker.id -> promise chain (one turn at a time)
+	const inflight = new Map();   // worker.id -> child process, for interrupt
+
+	// A worker id is a server-generated uuid (workers.js), and this is the one
+	// place it becomes a path. Checked anyway: the cost is a regex and the bug
+	// it prevents once wrote a file called /ESCAPED.jsonl.
+	const pathFor = (worker) => {
+		if (!/^[0-9a-f-]{36}$/i.test(String(worker.id))) throw new Error(`unsafe worker id ${JSON.stringify(worker.id)}`);
+		return join(dir, `${worker.id}.jsonl`);
+	};
+
+	const thread = (worker) => {
+		let t = threads.get(worker.id);
+		if (t) return t;
+		t = [];
+		const p = pathFor(worker);
+		if (existsSync(p)) {
+			for (const line of readFileSync(p, "utf8").split("\n")) {
+				if (!line.trim()) continue;
+				try {
+					const v = JSON.parse(line);
+					if (v?.role && typeof v.text === "string") t.push(v);
+				} catch { /* a torn last line from a crash; the rest is still good */ }
+			}
+			if (t.length > MEMORY_DEPTH) t.splice(0, t.length - MEMORY_DEPTH);
+		}
+		threads.set(worker.id, t);
+		return t;
+	};
+
+	const append = (worker, role, text) => {
+		const entry = { role, text: clip(text), at: Date.now() };
+		const t = thread(worker);
+		t.push(entry);
+		if (t.length > MEMORY_DEPTH) t.splice(0, t.length - MEMORY_DEPTH);
+		try { appendFileSync(pathFor(worker), JSON.stringify(entry) + "\n"); }
+		catch (e) { log?.error(`worker transcript ${worker.name}: ${e.message}`); }
+	};
+
+	/** Run `fn` after whatever this worker is already doing. The chain is the
+	 *  serialisation T1 requires; it is per worker, so two workers still run at
+	 *  the same time. */
+	const enqueue = (worker, fn) => {
+		const prev = queues.get(worker.id) ?? Promise.resolve();
+		const next = prev.then(fn, fn);
+		// The chain that the NEXT caller waits on must never be a rejected
+		// promise: one failed turn would otherwise poison every turn after it
+		// with the first one's error. The caller still gets `next` and its
+		// rejection; the chain gets the swallowed copy.
+		queues.set(worker.id, next.then(() => { }, () => { }));
+		return next;
+	};
+
+	/** True once the CLI has actually created this worker's session, so a later
+	 *  turn resumes instead of trying to create it again.
+	 *
+	 *  This is read off the transcript rather than an in-memory flag because it
+	 *  has to survive a restart: `--session-id <existing>` fails, and a worker
+	 *  that was talked to before the restart would be unreachable afterwards —
+	 *  which is exactly R3.6's "coming back resumes where it left off". A meta
+	 *  entry rather than "has an assistant turn", because a turn can fail after
+	 *  the session exists and before anything was said. */
+	const sessionExists = (worker) => thread(worker).some((e) => e.role === "meta" && e.text === "session-created");
+
+	const turn = async (worker, text) => {
+		const first = !sessionExists(worker);
+		const id = worker.engineSessionId;
+		if (!id) throw new Error(`worker ${worker.name} has no session id`);
+
+		const r = await cli.run({
+			prompt: text,
+			cwd: worker.cwd,
+			model: worker.modelId ?? worker.model,
+			...(first ? { sessionId: id } : { resume: id }),
+			onSpawn: (child) => inflight.set(worker.id, child)
+		});
+		inflight.delete(worker.id);
+
+		// Recorded on the strength of the CLI having named the session, not of
+		// the turn having worked. Both halves matter: a spawn that never got off
+		// the ground must NOT be recorded, or every later turn resumes an id
+		// that was never created; and an API error — which arrives as exit 0
+		// with is_error set, after the session exists — must be, or every later
+		// turn tries to create it again and fails with "already exists".
+		if (first && (r.ok || r.sessionId)) append(worker, "meta", "session-created");
+
+		if (!r.ok) {
+			log?.warn(`worker ${worker.name} turn failed (${r.kind}): ${r.error}`);
+			const e = new Error(r.error || "the worker could not answer");
+			e.kind = r.kind;
+			throw e;
+		}
+		log?.info(`worker ${worker.name} turn ok in ${r.durationMs}ms cost=$${(r.costUsd ?? 0).toFixed(4)}`);
+		return r;
+	};
+
+	return {
+		name: "claude",
+		cli,
+
+		async start(worker, { prompt } = {}) {
+			// The id is minted, not discovered. Nothing is spawned here: PRD 2
+			// says start must be quick because the user is waiting on a lens, and
+			// a warm-up turn would cost a model call per worker for nothing.
+			//
+			// The consequence is honest and worth knowing: `claude --resume <id>`
+			// in a terminal only works once the worker has taken its first turn,
+			// because that is when the CLI creates the session.
+			const engineSessionId = worker.engineSessionId ?? randomUUID();
+			worker.engineSessionId = engineSessionId;
+			log?.info(`worker start ${worker.name} model=${worker.model} cwd=${worker.cwd} session=${engineSessionId.slice(0, 8)}`);
+			if (prompt) {
+				// Deliberately awaited: spawn_worker reports the worker as ready,
+				// and a first instruction that fails should fail the spawn rather
+				// than vanish.
+				await this.send(worker, prompt);
+			}
+			return { engineSessionId };
+		},
+
+		async send(worker, text) {
+			// A record written by the stub engine (or by a build before PRD 3)
+			// has no session id. Minting one here rather than refusing means a
+			// data directory survives the engine being switched; the registry
+			// persists it on the next touch, which the caller does every turn.
+			if (!worker.engineSessionId) {
+				worker.engineSessionId = randomUUID();
+				log?.info(`worker ${worker.name} had no session id; minted ${worker.engineSessionId.slice(0, 8)}`);
+			}
+			return enqueue(worker, async () => {
+				append(worker, "user", text);
+				try {
+					const r = await turn(worker, text);
+					append(worker, "assistant", r.text);
+					return { text: r.text };
+				} catch (e) {
+					// The failure goes in the transcript too. A worker whose turn
+					// died and left no trace reads, next time Jarvis quotes it, as
+					// a worker that was never asked.
+					append(worker, "assistant", `(no answer: ${e.message})`);
+					throw e;
+				}
+			});
+		},
+
+		transcript(worker, turns = 6) {
+			// Bookkeeping entries are ours, not the conversation's: quoting
+			// "session-created" back to Jarvis would be noise he has to reason
+			// about, and read_worker's cost is paid in his context.
+			const t = thread(worker).filter((e) => e.role !== "meta");
+			return t.slice(-Math.max(1, turns) * 2);
+		},
+
+		/** Stop a turn in flight. Nothing else to stop: there is no resident
+		 *  process between turns. */
+		interrupt(worker) {
+			const child = inflight.get(worker.id);
+			if (!child) return false;
+			try { child.kill("SIGKILL"); } catch { }
+			inflight.delete(worker.id);
+			log?.info(`worker ${worker.name} interrupted`);
+			return true;
+		},
+
+		async stop(worker) {
+			this.interrupt(worker);
+			queues.delete(worker.id);
+			threads.delete(worker.id);
+			// The transcript file stays: PRD 3 says ending a worker keeps it, and
+			// the Claude Code session on disk is untouched either way, so the id
+			// is still resumable from a terminal afterwards.
+			log?.info(`worker stop ${worker.name} (session ${String(worker.engineSessionId).slice(0, 8)} kept)`);
+		},
+
+		/** Forget a worker's transcript entirely. Not part of the engine
+		 *  contract; used by tests so one run cannot see another's. */
+		forget(worker) {
+			threads.delete(worker.id);
+			try { const p = pathFor(worker); if (existsSync(p)) unlinkSync(p); } catch { }
+		},
+
+		/** Reap everything on shutdown. A server that exits leaving `claude`
+		 *  processes behind is spending money nobody is reading. */
+		dispose() {
+			for (const [, child] of inflight) { try { child.kill("SIGKILL"); } catch { } }
+			inflight.clear();
+			cli.killAll?.();
 		}
 	};
 }

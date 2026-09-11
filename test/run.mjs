@@ -6,7 +6,9 @@ import { startServer, connect, TestClient, check, failed, section, sleep } from 
 import { validateC2S, PROTOCOL_VERSION, CLOSE, CONTROL } from "../src/protocol.js";
 import { request } from "node:http";
 
-const server = await startServer();
+// `--handler echo`: this suite pins PRD 1's transport, and a model in the
+// path would make it slow, expensive and non-deterministic for no gain.
+const server = await startServer(["--handler", "echo"]);
 
 try {
 	// ---------------------------------------------------------------- protocol

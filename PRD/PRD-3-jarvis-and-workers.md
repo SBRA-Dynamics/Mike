@@ -134,6 +134,40 @@ interleave writes to one transcript. Handoff is the supported model; simultaneou
 use probably is not. Test before promising it — this is test T1 and it shapes
 what requirement 3 can honestly mean.
 
+**Measured (T1, claude 2.1.268, 2026-09-11)**: nothing corrupts, and nothing
+errors — turns are silently lost instead.
+
+- *Sequential handoff works.* `claude -p --resume <id>` keeps the same session
+  id, appends to the same `~/.claude/projects/<cwd>/<id>.jsonl`, and the next
+  driver sees everything the previous one did. A terminal opened after a
+  server turn read that turn back correctly. **Server → PC handoff is real.**
+- *Two drivers at once fork the conversation.* Two `-p --resume <id>` started
+  together both answered, both reported the same session id, and both appended
+  to the one file — attaching their user message to the *same* parent. The
+  JSONL is well formed; it is now a tree with two leaves. The next resume walks
+  back from the last leaf, so exactly one branch survives: of CHARLIE and DELTA
+  sent concurrently, the following turn listed "ALPHA, BRAVO, DELTA". CHARLIE
+  was acknowledged with "OK" and then ceased to have been said.
+- *A terminal and the server diverge the same way.* With an interactive
+  `claude --resume <id>` open, the terminal's own view ended
+  "…FOXTROT, GOLF" (its turn, not the server's) while a fresh resume after it
+  read "…FOXTROT, HOTEL" (the server's turn, not the terminal's).
+- *PC → server: not implemented, but not blocked.* The T1 run saw an
+  interactive session write nothing to its transcript file, which would have
+  made adoption impossible. That was the test setup, not the machine: on this
+  box a live interactive session appends continuously (a running session's
+  `~/.claude/projects/<cwd>/<id>.jsonl` was 9.5 MB and still growing while this
+  was written). So a terminal-started session's turns *are* on disk and
+  adoptable by id. It is simply not built — it falls outside R3.1–R3.7 — and
+  whoever builds it measures the read path first.
+- Turn cost, one-shot per turn: ~8.7 s cold, ~5 s warm (haiku, trivial prompt).
+
+**What requirement 3 can honestly promise**: handoff, not sharing. The server
+serialises its own turns per worker (one in flight at a time), and a worker id
+handed to a terminal is a baton, not a second seat. Simultaneous use is not
+supported and cannot be made safe from this side — the loss is invisible to
+both drivers.
+
 ## Requirements
 
 ### R3.1

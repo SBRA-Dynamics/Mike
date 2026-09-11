@@ -1,0 +1,493 @@
+// PRD 3 — Jarvis, workers, routing, context injection.
+//
+//   node test/prd3.mjs
+//
+// Everything here is deterministic and free. The server runs its REAL handler,
+// its REAL engine and the REAL MCP round trip; only the `claude` binary is a
+// stand-in (test/fixtures/fake-claude.mjs, which documents exactly which half
+// of the CLI it reproduces). The claim this suite does not make is "a real
+// model would pick that tool" — that one costs money and lives in
+// test/e2e-live.mjs.
+
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { startServer, connect, check, failed, section, sleep, ROOT } from "./harness.mjs";
+import { route, stripAddress, matchModeCommand, applyModeCommand, MODES } from "../src/routing.js";
+import { buildWorkerContext, composePrompt } from "../src/jarvis.js";
+
+const FAKE = join(ROOT, "test", "fixtures", "fake-claude.mjs");
+
+/** Every stand-in state directory we make, so a suite that throws does not
+ *  leave them (and the sessions inside them) behind. */
+const fakeDirs = [];
+const newFakeDir = () => { const d = mkdtempSync(join(tmpdir(), "fake-claude-")); fakeDirs.push(d); return d; };
+const cleanFakeDirs = () => { for (const d of fakeDirs) { try { rmSync(d, { recursive: true, force: true }); } catch { } } };
+process.on("exit", cleanFakeDirs);
+
+/** A server whose Claude Code is the stand-in. */
+const startJarvis = async (extra = [], env = {}) => {
+	const fakeDir = newFakeDir();
+	const server = await startServer(
+		["--claude-bin", FAKE, "--worker-cwd", "/tmp", "--jarvis-cwd", "/tmp", ...extra],
+		{ env: { FAKE_CLAUDE_DIR: fakeDir, ...env } });
+	server.fakeDir = fakeDir;
+	return server;
+};
+
+/** Say one thing and wait for the turn to close. `since` is taken before the
+ *  send, always: without it the wait matches the PREVIOUS turn's idle state and
+ *  the loop races ahead, passing while measuring nothing. */
+const say = async (c, text, ms = 20_000) => {
+	const since = c.mark();
+	c.send({ type: "say", text });
+	await c.waitFor((m) => m.type === "state" && m.busy === false, ms, `idle after ${JSON.stringify(text)}`, since);
+	return c.messages.slice(since);
+};
+const textsOf = (turn) => turn.filter((m) => m.type === "text");
+const eventOf = (turn, kind) => turn.find((m) => m.type === "event" && m.kind === kind);
+
+/** Ask the server, over the wire, for a worker's Claude Code session id. Read
+ *  back rather than guessed: it is the server that chose it. */
+const whoIs = async (c, name) => {
+	const since = c.mark();
+	c.send({ type: "control", action: "whoIs", args: name ? { name } : {} });
+	const ev = await c.waitFor((m) => m.type === "event" && (m.kind === "workerIdentity" || m.type === "error"), 5000, "workerIdentity", since);
+	return ev.data;
+};
+
+const runFake = (args, env) => new Promise((resolve) => {
+	const p = spawn("node", [FAKE, ...args], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+	let out = "", err = "";
+	p.stdout.on("data", (d) => { out += d; });
+	p.stderr.on("data", (d) => { err += d; });
+	p.on("close", (code) => resolve({ code, out, err }));
+});
+
+const servers = [];
+const track = (s) => { servers.push(s); return s; };
+
+try {
+	// ================================================================ routing
+	section("routing: vem orden går till (R3.2, PRD 5 R5.4)");
+
+	check("namnprefixet plockas bort innan Jarvis ser texten",
+		route("Jarvis, starta en arbetare", { worker: null }).text === "starta en arbetare",
+		JSON.stringify(route("Jarvis, starta en arbetare", { worker: null })));
+
+	for (const v of ["Jarvis, hej", "jarvis hej", "Jarvis. hej", "Jarvis: hej", "Hey Jarvis, hej", "Hej Jarvis hej", "JARVIS, hej"]) {
+		check(`dikteringsvariant "${v}" når Jarvis`,
+			route(v, { worker: "Bosse" }).kind === "jarvis" && route(v, { worker: "Bosse" }).text === "hej",
+			JSON.stringify(route(v, { worker: "Bosse" })));
+	}
+
+	check("ett namn som BÖRJAR med jarvis är inte Jarvis",
+		route("Jarvisson, hej", { worker: "Jarvisson" }).kind === "worker");
+	check("prefixet slår igenom oavsett vilken arbetare som är aktiv — R3.2",
+		route("Jarvis, vad gör Bosse", { worker: "Kalle" }).kind === "jarvis");
+	check("utan aktiv arbetare går allt till Jarvis — R3.1",
+		route("Jarvis, hej", { worker: null }).kind === "jarvis");
+	check("bara namnet är inte tomt utan ett tilltal",
+		route("Jarvis.", { worker: null }).text === "Jarvis");
+	check("arbetarens eget namn tilltalar arbetaren, utan prefixet",
+		JSON.stringify(route("Bosse, lista filerna", { worker: "Bosse" })) === JSON.stringify({ kind: "worker", name: "Bosse", text: "lista filerna" }));
+	check("diakriter i ett arbetarnamn viks ihop som överallt annars",
+		route("Mans, hej", { worker: "Måns" }).kind === "worker");
+	check("tomt yttrande är inget yttrande", route("   ", { worker: "Bosse" }).kind === "empty");
+
+	section("routing: lägena (PRD 5 R5.4)");
+	check("byname utan tilltal släpps inte fram",
+		route("vad är klockan", { worker: "Bosse", mode: MODES.BYNAME }).kind === "dropped");
+	check("always släpper fram allt till den aktiva arbetaren — ordagrant",
+		JSON.stringify(route("vad är klockan", { worker: "Bosse", mode: MODES.ALWAYS })) === JSON.stringify({ kind: "worker", name: "Bosse", text: "vad är klockan" }));
+	check("always utan arbetare går till Jarvis",
+		route("vad är klockan", { worker: null, mode: MODES.ALWAYS }).kind === "jarvis");
+	check("ignore släpper inte fram något",
+		route("vad är klockan", { worker: "Bosse", mode: MODES.IGNORE }).kind === "dropped");
+	check("ignore släpper inte ens fram ett tilltal",
+		route("Jarvis, vad är klockan", { worker: null, mode: MODES.IGNORE }).kind === "dropped");
+
+	section("lägeskommandon matchas före grinden, i varje läge");
+	const commands = [
+		["pausa input", MODES.IGNORE], ["pause input", MODES.IGNORE], ["Hey Jarvis, pause the input.", MODES.IGNORE],
+		["fortsätt input", "previous"], ["continue input", "previous"], ["Hej Jarvis, fortsätt input.", "previous"],
+		["ändra input till alltid", MODES.ALWAYS], ["change input to always", MODES.ALWAYS],
+		["ändra input till via namn", MODES.BYNAME], ["change input to by name", MODES.BYNAME]
+	];
+	for (const [text, to] of commands) {
+		for (const mode of Object.values(MODES)) {
+			const r = route(text, { worker: "Bosse", mode });
+			check(`"${text}" i läge ${mode}`, r.kind === "mode" && r.to === to, JSON.stringify(r));
+		}
+	}
+	check("att prata OM kommandot utlöser det inte",
+		route("Jarvis, what happens if I say pause input to you", { worker: null }).kind === "jarvis");
+	check("fortsätt går tillbaka till läget före pausen, inte till standard",
+		JSON.stringify(applyModeCommand("previous", applyModeCommand(MODES.IGNORE, { mode: MODES.ALWAYS, previousMode: null }))) ===
+		JSON.stringify({ mode: MODES.ALWAYS, previousMode: null }));
+	check("två pauser i rad glömmer inte var man kom ifrån",
+		applyModeCommand(MODES.IGNORE, applyModeCommand(MODES.IGNORE, { mode: MODES.ALWAYS, previousMode: null })).previousMode === MODES.ALWAYS);
+	check("stripAddress säger nej när det inte är ett tilltal", stripAddress("hej Bosse", "Jarvis") === null);
+	check("matchModeCommand säger nej till vanlig text", matchModeCommand("lista filerna") === null);
+
+	// ================================================= context injection
+	section("arbetarkontext (R3.4)");
+	const worker = { name: "Bosse", model: "opus", cwd: "/home/user/projects/MyProject" };
+	const lines = [
+		{ role: "user", text: "bygg klart testerna" },
+		{ role: "assistant", text: "klart, tre av dem fallerar" }
+	];
+	const block = buildWorkerContext(worker, lines);
+	check("blocket namnger arbetaren, modellen och katalogen",
+		block.startsWith('[The user is currently talking to worker "Bosse" (opus, /home/user/projects/MyProject).'), block);
+	check("blocket citerar utbytet med arbetarens namn", /Bosse: klart, tre av dem fallerar\]$/.test(block), block);
+	check("användarens rader heter user", /user: bygg klart testerna/.test(block), block);
+	check("en tyst arbetare sägs vara tyst", /Nothing has been said to it yet/.test(buildWorkerContext(worker, [])));
+	check("ingen aktiv arbetare ger inget block", buildWorkerContext(null, lines) === null);
+
+	const many = Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", text: `rad ${i}` }));
+	const six = buildWorkerContext(worker, many, { turns: 6, budgetTokens: 10_000 });
+	check("N är antal utbyten, inte antal rader", six.split("\n").length === 2 + 12, `${six.split("\n").length} rader`);
+	check("de N senaste, inte de N första", six.includes("rad 39") && !six.includes("rad 27"), six);
+
+	const tight = buildWorkerContext(worker, many, { turns: 12, budgetTokens: 50 });
+	check("budgeten kapar, äldst först", tight.includes("rad 39") && !tight.includes("rad 20"), tight);
+	check("det som kapades bort sägs ha kapats", /earlier lines? omitted/.test(tight), tight);
+	check("budgeten kapar aldrig bort det sista som sades", tight.includes("rad 39"), tight);
+
+	const huge = buildWorkerContext(worker, [{ role: "assistant", text: "x".repeat(50_000) }]);
+	check("en enorm replik citeras inte hel", huge.length < 2000, `${huge.length} tecken`);
+
+	check("prompten sätts ihop som PRD 3 visar",
+		composePrompt("lista filerna", block) === `${block}\n\nThe user says: lista filerna`);
+	check("utan block är prompten bara det användaren sa",
+		composePrompt("hej", null) === "hej");
+
+	// ======================================================= the engine
+	section("motorn: riktiga Claude Code-sessioner (T1:s serialisering)");
+	{
+		const server = track(await startJarvis());
+		const c = await connect(server);
+
+		await say(c, "Jarvis, start a worker called Bosse with sonnet");
+		const id = await whoIs(c, "Bosse");
+		check("arbetaren har ett sessions-id servern valde", /^[0-9a-f-]{36}$/.test(String(id.sessionId)), JSON.stringify(id));
+		check("id:t går att lämna över till en terminal", id.resume === `claude --resume ${id.sessionId}`, id.resume);
+
+		await say(c, "Bosse, första saken");
+		const statePath = join(server.fakeDir, `${id.sessionId}.json`);
+		check("första turen skapade sessionen med --session-id",
+			existsSync(statePath) && JSON.parse(readFileSync(statePath, "utf8")).lastArgs.includes("--session-id"), statePath);
+
+		const second = textsOf(await say(c, "Bosse, andra saken"));
+		check("andra turen återupptar samma session",
+			JSON.parse(readFileSync(statePath, "utf8")).lastArgs.includes("--resume"),
+			JSON.stringify(JSON.parse(readFileSync(statePath, "utf8")).lastArgs));
+		check("samtalet fortsätter, det startar inte om", second[0].text === "turn 2: andra saken", JSON.stringify(second));
+		check("arbetaren fick modellen användaren bad om",
+			JSON.parse(readFileSync(statePath, "utf8")).lastModel === "claude-sonnet-5",
+			JSON.parse(readFileSync(statePath, "utf8")).lastModel);
+		check("inga verktyg ges till en arbetare — R2.4",
+			!JSON.parse(readFileSync(statePath, "utf8")).lastArgs.includes("--mcp-config"));
+
+		// T1: two drivers of one session fork it and lose a turn with no error.
+		// The server must never become the second driver of its own worker, so
+		// two utterances at once have to queue, not race.
+		const before = c.mark();
+		c.send({ type: "say", text: "Bosse, samtidigt ett" });
+		c.send({ type: "say", text: "Bosse, samtidigt två" });
+		await c.waitFor((m) => m.type === "text" && /samtidigt två/.test(m.text), 20_000, "andra samtidiga svaret", before);
+		const both = c.messages.slice(before).filter((m) => m.type === "text").map((m) => m.text);
+		check("två samtidiga yttranden köas, de kolliderar inte",
+			both.some((t) => t === "turn 3: samtidigt ett") && both.some((t) => t === "turn 4: samtidigt två"),
+			JSON.stringify(both));
+		check("och inget av dem tappades", both.length === 2, JSON.stringify(both));
+
+		// The block Jarvis is given must be the conversation and nothing else:
+		// the engine's own bookkeeping entry would be one more thing for him to
+		// reason about, paid for out of his context window.
+		await say(c, "Jarvis, hej");
+		const jarvisId = (await (await fetch(`${server.base}/healthz`)).json()).jarvis.sessionId;
+		const jarvisPrompt = JSON.parse(readFileSync(join(server.fakeDir, `${jarvisId}.json`), "utf8")).turns.pop().prompt;
+		check("Jarvis får arbetarkontexten injicerad — R3.2",
+			jarvisPrompt.includes('[The user is currently talking to worker "Bosse"'), jarvisPrompt.slice(0, 200));
+		check("kontexten citerar utbytet, inte motorns bokföring",
+			jarvisPrompt.includes("andra saken") && !/session-created|meta/.test(jarvisPrompt), jarvisPrompt.slice(0, 400));
+
+		c.close();
+		server.stop();
+	}
+
+	section("motorn: när en tur misslyckas");
+	{
+		const server = track(await startJarvis([], { FAKE_CLAUDE_FAIL: "exit" }));
+		const c = await connect(server);
+		const turn = await say(c, "Jarvis, hej");
+		const err = turn.find((m) => m.type === "error");
+		check("ett misslyckande blir ett felmeddelande, inte tystnad", !!err, JSON.stringify(turn));
+		check("felet ryms på en lins", err && err.message.length <= 100 && !/\n/.test(err.message), err?.message);
+		check("ingen stack läcker ut", err && !/ at .*:\d+:\d+/.test(err.message), err?.message);
+		check("turen stängs ändå", turn.some((m) => m.type === "state" && m.busy === false));
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
+	section("motorn: när modellen svarar med ett fel men avslutar med noll");
+	{
+		// The CLI exits 0 and sets is_error for an API failure or a refused
+		// model. Reading that as success would put the error string in the
+		// transcript as if Jarvis had said it, which is how a bad model name
+		// becomes a personality.
+		const server = track(await startJarvis([], { FAKE_CLAUDE_FAIL: "error" }));
+		const c = await connect(server);
+		const turn = await say(c, "Jarvis, hej");
+		check("is_error är ett fel, inte ett svar", turn.some((m) => m.type === "error"), JSON.stringify(turn));
+		check("och modellens feltext blir aldrig en replik",
+			!textsOf(turn).some((m) => /simulated model error/.test(m.text)), JSON.stringify(textsOf(turn)));
+		c.close();
+		server.stop();
+	}
+
+	section("ett misslyckande på första turen kilar inte fast någon för alltid");
+	{
+		const server = track(await startJarvis([], { FAKE_CLAUDE_FAIL: "error-once" }));
+		const c = await connect(server);
+		const bad = await say(c, "Jarvis, hej");
+		check("första turen misslyckas, som den ska", bad.some((m) => m.type === "error"), JSON.stringify(bad));
+		const good = await say(c, "Jarvis, hej igen");
+		check("den andra turen går fram — sessionen skapas inte om",
+			textsOf(good).length === 1 && !good.some((m) => m.type === "error"), JSON.stringify(good));
+
+		const t = await say(c, "Jarvis, start a worker called Bosse");
+		check("och en arbetare kan fortfarande skapas", !!eventOf(t, "workerSpawned"), JSON.stringify(t));
+		const badWorker = await say(c, "Bosse, första");
+		check("arbetarens första tur misslyckas också", badWorker.some((m) => m.type === "error"), JSON.stringify(badWorker));
+		const okWorker = textsOf(await say(c, "Bosse, andra"));
+		check("men arbetaren är inte död — nästa tur återupptar sessionen",
+			okWorker[0]?.text === "turn 2: andra", JSON.stringify(okWorker));
+		c.close();
+		server.stop();
+	}
+
+	// ============================================== jarvis identity + prompt
+	section("Jarvis är alltid samma samtal (R3.7)");
+	{
+		const server = track(await startJarvis());
+		const c = await connect(server);
+		const health1 = await (await fetch(`${server.base}/healthz`)).json();
+		check("servern kan säga vilket samtal Jarvis är", /^[0-9a-f-]{36}$/.test(health1.jarvis.sessionId), JSON.stringify(health1.jarvis));
+
+		await say(c, "Jarvis, hej");
+		const jarvisFile = join(server.fakeDir, `${health1.jarvis.sessionId}.json`);
+		check("Jarvis kör i sin egen session", existsSync(jarvisFile), jarvisFile);
+		check("Jarvis kör modellen han är konfigurerad med",
+			JSON.parse(readFileSync(jarvisFile, "utf8")).lastModel === "claude-opus-5");
+
+		const args = JSON.parse(readFileSync(jarvisFile, "utf8")).lastArgs;
+		check("Jarvis har verktygen — R2.4 baklänges", args.includes("mcp__jarvis__spawn_worker"), JSON.stringify(args.slice(-12)));
+		check("Jarvis har Bash, som R3.4 kräver", args.includes("Bash"));
+		check("ingen ledtråd om ett skalverktyg i verktygslistan", !args.some((a) => /^mcp__jarvis__(bash|shell|run)/.test(a)));
+		check("systemprompten skickas med", args.includes("--append-system-prompt"));
+		check("prompten sparas inte som en ögonblicksbild — annars biter inga redigeringar",
+			args[args.indexOf("--system-prompt-snapshot") + 1] === "off", JSON.stringify(args.slice(args.indexOf("--system-prompt-snapshot"), 2)));
+		check("permissionsfrågor kan aldrig hänga turen",
+			args[args.indexOf("--permission-prompts") + 1] === "none");
+
+		c.close();
+		await server.restart();
+		const health2 = await (await fetch(`${server.base}/healthz`)).json();
+		check("Jarvis överlever en omstart med samma samtal — R3.7",
+			health2.jarvis.sessionId === health1.jarvis.sessionId, `${health2.jarvis.sessionId} vs ${health1.jarvis.sessionId}`);
+
+		const c2 = await connect(server);
+		const after = textsOf(await say(c2, "Jarvis, hej igen"));
+		check("och han fortsätter samtalet i stället för att börja om",
+			/jarvis turn 2/.test(after[0].text), JSON.stringify(after));
+		c2.close();
+		server.stop();
+	}
+
+	section("systemprompten är en fil, redigerbar utan ombyggnad");
+	{
+		const promptFile = join(newFakeDir(), "jarvis.md");
+		writeFileSync(promptFile, "VERSION ETT");
+		const server = track(await startJarvis(["--jarvis-prompt", promptFile]));
+		const c = await connect(server);
+		await say(c, "Jarvis, hej");
+		const id = (await (await fetch(`${server.base}/healthz`)).json()).jarvis.sessionId;
+		const file = join(server.fakeDir, `${id}.json`);
+		check("prompten som skickas är filens innehåll",
+			JSON.parse(readFileSync(file, "utf8")).lastSystemPrompt === "VERSION ETT");
+
+		// The mtime cache is per millisecond; a second write inside the same
+		// millisecond would look unchanged and this would pass for the wrong
+		// reason. Nudge past it.
+		await sleep(20);
+		writeFileSync(promptFile, "VERSION TVÅ");
+		await say(c, "Jarvis, hej igen");
+		check("en redigering biter på nästa tur, utan omstart",
+			JSON.parse(readFileSync(file, "utf8")).lastSystemPrompt === "VERSION TVÅ",
+			JSON.parse(readFileSync(file, "utf8")).lastSystemPrompt);
+		c.close();
+		server.stop();
+	}
+
+	section("den levererade prompten säger det PRD 3 kräver att den säger");
+	{
+		const shipped = readFileSync(join(ROOT, "prompts", "jarvis.md"), "utf8");
+		check("den är versionerad", /Version \d/i.test(shipped), shipped.slice(0, 80));
+		for (const [what, re] of [
+			["identitet", /you are jarvis/i],
+			["delegering", /\bdelegate\b|route work to a worker/i],
+			["korthet", /two lines|be brief/i],
+			["verktyg", /spawn_worker/],
+			["kontexthantering", /bracketed block/i],
+			["språk", /language you were addressed in/i],
+			["diktering", /dictated/i]
+		]) check(`prompten etablerar ${what}`, re.test(shipped), String(re));
+	}
+
+	// =========================================================== the wire
+	section("klienten ser hela tiden vem som lyssnar (R3.5)");
+	{
+		const server = track(await startJarvis());
+		const c = await connect(server);
+		check("ready bär den aktiva arbetaren och läget", c.readyMsg.worker === null && c.readyMsg.mode === "byname", JSON.stringify(c.readyMsg));
+		const greeting = await c.waitFor((m) => m.type === "text" && m.from === "jarvis", 5000, "hälsning");
+		check("Jarvis hälsar när man kommer — steg 1", greeting.text.length > 0 && greeting.text.length < 60, greeting.text);
+
+		const spawn1 = await say(c, "Jarvis, start a worker called Bosse with sonnet");
+		for (const m of spawn1.filter((m) => m.type === "state")) {
+			check("varje state bär busy, worker och mode",
+				"busy" in m && "worker" in m && "mode" in m, JSON.stringify(m));
+		}
+		check("state efter växlingen namnger arbetaren",
+			spawn1.filter((m) => m.type === "state").pop().worker === "Bosse");
+
+		const reattach = await connect(server, { sessionId: c.readyMsg.sessionId });
+		check("en ny anslutning ser samma aktiva arbetare", reattach.readyMsg.worker === "Bosse", JSON.stringify(reattach.readyMsg));
+		check("och listan över vilka som finns", reattach.readyMsg.workers.some((w) => w.name === "Bosse"));
+		reattach.close();
+
+		const dropped = await new Promise((resolve, reject) => {
+			const since = c.mark();
+			c.send({ type: "say", text: "det här är inte till någon" });
+			c.waitFor((m) => m.type === "event" && m.kind === "notHeard", 5000, "notHeard", since).then(resolve, reject);
+		});
+		check("det som inte släpps fram rapporteras, aldrig tyst",
+			dropped.data.reason === "unaddressed", JSON.stringify(dropped.data));
+
+		const paused = await say(c, "pausa input");
+		check("ett lägeskommando bekräftas", /paused/i.test(textsOf(paused).pop()?.text ?? ""), JSON.stringify(textsOf(paused)));
+		check("lägesbytet är en händelse klienten kan visa", !!eventOf(paused, "modeChanged"));
+		const whilePaused = await new Promise((resolve, reject) => {
+			const since = c.mark();
+			c.send({ type: "say", text: "Bosse, hör du mig" });
+			c.waitFor((m) => m.type === "event" && m.kind === "notHeard", 5000, "notHeard (pausad)", since).then(resolve, reject);
+		});
+		check("i pausat läge når inte ens ett tilltal fram", whilePaused.data.reason === "paused");
+		await say(c, "fortsätt input");
+		check("och man kan prata sig ut ur pausen", (await connect(server, { sessionId: c.readyMsg.sessionId })).readyMsg.mode === "byname");
+
+		c.close();
+		server.stop();
+	}
+
+	// ================================================== the scripted run
+	section("PRD 3:s manusstyrda körning, steg 1–9");
+	{
+		const server = track(await startJarvis());
+
+		// 1 ------------------------------------------------------------------
+		const c = await connect(server);
+		const hello = await c.waitFor((m) => m.type === "text" && m.from === "jarvis", 5000, "Jarvis hälsar");
+		check("1. Jarvis hälsar när man kopplar upp", !!hello.text, hello.text);
+
+		// 2 ------------------------------------------------------------------
+		const t2 = await say(c, "Jarvis, start a worker called Bosse with sonnet");
+		const spawned = eventOf(t2, "workerSpawned");
+		check("2. arbetaren skapades", spawned?.data.worker.name === "Bosse", JSON.stringify(t2));
+		check("2. med den modell användaren namngav", spawned?.data.worker.model === "sonnet", spawned?.data.worker.model);
+		check("2. och samtalet växlade till den — R3.3", spawned?.data.active === "Bosse");
+		check("2. i en enda kort rad", textsOf(t2).length === 1 && textsOf(t2)[0].text.length < 120, JSON.stringify(textsOf(t2)));
+		const bosseId = (await whoIs(c, "Bosse")).sessionId;
+
+		// 3 ------------------------------------------------------------------
+		const t3 = textsOf(await say(c, "Bosse, vad heter huvudstaden i Sverige"));
+		check("3. svaret kommer taggat som Bosse", t3[0]?.from === "Bosse", JSON.stringify(t3));
+		check("3. och det är arbetaren som svarar, inte Jarvis", /vad heter huvudstaden/.test(t3[0]?.text ?? ""), JSON.stringify(t3));
+
+		// 4 ------------------------------------------------------------------
+		const t4 = await say(c, "Jarvis, what is Bosse working on");
+		check("4. Jarvis svarar om utbytet", /huvudstaden/.test(textsOf(t4).pop()?.text ?? ""), JSON.stringify(textsOf(t4)));
+		check("4. och han läste arbetaren genom verktyget", !!eventOf(t4, "workerRead"));
+		check("4. utan att byta vem man pratar med",
+			t4.filter((m) => m.type === "state").pop().worker === "Bosse");
+
+		// 5 ------------------------------------------------------------------
+		const t5 = textsOf(await say(c, "Jarvis, list the files in the folder we are talking about"));
+		const real = readdirSync("/tmp").slice(0, 20);
+		check("5. Jarvis svarar om arbetarens katalog utan att den namngavs — R3.4",
+			t5[0] && t5[0].text.includes("/tmp"), JSON.stringify(t5));
+		check("5. och listningen är verklig", real.length === 0 || t5[0].text.includes(real[0]), `väntade ${real[0]}`);
+
+		// 6 ------------------------------------------------------------------
+		const t6 = await say(c, "Jarvis, start a worker called Kalle");
+		check("6. den nya arbetaren blev den aktiva", eventOf(t6, "workerSpawned")?.data.active === "Kalle", JSON.stringify(t6));
+		const list = await (await fetch(`${server.base}/healthz`)).json();
+		check("6. och Bosse finns fortfarande kvar", list.workers === 2, JSON.stringify(list));
+
+		// 7 ------------------------------------------------------------------
+		const t7 = await say(c, "Jarvis, switch back to Bosse");
+		check("7. samtalet är tillbaka hos Bosse", eventOf(t7, "workerSwitched")?.data.active === "Bosse", JSON.stringify(t7));
+		const t7b = textsOf(await say(c, "Bosse, och nu då"));
+		check("7. och transkriptet fortsätter, det startar inte om — R3.6",
+			/^turn 2:/.test(t7b[0]?.text ?? ""), JSON.stringify(t7b));
+		check("7. arbetaren behöll sitt sessions-id över växlingen",
+			(await whoIs(c, "Bosse")).sessionId === bosseId);
+
+		// 8 ------------------------------------------------------------------
+		const sessionId = c.readyMsg.sessionId;
+		const jarvisBefore = (await (await fetch(`${server.base}/healthz`)).json()).jarvis.sessionId;
+		c.close();
+		await server.restart();
+		const c8 = await connect(server, { sessionId });
+		const health8 = await (await fetch(`${server.base}/healthz`)).json();
+		check("8. Jarvis är samma samtal efter omstarten — R3.7", health8.jarvis.sessionId === jarvisBefore);
+		check("8. båda arbetarna finns kvar", health8.workers === 2, JSON.stringify(health8));
+		check("8. och sessionen minns vem man pratade med", c8.readyMsg.worker === "Bosse", JSON.stringify(c8.readyMsg));
+		check("8. arbetaren har kvar sitt sessions-id", (await whoIs(c8, "Bosse")).sessionId === bosseId);
+		const t8 = textsOf(await say(c8, "Bosse, efter omstarten"));
+		check("8. och man kan prata vidare med den, utan att den startar om",
+			/^turn 3:/.test(t8[0]?.text ?? ""), JSON.stringify(t8));
+
+		// 9 ------------------------------------------------------------------
+		// The PC handoff, exactly as PRD 3 writes it: a second driver resumes the
+		// worker's id and sees the same conversation. T1 measured that this is a
+		// baton and not a second seat, so it happens after the server's turn, not
+		// during it.
+		const term = await runFake(["-p", "--output-format", "json", "--resume", bosseId, "i terminalen"], { FAKE_CLAUDE_DIR: server.fakeDir });
+		check("9. en terminal kan återuppta arbetarens session", term.code === 0, term.err.slice(0, 200));
+		const parsed = term.code === 0 ? JSON.parse(term.out) : {};
+		check("9. och ser samma samtal, inte ett nytt", parsed.result === "turn 4: i terminalen", term.out.slice(0, 200));
+		check("9. samma sessions-id hela vägen", parsed.session_id === bosseId);
+
+		check("inga ouppfångade undantag under hela körningen", !server.log().includes("UNCAUGHT"), server.log().slice(-400));
+		c8.close();
+		server.stop();
+	}
+
+} catch (err) {
+	console.error("\ntestriggen kraschade:", err.stack || err.message);
+	check("testriggen överlevde", false, err.message);
+} finally {
+	for (const s of servers) { try { s.stop(); } catch { } }
+	cleanFakeDirs();
+	await sleep(150);
+}
+
+console.log(failed() === 0 ? "\nPASS\n" : `\nFAIL (${failed()})\n`);
+process.exit(failed() === 0 ? 0 : 1);
