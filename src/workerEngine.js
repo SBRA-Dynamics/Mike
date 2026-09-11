@@ -133,7 +133,9 @@ export function createStubWorkerEngine({ log } = {}) {
 
 import { randomUUID } from "node:crypto";
 import { mkdirSync, appendFileSync, readFileSync, existsSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { PromptFile, fillTemplate } from "./promptFile.js";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { createClaudeRunner, ChildTracker } from "./claudeCli.js";
 
@@ -159,9 +161,31 @@ const clip = (s, n = MAX_QUOTED_CHARS) => {
  */
 export function createClaudeWorkerEngine({
 	log, dataDir, bin = "claude", runner, tracker = new ChildTracker(),
-	timeoutMs, env, permissions = "readonly"
+	timeoutMs, env, permissions = "readonly", promptFile
 } = {}) {
 	if (!dataDir) throw new Error("createClaudeWorkerEngine needs a dataDir for transcripts");
+	// The template every worker's system prompt is built from. Re-read when it
+	// changes, so an edit reaches the next turn of every worker at once — the
+	// same contract Jarvis's own prompt has.
+	//
+	// It is applied on EVERY turn, not just the first, and always with
+	// --system-prompt-snapshot off. Claude Code otherwise replays the prompt
+	// recorded when the session was created, and editing the template would do
+	// nothing until each worker was thrown away.
+	const template = new PromptFile(
+		promptFile ?? join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "worker.md"),
+		log, "worker prompt");
+
+	/** What this particular one is told about itself. PRD 3 says a worker is not
+	 *  told it is a worker; a name, a directory and what it is for are facts
+	 *  about its own job, not about the arrangement around it. */
+	const promptFor = (worker) => fillTemplate(template.read(), {
+		name: worker.name,
+		model: worker.model,
+		cwd: worker.cwd,
+		systemPrompt: worker.systemPrompt ?? ""
+	}) || undefined;
+
 	const dir = join(dataDir, "transcripts");
 	mkdirSync(dir, { recursive: true });
 
@@ -242,6 +266,7 @@ export function createClaudeWorkerEngine({
 			cwd: worker.cwd,
 			model: worker.modelId ?? worker.model,
 			permissions,
+			appendSystemPrompt: promptFor(worker),
 			...(first ? { sessionId: id } : { resume: id }),
 			onSpawn: (child) => inflight.set(worker.id, child)
 		});

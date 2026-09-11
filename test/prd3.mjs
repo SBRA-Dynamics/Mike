@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { startServer, connect, check, failed, section, sleep, ROOT } from "./harness.mjs";
+import { startServer, connect, check, failed, section, sleep, ROOT, grantTools, McpClient } from "./harness.mjs";
 import { route, stripAddress, matchModeCommand, applyModeCommand, MODES, ORIGIN } from "../src/routing.js";
 import { buildWorkerContext, composePrompt } from "../src/jarvis.js";
 
@@ -425,6 +425,103 @@ try {
 	}
 
 	// ================================================== the scripted run
+	// A worker gets a system prompt built from a template, with the name Jarvis
+	// gave it and the instructions he wrote for it. It must say nothing about
+	// workers or orchestration: PRD 3 is deliberate that a session told it is one
+	// of several discusses the arrangement instead of doing the job.
+	section("arbetaren får en prompt byggd ur mallen");
+	{
+		const server = await startJarvis();
+		const c = await connect(server);
+		await say(c, "Jarvis, starta en arbetare som heter Bosse.");
+		await say(c, "Bosse, gör något.");
+		await sleep(200);
+
+		const calls = readdirSync(server.fakeDir)
+			.map((f) => JSON.parse(readFileSync(join(server.fakeDir, f), "utf8")))
+			.filter((j) => Array.isArray(j.lastArgs));
+		const worker = calls.find((j) => !j.lastArgs.includes("--mcp-config"));
+		const i = worker ? worker.lastArgs.indexOf("--append-system-prompt") : -1;
+		const prompt = i >= 0 ? worker.lastArgs[i + 1] : "";
+
+		check("arbetaren fick en systemprompt", prompt.length > 0, JSON.stringify(worker?.lastArgs?.slice(0, 6)));
+		check("den säger vad arbetaren heter", /\bBosse\b/.test(prompt), prompt.slice(0, 120));
+		check("den säger var den arbetar", prompt.includes("/tmp"), prompt.slice(0, 200));
+		check("den nämner att orden är dikterade", /dictat|spoken/i.test(prompt), prompt.slice(0, 200));
+		check("den avslöjar inte orkestreringen",
+			!/\bworker\b|\bJarvis\b|orchestrat/i.test(prompt), (prompt.match(/\bworker\b|\bJarvis\b|orchestrat\w*/i) ?? [""])[0]);
+		check("mallens egna anteckningar följer inte med", !prompt.includes("<!--"), prompt.slice(0, 80));
+		check("inga ofyllda platshållare blev kvar", !/\{\{\w+\}\}/.test(prompt), (prompt.match(/\{\{\w+\}\}/) ?? [""])[0]);
+		check("den skickas med snapshot av, annars är varje redigering verkningslös",
+			worker.lastArgs.includes("--system-prompt-snapshot") && worker.lastArgs.includes("off"));
+
+		c.close(); server.stop();
+	}
+
+	// The system prompt is the half a template cannot know: what this one is for.
+	// Jarvis writes it when he spawns, and it has to reach the session itself —
+	// not a log line, not the first user message, which scrolls away.
+	section("Jarvis systemprompt når arbetarens egen prompt");
+	{
+		const server = await startJarvis();
+		const c = await connect(server);
+		const mcp = new McpClient(await grantTools(c));
+		await mcp.initialize();
+		await mcp.call("spawn_worker", { name: "Doris", systemPrompt: "You are looking after the BLE firmware in MyLibrary." });
+		await say(c, "Doris, gör något.");
+		await sleep(200);
+
+		const calls = readdirSync(server.fakeDir)
+			.map((f) => JSON.parse(readFileSync(join(server.fakeDir, f), "utf8")))
+			.filter((j) => Array.isArray(j.lastArgs));
+		const worker = calls.find((j) => !j.lastArgs.includes("--mcp-config"));
+		const i = worker ? worker.lastArgs.indexOf("--append-system-prompt") : -1;
+		const prompt = i >= 0 ? worker.lastArgs[i + 1] : "";
+		check("systemprompten står i arbetarens prompt", /BLE firmware in MyLibrary/.test(prompt), prompt.slice(0, 300));
+		check("och namnet med den", /\bDoris\b/.test(prompt), prompt.slice(0, 120));
+
+		// Den ska överleva en omstart: en arbetare får inte tyst byta identitet.
+		await server.restart();
+        const c2 = await connect(server, { sessionId: c.readyMsg.sessionId });
+		await say(c2, "Doris, gör något igen.");
+		await sleep(200);
+		const after = readdirSync(server.fakeDir)
+			.map((f) => JSON.parse(readFileSync(join(server.fakeDir, f), "utf8")))
+			.filter((j) => Array.isArray(j.lastArgs) && !j.lastArgs.includes("--mcp-config"));
+		const later = after.map((j) => { const k = j.lastArgs.indexOf("--append-system-prompt"); return k >= 0 ? j.lastArgs[k + 1] : ""; });
+		check("systemprompten överlever en omstart", later.some((p) => /BLE firmware in MyLibrary/.test(p)),
+			JSON.stringify(later.map((p) => p.slice(0, 60))));
+
+		c2.close(); c.close(); server.stop();
+	}
+
+	// The lens shows the latest thing said, so switching back to somebody has to
+	// carry what they last said — the client may never have seen it, and only the
+	// server has the transcript (R3.6).
+	section("växling bär med sig var samtalet slutade");
+	{
+		const server = await startJarvis();
+		const c = await connect(server);
+		await say(c, "Jarvis, starta en arbetare som heter Bosse.");
+		await say(c, "Bosse, vad heter du?");
+		await say(c, "Jarvis, starta en arbetare som heter Kalle.");
+
+		const back = await say(c, "Jarvis, byt tillbaka till Bosse.");
+		const ev = eventOf(back, "workerSwitched");
+		check("växlingen bär med sig ett sista yttrande", !!ev?.data?.last?.text, JSON.stringify(ev?.data ?? null));
+		check("det är arbetarens ord, inte användarens",
+			ev?.data?.last?.from === "Bosse" && /vad heter du/i.test(ev.data.last.text), JSON.stringify(ev?.data?.last));
+
+		// En arbetare som aldrig sagt något har ingenting att bära med sig, och
+		// det ska vara null snarare än en påhittad rad.
+		const toKalle = await say(c, "Jarvis, byt till Kalle.");
+		const ev2 = eventOf(toKalle, "workerSwitched");
+		check("en tyst arbetare bär med sig ingenting", ev2 ? (ev2.data.last ?? null) === null : false,
+			JSON.stringify(ev2?.data?.last ?? "ingen växling"));
+
+		c.close(); server.stop();
+	}
+
 	// What a worker may do is the operator's decision, and it must reach the
 	// worker's turn and nothing else: Jarvis keeps his narrow allowlist whatever
 	// the workers are allowed, or the orchestrator quietly becomes the most

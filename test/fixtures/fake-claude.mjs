@@ -160,7 +160,9 @@ const answer = async () => {
 
 	let m;
 	if ((m = said.match(SPAWN))) {
-		const args = { name: m[1] };
+		// A real model writes the worker's system prompt; the stand-in has to do
+		// the same or it stops standing in for one. spawn_worker requires it.
+		const args = { name: m[1], systemPrompt: `You are ${m[1]}. You look after whatever you are asked about here.` };
 		if (m[2]) args.model = m[2].trim();
 		const r = await callTool("spawn_worker", args);
 		return r.isError ? `Could not: ${r.text}` : `${m[1]} is up. You are talking to it.`;

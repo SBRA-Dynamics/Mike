@@ -76,7 +76,7 @@ export class WorkerRegistry {
 	 * Create a worker. Throws ToolError on a collision, a reserved name, an
 	 * unknown model or a working directory that is not there.
 	 */
-	create({ name, model, cwd }) {
+	create({ name, model, cwd, systemPrompt }) {
 		if (this.workers.size >= MAX_WORKERS) throw new ToolError(`${MAX_WORKERS} workers is the limit; end one first`);
 
 		const named = checkName(name);
@@ -98,6 +98,10 @@ export class WorkerRegistry {
 			model: resolved.label,
 			modelId: resolved.id,
 			cwd: dir,
+			// The worker-specific half of its system prompt, written by Jarvis at
+			// spawn time and folded into the template on every turn. Kept on the
+			// record so a restart does not quietly change who it is.
+			systemPrompt: typeof systemPrompt === "string" ? systemPrompt.slice(0, 2000).trim() : "",
 			busy: false,
 			createdAt: now,
 			lastActivity: now,

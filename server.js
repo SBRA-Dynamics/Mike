@@ -64,6 +64,7 @@ if (has("help")) {
   --engine <e>         claude (default) or stub, which spends no money
   --claude-bin <path>  the Claude Code binary to drive (default: claude)
   --worker-perms <p>   readonly (default), edits, or full — what a worker may do
+  --worker-prompt <f>  the worker system prompt template (default ./prompts/worker.md)
   --jarvis-model <m>   the model Jarvis runs (default opus)
   --jarvis-cwd <dir>   where Jarvis's own Bash runs (default: --worker-cwd)
   --jarvis-prompt <f>  his system prompt file (default ./prompts/jarvis.md)
@@ -100,6 +101,7 @@ const config = {
 	// token, that makes the token the ability to run code here. Deliberate
 	// setting, made in the unit file, never a default.
 	workerPerms: flag("worker-perms", process.env.JARVIS_WORKER_PERMS ?? "readonly"),
+	workerPrompt: flag("worker-prompt", null),
 
 	// PRD 3. Two seams, both named on the command line rather than inferred:
 	// `--handler echo` is how the PRD 1 suites still pin the transport without a
@@ -148,7 +150,7 @@ const registry = new WorkerRegistry({
 });
 const engine = config.engine === "stub"
 	? createStubWorkerEngine({ log })
-	: createClaudeWorkerEngine({ permissions: config.workerPerms, log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.turnTimeoutMs });
+	: createClaudeWorkerEngine({ permissions: config.workerPerms, promptFile: config.workerPrompt, log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.turnTimeoutMs });
 const toolset = createToolset({ registry, engine, log });
 const mcp = createMcpServer({ store, toolset, registry, log });
 

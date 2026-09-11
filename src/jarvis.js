@@ -20,7 +20,8 @@
 // not the exotic one, so the queue is load-bearing.
 
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
+import { PromptFile } from "./promptFile.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -142,26 +143,6 @@ class JarvisIdentity {
 /** The prompt file, re-read when it changes on disk. Cached on mtime so an
  *  edit lands on the next turn without a restart, and a busy hour does not
  *  become a stat-and-read per turn for nothing. */
-class PromptFile {
-	constructor(file, log) { this.file = file; this.log = log; this.mtime = -1; this.text = ""; }
-	read() {
-		try {
-			const m = statSync(this.file).mtimeMs;
-			if (m !== this.mtime) {
-				this.text = readFileSync(this.file, "utf8");
-				this.mtime = m;
-				this.log?.info(`jarvis: prompt loaded from ${this.file} (${this.text.length} chars)`);
-			}
-		} catch (e) {
-			// An unreadable prompt is a product outage, not a crash: he answers
-			// as a plain Claude Code session until the file comes back.
-			if (this.mtime !== -2) this.log?.error(`jarvis: cannot read prompt ${this.file}: ${e.message}`);
-			this.mtime = -2;
-			this.text = "";
-		}
-		return this.text;
-	}
-}
 
 // --------------------------------------------------------------------- agent
 
@@ -184,7 +165,7 @@ export function createJarvis({
 } = {}) {
 	if (!dataDir) throw new Error("createJarvis needs a dataDir");
 	const identity = new JarvisIdentity(join(dataDir, "jarvis.json"), log);
-	const prompt = new PromptFile(promptFile ?? join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "jarvis.md"), log);
+	const prompt = new PromptFile(promptFile ?? join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "jarvis.md"), log, "jarvis prompt");
 	const cli = runner ?? createClaudeRunner({ bin, log, tracker, timeoutMs, env });
 
 	let queue = Promise.resolve();

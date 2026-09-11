@@ -169,6 +169,71 @@ try {
 	check("radbrytningen respekterar tecken som redan finns i texten",
 		wrapText("ett\ntvå\ntre").join("|") === "ett|två|tre");
 
+	// R3.5 through the client's own reducer: the name at the top of the lens is
+	// who your next sentence goes to, so it has to change when that changes —
+	// not at the next reply, which is what was actually shipped.
+	section("linsrubriken följer den aktiva arbetaren (R3.5)");
+	{
+		const s = new Store();
+		let n = 0;
+		const feed = (m) => s.apply({ ...m, seq: ++n });
+
+		feed({ type: "text", from: "Jarvis", text: "Hej." });
+		check("utan arbetare står Jarvis överst", s.state.lens.from === "Jarvis", s.state.lens.from);
+
+		// Jarvis skapar en arbetare: hans bekräftelse, sedan turens state.
+		feed({ type: "text", from: "Jarvis", text: "Bosse är igång." });
+		feed({ type: "state", busy: false, worker: "Bosse", mode: "byname" });
+		check("efter att en arbetare skapats står arbetaren överst", s.state.lens.from === "Bosse", s.state.lens.from);
+		check("och texten står kvar", /Bosse är igång/.test(s.state.lens.text), s.state.lens.text);
+
+		// Ett inpass från Jarvis mitt i: samma arbetare kvar.
+		feed({ type: "text", from: "Jarvis", text: "Den läser om filerna." });
+		feed({ type: "state", busy: false, worker: "Bosse", mode: "byname" });
+		check("Jarvis inpass hamnar inte under arbetarens namn", s.state.lens.from === "Jarvis", s.state.lens.from);
+
+		feed({ type: "text", from: "Jarvis", text: "Nu pratar du med Kalle." });
+		feed({ type: "state", busy: false, worker: "Kalle", mode: "byname" });
+		check("vid växling står den nya arbetaren överst", s.state.lens.from === "Kalle", s.state.lens.from);
+
+		feed({ type: "state", busy: false, worker: null, mode: "byname" });
+		check("när arbetaren avslutas står Jarvis överst igen", s.state.lens.from === "Jarvis", s.state.lens.from);
+	}
+
+	// R3.6 on the lens: switching back to somebody is not a new conversation, so
+	// what you see is where it left off — not Jarvis's sentence announcing the
+	// switch, which is the one thing the user already knows.
+	section("växling visar arbetarens samtal, inte bekräftelsen");
+	{
+		const s = new Store();
+		let n = 0;
+		const feed = (m) => s.apply({ ...m, seq: ++n });
+
+		feed({ type: "event", kind: "workerSwitched",
+			data: { active: "Bosse", worker: { name: "Bosse", model: "sonnet", cwd: "/tmp" },
+				last: { from: "Bosse", text: "Jag hittade felet i BLE-koden." } } });
+		feed({ type: "text", from: "Jarvis", text: "Nu pratar du med Bosse." });
+		feed({ type: "state", busy: false, worker: "Bosse", mode: "byname" });
+		check("linsen visar det Bosse sa, inte bekräftelsen",
+			s.state.lens.text === "Jag hittade felet i BLE-koden.", s.state.lens.text);
+		check("och under Bosses namn", s.state.lens.from === "Bosse", s.state.lens.from);
+
+		// En arbetare som aldrig sagt något har ingenting att återuppta.
+		feed({ type: "event", kind: "workerSpawned",
+			data: { active: "Kalle", worker: { name: "Kalle", model: "sonnet", cwd: "/tmp" } } });
+		feed({ type: "text", from: "Jarvis", text: "Kalle är igång." });
+		feed({ type: "state", busy: false, worker: "Kalle", mode: "byname" });
+		check("en ny arbetare behåller Jarvis besked", /Kalle är igång/.test(s.state.lens.text), s.state.lens.text);
+		check("men namnet är den nyas", s.state.lens.from === "Kalle", s.state.lens.from);
+
+		// Det återupptagna får inte dyka upp igen vid en senare, orelaterad växling.
+		feed({ type: "event", kind: "workerSwitched",
+			data: { active: "Doris", worker: { name: "Doris", model: "sonnet", cwd: "/tmp" }, last: null } });
+		feed({ type: "text", from: "Jarvis", text: "Nu pratar du med Doris." });
+		feed({ type: "state", busy: false, worker: "Doris", mode: "byname" });
+		check("ett gammalt återupptagande läcker inte in", /Doris/.test(s.state.lens.text), s.state.lens.text);
+	}
+
 	// ============================================================== modellen
 	section("modellen: linsen och telefonen läser samma tillstånd (R4.4)");
 	{

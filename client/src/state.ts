@@ -139,6 +139,12 @@ export class Store {
 
 	// -------------------------------------------------------------- reducer
 
+	/** Who the conversation is about to be with, and what they last said,
+	 *  carried from the event that announced it to the `state` that ends the same
+	 *  turn. Cleared on every state, so it can never resurface on a later,
+	 *  unrelated turn. */
+	#pending: { from: string; text: string | null; fromName: string | null } | null = null;
+
 	#say(from: string, text: string, kind: Entry["kind"], seq: number): void {
 		this.state.transcript.push({ seq, from, text, kind, at: Date.now() });
 		// The lens shows the latest thing said, not a scroll (R4.2), and a new
@@ -159,11 +165,40 @@ export class Store {
 				this.#say(this.state.worker ?? JARVIS, m.message, "error", m.seq);
 				return;
 
-			case "state":
+			case "state": {
+				const before = this.state.worker;
 				this.state.busy = m.busy;
 				this.state.worker = m.worker ?? null;
 				this.state.mode = m.mode ?? this.state.mode;
+
+				// R3.5: who is listening has to be visible the moment it changes,
+				// not at the next reply. Spawning or switching a worker ends the
+				// turn with a `state` carrying the new one, and until this the
+				// header kept the previous name until somebody said something —
+				// so the lens told you that you were still talking to Jarvis while
+				// your next sentence was going to Bosse.
+				//
+				// Gated on an actual change, deliberately. Jarvis answering an
+				// aside mid-conversation ends with a `state` too, carrying the
+				// SAME worker; updating on every state would then put his words
+				// under the worker's name and misattribute them.
+				// Two ways the addressee can change: an event announced it this
+				// turn, or it simply differs from what we had (a reconnect, or
+				// another device switching underneath us).
+				const changed = this.#pending !== null || (this.state.worker ?? null) !== (before ?? null);
+				if (changed) {
+					// Switching back to somebody shows their conversation again
+					// (R3.6). A worker with nothing to show — one that has just
+					// been created — keeps the text on the lens, which is Jarvis
+					// saying it exists.
+					const who = this.#pending?.from ?? this.state.worker ?? JARVIS;
+					this.state.lens = this.#pending?.text
+						? { from: this.#pending.fromName ?? who, text: this.#pending.text, page: 0 }
+						: { ...this.state.lens, from: who };
+				}
+				this.#pending = null;
 				return;
+			}
 
 			case "heard":
 				// PRD 5 owns what the lens does with the user's own words (the
@@ -185,11 +220,29 @@ export class Store {
 	 *  read as something happening, not as silence. */
 	#event(m: EventMsg): void {
 		const d = m.data ?? {};
+
+		// Any event that names who is active may have changed the addressee —
+		// spawn, switch, end, rename. Armed here and applied at the `state` that
+		// ends the same turn, because Jarvis's own sentence about it arrives in
+		// between and would otherwise be the last word on the lens.
+		if ("active" in d) {
+			this.#pending = {
+				from: (d.active as string) ?? JARVIS,
+				text: d.last?.text ? String(d.last.text) : null,
+				fromName: d.last?.from ? String(d.last.from) : null
+			};
+		}
+
 		switch (m.kind) {
 			case "workerSwitched":
 				this.state.worker = d.active ?? null;
 				this.state.lastEvent = d.active ? `switched to ${d.active}` : "back to Jarvis";
 				if (d.worker?.name) this.#rememberWorker(d.worker);
+				// Where that conversation left off, sent by the server because it
+				// owns the transcripts and this client may never have seen them.
+				// Applied at the state change below, not here: Jarvis's own "now
+				// talking to Kalle" arrives AFTER this event and would overwrite
+				// it, and that sentence is the one thing the user already knows.
 				break;
 
 			case "modeChanged":

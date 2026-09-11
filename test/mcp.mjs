@@ -89,7 +89,7 @@ try {
 	const c1b = await connect(server, { sessionId });   // a second device on the same session
 	const since = c1.mark();
 	const sinceB = c1b.mark();
-	const spawned = await mcp.call("spawn_worker", { name: "Bosse", model: "sonnet", prompt: "bygg klart testerna" });
+	const spawned = await mcp.call("spawn_worker", { name: "Bosse", model: "sonnet", prompt: "bygg klart testerna", systemPrompt: "Du sköter en uppgift i testriggen." });
 	check("spawn lyckas", spawned.isError === false, spawned.text);
 	check("svaret säger att samtalet bytt", /talking to Bosse/i.test(spawned.text), spawned.text);
 
@@ -112,35 +112,35 @@ try {
 
 	// ------------------------------------------------------------- loud failures
 	section("kollisioner och okända modeller misslyckas högt");
-	const collision = refused("kollision", await mcp.call("spawn_worker", { name: "bosse." }));
+	const collision = refused("kollision", await mcp.call("spawn_worker", { name: "bosse.", systemPrompt: "Du sköter en uppgift i testriggen." }));
 	check("samma namn igen misslyckas", collision.isError === true, collision.text);
 	check("felet nämner namnet", /bosse/i.test(collision.text), collision.text);
 	check("ingen andra arbetare skapades",
 		(await (await fetch(`${server.base}/healthz`)).json()).workers === 1);
 
-	const badModel = refused("okänd modell", await mcp.call("spawn_worker", { name: "Kalle", model: "gpt-4" }));
+	const badModel = refused("okänd modell", await mcp.call("spawn_worker", { name: "Kalle", model: "gpt-4", systemPrompt: "Du sköter en uppgift i testriggen." }));
 	check("okänd modell misslyckas", badModel.isError === true, badModel.text);
 	check("felet räknar upp de giltiga modellerna", MODELS.every((m) => badModel.text.includes(m.label)), badModel.text);
 	check("inget tyst byte till standardmodellen",
 		(await (await fetch(`${server.base}/healthz`)).json()).workers === 1);
 
-	const badCwd = refused("relativ sökväg", await mcp.call("spawn_worker", { name: "Kalle", cwd: "inte/absolut" }));
+	const badCwd = refused("relativ sökväg", await mcp.call("spawn_worker", { name: "Kalle", cwd: "inte/absolut", systemPrompt: "Du sköter en uppgift i testriggen." }));
 	check("relativ arbetskatalog avvisas", badCwd.isError === true, badCwd.text);
-	const goneCwd = refused("obefintlig katalog", await mcp.call("spawn_worker", { name: "Kalle", cwd: "/finns/inte/alls" }));
+	const goneCwd = refused("obefintlig katalog", await mcp.call("spawn_worker", { name: "Kalle", cwd: "/finns/inte/alls", systemPrompt: "Du sköter en uppgift i testriggen." }));
 	check("obefintlig arbetskatalog avvisas", goneCwd.isError === true, goneCwd.text);
-	const fileCwd = refused("fil som katalog", await mcp.call("spawn_worker", { name: "Kalle", cwd: "/etc/hostname" }));
+	const fileCwd = refused("fil som katalog", await mcp.call("spawn_worker", { name: "Kalle", cwd: "/etc/hostname", systemPrompt: "Du sköter en uppgift i testriggen." }));
 	check("en fil duger inte som arbetskatalog", fileCwd.isError === true, fileCwd.text);
 	check("fortfarande bara en arbetare",
 		(await (await fetch(`${server.base}/healthz`)).json()).workers === 1);
 
-	refused("reserverat namn", await mcp.call("spawn_worker", { name: "Jarvis" }));
+	refused("reserverat namn", await mcp.call("spawn_worker", { name: "Jarvis", systemPrompt: "Du sköter en uppgift i testriggen." }));
 	refused("namnlös", await mcp.call("spawn_worker", {}));
 	refused("okänd arbetare", await mcp.call("switch_worker", { name: "finns inte" }));
 	refused("okänt verktyg", await mcp.call("spawn_helicopter", { name: "x" }));
 
 	// ---------------------------------------------------------------- the rest
 	section("switch, read, rename, end");
-	const kalle = await mcp.call("spawn_worker", { name: "Kalle", model: "haiku", cwd: "/tmp" });
+	const kalle = await mcp.call("spawn_worker", { name: "Kalle", model: "haiku", cwd: "/tmp", systemPrompt: "Du sköter en uppgift i testriggen." });
 	check("andra arbetaren skapas", kalle.isError === false, kalle.text);
 
 	const listBoth = await mcp.call("list_workers");
@@ -175,7 +175,7 @@ try {
 	check("end lämnar tillbaka samtalet till Jarvis", /back with Jarvis/.test(ended.text), ended.text);
 	const endEv = await c1.waitFor((m) => m.type === "event" && m.kind === "workerEnded", 5000, "workerEnded", sinceEnd);
 	check("aktiv arbetare är ingen efteråt", endEv.data.active === null, JSON.stringify(endEv.data));
-	check("namnet är ledigt igen", (await mcp.call("spawn_worker", { name: "Berit" })).isError === false);
+	check("namnet är ledigt igen", (await mcp.call("spawn_worker", { name: "Berit", systemPrompt: "Du sköter en uppgift i testriggen." })).isError === false);
 	await mcp.call("end_worker", { name: "Berit" });
 
 	// ------------------------------------------------------------------- R2.4
@@ -186,7 +186,7 @@ try {
 	const workerTools = await asWorker.listTools();
 	check("en arbetare ser inga verktyg alls", workerTools.result.tools.length === 0, JSON.stringify(workerTools.result.tools));
 	const workersBefore = (await (await fetch(`${server.base}/healthz`)).json()).workers;
-	const sneaky = refused("arbetare anropar verktyg", await asWorker.call("spawn_worker", { name: "Smyg" }));
+	const sneaky = refused("arbetare anropar verktyg", await asWorker.call("spawn_worker", { name: "Smyg", systemPrompt: "Du sköter en uppgift i testriggen." }));
 	check("en arbetare får inte anropa dem heller", sneaky.isError === true, sneaky.text);
 	check("och ingenting muterades",
 		(await (await fetch(`${server.base}/healthz`)).json()).workers === workersBefore);
@@ -215,7 +215,7 @@ try {
 		const otherMcp = new McpClient(await grantTools(other));
 		await otherMcp.initialize();
 
-		await mcp.call("spawn_worker", { name: "Doris" });
+		await mcp.call("spawn_worker", { name: "Doris", systemPrompt: "Du sköter en uppgift i testriggen." });
 		await otherMcp.call("switch_worker", { name: "Doris" });
 
 		const sinceRename = other.mark();
@@ -236,6 +236,23 @@ try {
 	}
 
 	// -------------------------------------------------------------- persistence
+	// A schema that says a field is required, and a server that runs the tool
+	// without it, is a schema the model is free to ignore. Measured: spawn_worker
+	// asked for a system prompt, did not get one, and answered "ok" — every time.
+	section("schemats obligatoriska fält gäller på riktigt");
+	{
+		const missing = await mcp.call("spawn_worker", { name: "Tyst" });
+		check("ett saknat obligatoriskt fält avvisas", missing.isError === true, JSON.stringify(missing));
+		check("och felet namnger fältet", /systemPrompt/.test(missing.text), missing.text);
+		check("tom sträng räknas som saknad",
+			(await mcp.call("spawn_worker", { name: "Tyst", systemPrompt: "   " })).isError === true);
+		check("ingen arbetare skapades av det misslyckade anropet",
+			!/Tyst/.test((await mcp.call("list_workers")).text));
+		const ok = await mcp.call("spawn_worker", { name: "Tyst", systemPrompt: "Du sköter testriggen." });
+		check("med fältet går det igenom", ok.isError === false, JSON.stringify(ok));
+		await mcp.call("end_worker", { name: "Tyst" });
+	}
+
 	section("arbetare överlever en omstart — acceptans 4");
 	const beforeRestart = await mcp.call("list_workers");
 	check("en arbetare kvar att räkna", /Kalle/.test(beforeRestart.text), beforeRestart.text);

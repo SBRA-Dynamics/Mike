@@ -64,10 +64,25 @@ const describe = (w, active) =>
 	`${w.name} — ${w.model}, ${w.cwd}, ${w.busy ? "busy" : "idle"}, active ${ago(w.lastActivity)}` +
 	(active === w.name ? "  [talking to]" : "");
 
+/** The last thing a worker actually said, for a client that has just been put
+ *  back in front of it. Switching to someone is not a new conversation — R3.6
+ *  says it continues — so the lens has to show where it left off rather than
+ *  the sentence announcing the switch, which is the one thing the user already
+ *  knows. Null for a worker that has not spoken yet. */
+const lastSaid = (engine, worker) => {
+	try {
+		const lines = engine.transcript(worker, 1) ?? [];
+		for (let i = lines.length - 1; i >= 0; i--) {
+			if (lines[i]?.role !== "user" && lines[i]?.text) return { from: worker.name, text: String(lines[i].text) };
+		}
+	} catch { /* a transcript we cannot read must not break the switch itself */ }
+	return null;
+};
+
 /** The public shape of a worker record: the tool surface must not hand out the
  *  registry's internal fields (`key`, and whatever PRD 3 adds next to it). */
 const publicWorker = (w) => ({
-	name: w.name, id: w.id, model: w.model, cwd: w.cwd,
+	name: w.name, id: w.id, model: w.model, cwd: w.cwd, systemPrompt: w.systemPrompt ?? "",
 	busy: w.busy, created: w.createdAt, lastActivity: w.lastActivity
 });
 
@@ -125,16 +140,25 @@ export function createToolset({ registry, engine, log }) {
 
 		{
 			name: "spawn_worker",
-			description: "Create a new worker and switch the conversation to it in one step. The user is talking to the new worker when this returns. Fails if the name is taken or the model is unknown.",
+			description: "Create a new worker and switch the conversation to it in one step. The user is talking to the new worker when this returns. Give it a `systemPrompt` saying what it is for — that is what it will still know on every later turn. Fails if the name is taken or the model is unknown.",
 			inputSchema: {
 				type: "object",
 				properties: {
 					name: { type: "string", description: "What the user called it, as spoken." },
+					systemPrompt: { type: "string", description: "Its system prompt — the worker-specific part, added to the standing instructions every session of this kind already gets. Written addressed to it, saying what it is responsible for: \"You are looking after the BLE firmware in MyLibrary.\" It is present on EVERY turn it ever takes, so it still knows its job an hour from now. Never mention workers, models or this orchestration — write the job, not the assignment." },
 					model: { type: "string", description: `Which model to run: ${MODEL_LIST}. Omit to use the default.` },
 					cwd: { type: "string", description: "Absolute path the worker works in. Omit to inherit the default." },
-					prompt: { type: "string", description: "Optional first instruction to give the worker." }
+					prompt: { type: "string", description: "An optional first message, said to it once and then gone, like any other message. This is where a briefing goes — the state of play, what was just found, what to start on. Use it when the user wants work to begin now. Standing facts about what it IS belong in `systemPrompt`; put them here and they scroll out of reach." }
 				},
-				required: ["name"],
+				// `systemPrompt` is required, and that is a measured decision
+				// rather than a taste one. With it optional, Jarvis wrote the
+				// instructions he had been told to write — and put them in
+				// `prompt` every single time, because "what it is" and "what to
+				// do first" read as the same sentence from where he stands. The
+				// difference is real: `prompt` is said once and scrolls away,
+				// `systemPrompt` is present on every turn the worker ever takes.
+				// Requiring it is what made him fill it in.
+				required: ["name", "systemPrompt"],
 				additionalProperties: false
 			},
 			run: async (args, { session }) => {
@@ -142,8 +166,9 @@ export function createToolset({ registry, engine, log }) {
 				const model = optStr(args.model, "model");
 				const cwd = optStr(args.cwd, "cwd");
 				const prompt = optStr(args.prompt, "prompt");
+				const systemPrompt = optStr(args.systemPrompt, "systemPrompt");
 
-				const worker = registry.create({ name, model, cwd });
+				const worker = registry.create({ name, model, cwd, systemPrompt });
 				try {
 					const started = await engine.start(worker, { prompt });
 					if (started?.engineSessionId) registry.touch(worker, { engineSessionId: started.engineSessionId });
@@ -175,13 +200,15 @@ export function createToolset({ registry, engine, log }) {
 				additionalProperties: false
 			},
 			run: (args, { session }) => {
+				// `engine` is the closure's, not the call context's: the context
+				// carries the session and nothing else about the machinery.
 				const worker = registry.require(str(args.name, "name"));
 				registry.touch(worker);
 				const active = setActive(session, worker);
 				return {
 					kind: "workerSwitched",
 					text: `Now talking to ${worker.name} (${worker.model}, ${worker.cwd}).`,
-					data: { worker: publicWorker(worker), active }
+					data: { worker: publicWorker(worker), active, last: lastSaid(engine, worker) }
 				};
 			}
 		},
@@ -284,7 +311,21 @@ export function createToolset({ registry, engine, log }) {
 			if (args !== undefined && args !== null && (typeof args !== "object" || Array.isArray(args))) {
 				throw new ToolError("the tool arguments were not an object");
 			}
-			return await tool.run(args ?? {}, ctx);
+
+			// The schema's `required` is enforced here, because nothing else
+			// enforces it. MCP hands the arguments straight through, so a schema
+			// that says a field is required and a server that accepts the call
+			// without it is a schema the model is free to ignore — which is
+			// exactly what happened: spawn_worker asked for a system prompt, did
+			// not get one, and said "ok".
+			const supplied = args ?? {};
+			for (const field of tool.inputSchema?.required ?? []) {
+				const v = supplied[field];
+				if (v === undefined || v === null || (typeof v === "string" && !v.trim())) {
+					throw new ToolError(`${field} is missing`);
+				}
+			}
+			return await tool.run(supplied, ctx);
 		}
 	};
 }
