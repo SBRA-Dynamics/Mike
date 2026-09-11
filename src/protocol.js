@@ -1,0 +1,91 @@
+// The wire protocol. One file, imported by both server and client, so the two
+// can never drift — PRD 1 R1.6.
+//
+// Versioned from the first message: a client built against an older protocol is
+// told so on connect rather than failing in some confusing way ten messages in.
+
+export const PROTOCOL_VERSION = 1;
+
+/** Client -> server */
+export const C2S = {
+	HELLO: "hello",         // { protocol, token, sessionId?, resumeFrom? }
+	SAY: "say",             // { text }
+	AUDIO: "audio",         // { pcm, final }            (PRD 5)
+	INTERRUPT: "interrupt", // {}
+	CONTROL: "control"      // { action, args }
+};
+
+/** Server -> client */
+export const S2C = {
+	READY: "ready",   // { sessionId, cursor, protocol, worker, workers, mode }
+	TEXT: "text",     // { text, from }
+	STATE: "state",   // { busy, worker, mode }
+	HEARD: "heard",   // { text, confidence }             (PRD 5)
+	EVENT: "event",   // { kind, data }
+	ERROR: "error"    // { message, fatal }
+};
+
+/** Close codes, so a client can tell "you are not allowed" from "try again". */
+export const CLOSE = {
+	UNAUTHORIZED: 4001,
+	BAD_PROTOCOL: 4002,
+	BAD_MESSAGE: 4003,
+	SERVER_SHUTDOWN: 4004
+};
+
+const isStr = (v) => typeof v === "string";
+const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * Validate one decoded client message.
+ * Returns { ok: true, msg } or { ok: false, error } — never throws, because the
+ * input is whatever arrived on a socket from the internet.
+ */
+export function validateC2S(raw) {
+	if (!isObj(raw)) return { ok: false, error: "message must be an object" };
+	const { type } = raw;
+	if (!isStr(type)) return { ok: false, error: "missing type" };
+
+	switch (type) {
+		case C2S.HELLO:
+			if (!Number.isInteger(raw.protocol)) return { ok: false, error: "hello needs a protocol number" };
+			if (!isStr(raw.token) || !raw.token) return { ok: false, error: "hello needs a token" };
+			if (raw.sessionId !== undefined && !isStr(raw.sessionId)) return { ok: false, error: "sessionId must be a string" };
+			if (raw.resumeFrom !== undefined && !Number.isInteger(raw.resumeFrom)) return { ok: false, error: "resumeFrom must be an integer" };
+			return { ok: true, msg: raw };
+
+		case C2S.SAY:
+			if (!isStr(raw.text)) return { ok: false, error: "say needs text" };
+			if (raw.text.length > 100_000) return { ok: false, error: "text too long" };
+			return { ok: true, msg: raw };
+
+		case C2S.AUDIO:
+			if (!isStr(raw.pcm)) return { ok: false, error: "audio needs base64 pcm" };
+			return { ok: true, msg: raw };
+
+		case C2S.INTERRUPT:
+			return { ok: true, msg: raw };
+
+		case C2S.CONTROL:
+			if (!isStr(raw.action)) return { ok: false, error: "control needs an action" };
+			if (raw.args !== undefined && !isObj(raw.args)) return { ok: false, error: "args must be an object" };
+			return { ok: true, msg: raw };
+
+		default:
+			return { ok: false, error: `unknown type "${type}"` };
+	}
+}
+
+/** Server-side message constructors, so shapes live in exactly one place. */
+export const msg = {
+	// `cursor`, not `seq`: every other message carries `seq` meaning "this
+	// message's own id", and ready carries "the session's current id". Reusing
+	// the name made a test count ready as a replayed message, and a real client
+	// would make the same mistake.
+	ready: (sessionId, cursor, extra = {}) => ({ type: S2C.READY, sessionId, cursor, protocol: PROTOCOL_VERSION, ...extra }),
+	text: (text, from = "system") => ({ type: S2C.TEXT, text, from }),
+	state: (state) => ({ type: S2C.STATE, ...state }),
+	heard: (text, confidence = null) => ({ type: S2C.HEARD, text, confidence }),
+	event: (kind, data = {}) => ({ type: S2C.EVENT, kind, data }),
+	error: (message, fatal = false) => ({ type: S2C.ERROR, message, fatal })
+};

@@ -1,0 +1,13 @@
+{
+  "name": "jarvis-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Jarvis server — transport, sessions, static hosting (PRD 1)",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/run.mjs"
+  },
+  "dependencies": { "ws": "^8.18.0" },
+  "engines": { "node": ">=20" }
+}
