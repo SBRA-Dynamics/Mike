@@ -27,8 +27,22 @@ EnvironmentFile=/etc/jarvis.env
 # to start workers somewhere worth working. `--engine stub` keeps the whole
 # thing alive without spending money, which is the safe way to run it while
 # something else is being debugged.
+# Public deployment: the router forwards external 3456 to internal 3455, and the
+# certificate is the one certbot keeps for kontoret.onvo.se (readable by robin
+# through an ACL, so this does not run as root). The phone therefore reaches
+#   https://kontoret.onvo.se:3456/
+#
+# --worker-perms full is a deliberate choice and the riskiest line in this file:
+# a worker turn then runs with the same power as the user, and this listener is
+# reachable from the internet behind one bearer token. That token IS the ability
+# to run code on this machine. Narrow it to `edits` or `readonly` the moment
+# that stops being what is wanted.
 ExecStart=/home/robin/.nvm/versions/node/v24.16.0/bin/node /home/robin/jarvis/server.js \
-  --port 3470 --host 127.0.0.1
+  --port 3455 --host 0.0.0.0 \
+  --cert /etc/letsencrypt/live/kontoret.onvo.se/fullchain.pem \
+  --key /etc/letsencrypt/live/kontoret.onvo.se/privkey.pem \
+  --worker-cwd /home/user/projects --jarvis-cwd /home/user/projects \
+  --worker-perms full
 Restart=always
 # The server reaps its own `claude` children on SIGTERM; this is the backstop
 # for the case where it cannot, because a turn in flight is a model session

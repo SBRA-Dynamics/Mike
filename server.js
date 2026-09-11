@@ -63,6 +63,7 @@ if (has("help")) {
   --handler <h>        jarvis (default) or echo, which pins PRD 1's transport
   --engine <e>         claude (default) or stub, which spends no money
   --claude-bin <path>  the Claude Code binary to drive (default: claude)
+  --worker-perms <p>   readonly (default), edits, or full — what a worker may do
   --jarvis-model <m>   the model Jarvis runs (default opus)
   --jarvis-cwd <dir>   where Jarvis's own Bash runs (default: --worker-cwd)
   --jarvis-prompt <f>  his system prompt file (default ./prompts/jarvis.md)
@@ -94,6 +95,11 @@ const config = {
 	// the expensive one, workers are many and long-lived.
 	workerModel: flag("worker-model", process.env.JARVIS_WORKER_MODEL || "sonnet"),
 	workerCwd: flag("worker-cwd", process.env.JARVIS_WORKER_CWD || process.cwd()),
+	// What a worker turn may do. `full` means --dangerously-skip-permissions,
+	// and since this server is reachable from the internet behind one bearer
+	// token, that makes the token the ability to run code here. Deliberate
+	// setting, made in the unit file, never a default.
+	workerPerms: flag("worker-perms", process.env.JARVIS_WORKER_PERMS ?? "readonly"),
 
 	// PRD 3. Two seams, both named on the command line rather than inferred:
 	// `--handler echo` is how the PRD 1 suites still pin the transport without a
@@ -118,6 +124,7 @@ const tokenWasGenerated = !flag("token", null) && !process.env.JARVIS_TOKEN;
 if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) { log.error(`--port must be a number, got "${flag("port", "")}"`); process.exit(1); }
 if (!Number.isInteger(config.pingIntervalMs) || config.pingIntervalMs < 1000) { log.error(`--ping must be at least 1000 ms`); process.exit(1); }
 if (!Number.isInteger(config.mcpPort) || config.mcpPort < 0 || config.mcpPort > 65535) { log.error(`--mcp-port must be a port number`); process.exit(1); }
+if (!["readonly", "edits", "full"].includes(config.workerPerms)) { log.error(`--worker-perms must be readonly, edits or full, got "${config.workerPerms}"`); process.exit(1); }
 // Checked at startup, not at the first spawn_worker, because at the first
 // spawn the user is waiting on a lens for an answer about their own typo.
 if (!isKnownModel(config.workerModel)) { log.error(`--worker-model "${config.workerModel}" is unknown; use ${MODEL_LIST}`); process.exit(1); }
@@ -141,7 +148,7 @@ const registry = new WorkerRegistry({
 });
 const engine = config.engine === "stub"
 	? createStubWorkerEngine({ log })
-	: createClaudeWorkerEngine({ log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.turnTimeoutMs });
+	: createClaudeWorkerEngine({ permissions: config.workerPerms, log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.turnTimeoutMs });
 const toolset = createToolset({ registry, engine, log });
 const mcp = createMcpServer({ store, toolset, registry, log });
 

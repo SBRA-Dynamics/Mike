@@ -425,6 +425,37 @@ try {
 	}
 
 	// ================================================== the scripted run
+	// What a worker may do is the operator's decision, and it must reach the
+	// worker's turn and nothing else: Jarvis keeps his narrow allowlist whatever
+	// the workers are allowed, or the orchestrator quietly becomes the most
+	// powerful thing in the system.
+	section("arbetarnas rättigheter är en inställning, inte en egenskap hos anropet");
+	for (const [perms, flagWanted] of [["readonly", null], ["edits", "acceptEdits"], ["full", "--dangerously-skip-permissions"]]) {
+		const server = await startJarvis(["--worker-perms", perms]);
+		const c = await connect(server);
+		await say(c, "Jarvis, starta en arbetare som heter Bosse.");
+		await say(c, "Bosse, gör något.");
+		await sleep(200);
+
+		const calls = readdirSync(server.fakeDir)
+			.map((f) => JSON.parse(readFileSync(join(server.fakeDir, f), "utf8")))
+			.filter((j) => Array.isArray(j.lastArgs));
+		const worker = calls.find((j) => !j.lastArgs.includes("--mcp-config"));
+		const jarvis = calls.find((j) => j.lastArgs.includes("--mcp-config"));
+		check(`${perms}: både Jarvis och arbetaren har kört`, !!worker && !!jarvis, JSON.stringify(calls.map((j) => j.lastArgs.length)));
+
+		if (worker && jarvis) {
+			const has = (j, f) => j.lastArgs.includes(f);
+			check(`${perms}: arbetaren får ${flagWanted ?? "ingenting extra"}`,
+				flagWanted ? has(worker, flagWanted) : (!has(worker, "acceptEdits") && !has(worker, "--dangerously-skip-permissions")),
+				JSON.stringify(worker.lastArgs));
+			check(`${perms}: Jarvis får det inte`,
+				!has(jarvis, "acceptEdits") && !has(jarvis, "--dangerously-skip-permissions"), JSON.stringify(jarvis.lastArgs));
+			check(`${perms}: godkännandeprompten är fortfarande avstängd`, has(worker, "--permission-prompts"), JSON.stringify(worker.lastArgs));
+		}
+		c.close(); server.stop();
+	}
+
 	// Over the wire, not just through route(): the handler has to actually pass
 	// the origin along, and that wiring is what a unit test cannot see.
 	section("tangentbordet över tråden");

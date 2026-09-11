@@ -159,7 +159,7 @@ const clip = (s, n = MAX_QUOTED_CHARS) => {
  */
 export function createClaudeWorkerEngine({
 	log, dataDir, bin = "claude", runner, tracker = new ChildTracker(),
-	timeoutMs, env
+	timeoutMs, env, permissions = "readonly"
 } = {}) {
 	if (!dataDir) throw new Error("createClaudeWorkerEngine needs a dataDir for transcripts");
 	const dir = join(dataDir, "transcripts");
@@ -241,6 +241,7 @@ export function createClaudeWorkerEngine({
 			prompt: text,
 			cwd: worker.cwd,
 			model: worker.modelId ?? worker.model,
+			permissions,
 			...(first ? { sessionId: id } : { resume: id }),
 			onSpawn: (child) => inflight.set(worker.id, child)
 		});

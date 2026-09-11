@@ -68,7 +68,7 @@ export function createClaudeRunner({
 
 	const run = ({
 		prompt, cwd, model, sessionId, resume,
-		appendSystemPrompt, systemPrompt, mcpConfig, allowedTools = [],
+		appendSystemPrompt, systemPrompt, mcpConfig, allowedTools = [], permissions = "readonly",
 		extraArgs = [], timeoutMs: perCall, onSpawn
 	}) => new Promise((resolve) => {
 		const args = ["-p", "--output-format", "json"];
@@ -95,6 +95,23 @@ export function createClaudeRunner({
 		// end of the pipe, and "host" leaves the turn hanging until the timeout.
 		// Denied-by-default plus an explicit --allowedTools is the honest shape.
 		args.push("--permission-prompts", "none");
+
+		// What the turn may do beyond that, as a deliberate setting rather than
+		// a property of how the CLI happens to be invoked.
+		//
+		//   readonly  nothing that needs approval. A worker can read and reason
+		//             and cannot change anything. Measured: Read works, Write is
+		//             refused with "sessionen är icke-interaktiv".
+		//   edits     file edits are accepted; Bash is still refused.
+		//   full      --dangerously-skip-permissions. The turn can do whatever
+		//             the user running the server can do.
+		//
+		// `full` is not a detail. This process is reachable from the internet
+		// behind one bearer token, so with `full` that token is the ability to
+		// run code on this machine. It is a choice the operator makes in the
+		// unit file, which is why it is spelled out there too.
+		if (permissions === "full") args.push("--dangerously-skip-permissions");
+		else if (permissions === "edits") args.push("--permission-mode", "acceptEdits");
 		// The prompt goes last, and something that is not the prompt has to
 		// follow every variadic flag: `--allowedTools` and `--tools` swallow
 		// everything up to the next `--flag`, so a prompt placed straight after
