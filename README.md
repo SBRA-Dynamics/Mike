@@ -30,7 +30,7 @@ glasses / browser ──ws──► server ──► Jarvis (opus) ──MCP─�
 | **3** | Jarvis + workers, routing, context injection, handoff | built, running |
 | **4** | Even Hub client: lens view + companion view | built, running |
 | **5a** | Voice from the browser: VAD, segments, whisper, addressing modes | built, running |
-| **5b** | Voice from the glasses' own microphones | not started |
+| **5b** | Voice from the glasses' own microphones | built; needs a hardware session |
 
 The reasoning for each lives in [`PRD/`](PRD/), one document per phase. They are
 the design record, not a summary of the code — read the relevant one before
@@ -83,13 +83,13 @@ it is not the default.
 ## Testing
 
 ```bash
-npm test              # six suites, no model, no money, no network
+npm test              # seven suites, no model, no money, no network
 npm run test:browser  # headless Chrome, real client, real whisper, fake mic
 npm run test:lens     # the EvenHub simulator, headless on Xvfb, real framebuffer
 npm run test:live     # real claude, real money — the acceptance tests
 ```
 
-`npm test` is ~635 assertions and runs in under a minute. The `claude` binary is
+`npm test` is ~760 assertions and runs in about a minute. The `claude` binary is
 replaced by [`test/fixtures/fake-claude.mjs`](test/fixtures/fake-claude.mjs),
 which reproduces the half of the CLI that matters — including its nastier
 behaviour, like reporting an API failure as exit 0.
@@ -117,6 +117,25 @@ Two conventions worth keeping:
   against an 800 ms budget. A fixture that repeats one sentence measures 1.4 s,
   which is the model's repetition collapse rather than the service.
 - **An image on the lens costs ~1.4 s.** Text is the only interactive channel.
+- **Opening the glasses microphone costs ~180 ms**, and the first audio frame
+  lands ~3 ms after that — measured through the simulator's own Flutter bridge
+  (`openMs=181 leadInMs=184`), against the ~160 ms fixed per-SDK-call cost
+  measured on the hardware. A push-to-talk user who speaks as they press loses
+  about a fifth of a second, which is why the lens says "opening" before it says
+  "held" (PRD 5b R5b.3).
+- **`audioControl(false)` answers `false` even when it really stopped.** Only the
+  answer to an OPEN is worth reading; treating the close's answer as a failure
+  would put a red error on the lens every time the user let go.
+- **`audioControl(true, Glasses)` really is refused before the startup page
+  exists** — R5b.1's sequencing constraint, observed rather than assumed, which
+  is why the phone microphone is the fallback rather than a failure.
+- **The system exit dialog swallows `LONG_PRESS_RELEASE`.** A hold that is never
+  released is a microphone left running on somebody's face, so any other gesture
+  ends a hold.
+- **`LONG_PRESS_EVENT` is 9 and `LONG_PRESS_RELEASE_EVENT` is 10**, they arrive
+  separately, and the simulator's `/api/input` accepts `long_press` and
+  `long_press_release`. None of that is in either set of documentation; the
+  0.0.15 typings and the simulator binary agree with each other.
 
 ## Layout
 
@@ -133,6 +152,9 @@ src/
   routing.js         who an utterance is for, and the addressing modes
   whisper.js audio.js  transcription client and audio intake
 client/              the Even Hub plugin: lens + companion, one build
+  src/audio/segment.ts   PCM in, utterances out — no browser, no clock, no SDK
+  src/audio/capture.ts   the browser's microphone; glasses.ts the glasses'
+  src/audio/voice.ts     the addressing modes, with either microphone behind them
 prompts/             Jarvis's system prompt and the worker template, editable live
 services/whisper/    the transcription service
 PRD/                 why any of it is shaped the way it is
@@ -146,3 +168,26 @@ attached so it does not have to be worked out twice.
 Images on the lens, text-to-speech (the G2 has no speaker), transcription on the
 phone, offline operation, and speaker identification as a security boundary —
 the SDK says its own speaker tagging is not one.
+
+## Still to measure, on a face
+
+PRD 5b's risk table is the only part of the system that cannot be settled at a
+desk. The client prints one line per change of microphone state and one per
+thirty seconds of captured audio, so a session is "wear them, hold the touchpad,
+read the log":
+
+```
+[jarvis] mic listening glasses held=true live=true tracks=1 sent=0 \
+         frames=300 bytes=960000 openMs=181 leadInMs=184 roles=0/0/300 dropped=0
+```
+
+- **Battery** — `Always`, 30 minutes, battery before and after. Kills always-on.
+- **Bandwidth** — `bytes` over the same session against the ~100 KB/s BLE budget,
+  while the lens is also being updated. Kills continuous capture.
+- **`speakerRole` accuracy** — `roles=self/other/unknown` with two people
+  talking. The simulator reports `unknown` for every frame, so this number has
+  never been seen. If `unknown` dominates, R5b.2's filter is decoration.
+- **Lead-in** — `leadInMs` on a real BLE link, to decide whether a hold needs to
+  keep the microphone open for a moment after the release. There is no such tail
+  today, deliberately: it weakens exactly what PushToTalk promises, and nothing
+  should weaken that on an unmeasured guess.

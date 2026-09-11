@@ -11,9 +11,7 @@ import { Glasses } from "./glasses.ts";
 import { renderLens } from "./lens/render.ts";
 import type { LensFrame } from "./lens/render.ts";
 import { Store } from "./state.ts";
-import type { AppState } from "./state.ts";
 import { CONTROL } from "./protocol.ts";
-import { DEFAULT_MODE, MODES, MODE_LABEL } from "../../src/routing.js";
 import { SettingsStore, browserStorage, bridgeStorage, readUrlSettings, scrubUrl } from "./settings.ts";
 import { Companion } from "./ui/companion.ts";
 
@@ -23,50 +21,39 @@ let frame: LensFrame = renderLens({ from: "Jarvis", text: "Connecting…", page:
 
 const root = document.getElementById("app")!;
 
-/** The one line of status the lens can afford. Order is by urgency: a dead
- *  socket outranks a running turn, because an answer that will never arrive
- *  must not read as one that is on its way. */
-const lensStatus = (s: AppState): string | null => {
-	if (s.connection === "fatal") return "stopped";
-	if (s.connection !== "online") return "offline";
-	// Somebody the user is not talking to is waiting on them. It outranks
-	// "thinking", which says something is happening that they already know about,
-	// and it is the only status that carries a name worth acting on.
-	const waiting = store.notice();
-	if (waiting) return waiting;
-	// R5a.8: idle, listening, heard, thinking — on the lens this is one short
-	// line sharing the slot the background notices use. "heard" is shown as the
-	// state rather than the words: the fifty-column line has no room for a
-	// sentence, and the companion shows the sentence.
-	const listening = store.listening();
-	if (listening === "thinking") return "thinking";
-	if (listening === "heard") return "heard";
-	// The mode matters more than "listening" when it is not the default one:
-	// paused is what the user most needs to know, and hold-to-talk explains why
-	// nothing is happening when they speak.
-	if (s.mode === MODES.IGNORE) return MODE_LABEL[MODES.IGNORE];
-	if (listening === "listening") return s.voice?.held ? "held" : "listening";
-	// R5a.4: a mode other than the default is shown on the lens, because "a mode
-	// the user cannot see is a mode they will be surprised by". The default one
-	// is not: it would spend the status line on the ordinary case.
-	if (s.mode !== DEFAULT_MODE) return MODE_LABEL[s.mode] ?? s.mode;
-	return null;
-};
-
-/** The microphone and everything the addressing mode does with it — PRD 5a.
- *  Built before the glasses, because the touchpad's hold routes into it. */
+/** The microphone and everything the addressing mode does with it — PRD 5a,
+ *  and PRD 5b's second source behind the same policy. Built before the glasses,
+ *  because the touchpad's hold routes into it. */
 const voice = new Voice({
 	// One message per segment. `connection` may be null (the page has not
 	// connected yet, or the token is missing), and a segment that cannot be sent
 	// is dropped with a note rather than queued — an utterance that arrives four
 	// minutes late lands in a conversation that has moved on.
+	//
+	// This is the single place a segment leaves the client, and PRD 5b did not
+	// add a second one. A segment from the glasses and a segment from a laptop
+	// are the same `audio` message on the same socket — acceptance criterion 7,
+	// which is a property of there being nothing here to branch on.
 	send: (pcm, info) => connection?.audio(pcmToBase64(pcm), { durationMs: info.durationMs }) ?? false,
 	onChange: (status) => store.setVoice(status),
-	onNote: (text) => companion.note(text)
+	onNote: (text) => companion.note(text),
+	// PRD 5b. `glasses` is declared below and is only ever CALLED from an open,
+	// long after this module has finished evaluating.
+	glassesControl: (open, source) => glasses.audioControl(open, source),
+	hostReady: () => glasses.attached,
+	// R5b.1's sequencing constraint, as a question rather than an assumption:
+	// the glasses array needs the startup page, the phone microphone does not.
+	pageReady: () => glasses.attached
 });
 
 const glasses = new Glasses({
 	onGesture: (g) => {
+		// One touchpad, one finger: any gesture that is not the hold itself means
+		// the hold is over. The case that matters is the double tap — the system
+		// exit dialog was measured swallowing the release that should have
+		// followed, and a hold whose release never arrives is a microphone left
+		// running on hardware, which R5b.1 calls the worse of its two problems.
+		if (g !== "holdStart" && g !== "holdEnd" && voice.held) voice.holdEnd();
 		switch (g) {
 			case "swipeUp": store.turnPage(-1, frame.pages); return;
 			case "swipeDown": store.turnPage(1, frame.pages); return;
@@ -85,9 +72,11 @@ const glasses = new Glasses({
 				// status may stop it, because in PushToTalk it is the only way to
 				// speak a mode command back out again.
 				//
-				// In this phase it opens the BROWSER's microphone, which is what
-				// the phone has. PRD 5b swaps in the glasses' own, and nothing
-				// downstream of the segment changes.
+				// PRD 5b R5b.3 is the same requirement on the touchpad, and this
+				// is now where it is kept: a `case` with one statement in it and
+				// nothing to fail first. The microphone it opens is the glasses'
+				// own (the phone's when the lens page is not up); nothing
+				// downstream of the segment changes, which is the point.
 				void voice.holdStart();
 				return;
 			case "holdEnd":
@@ -95,8 +84,27 @@ const glasses = new Glasses({
 				return;
 		}
 	},
-	onForeground: () => { connection?.poke("glasses foreground"); repaint(true); },
-	onExit: (reason) => { store.setGlasses("absent"); companion.note(`Glasses: ${reason}.`); }
+	// One AudioEvent — ten a second per open microphone. Straight through, with
+	// nothing in between: the speaker filter and the segmenter are one layer
+	// down, and a repaint here would cost one per frame.
+	onAudio: (audio) => voice.glassesFrame(audio),
+	onForeground: () => {
+		connection?.poke("glasses foreground");
+		// R5b.1: what was stopped when we went away comes back only if the mode
+		// asks for it, so returning in PushToTalk does not open a microphone.
+		void voice.resume();
+		repaint(true);
+	},
+	// R5b.1: "Audio must stop on exit, on backgrounding and on error." The
+	// glasses are still on the user's face while the app is in the background,
+	// which is exactly when a microphone left running stops being a battery
+	// problem and starts being a trust problem.
+	onBackground: () => { voice.suspend("close"); },
+	onExit: (reason) => {
+		voice.suspend("close");
+		store.setGlasses("absent");
+		companion.note(`Glasses: ${reason}.`);
+	}
 });
 
 const companion = new Companion(root, {
@@ -145,7 +153,7 @@ let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
 const paint = (): void => {
 	const s = store.state;
-	frame = renderLens({ from: s.lens.from, text: s.lens.text, status: lensStatus(s), page: s.lens.page });
+	frame = renderLens({ from: s.lens.from, text: s.lens.text, status: store.lensStatus(), page: s.lens.page });
 	companion.render(s, frame, store.listening());
 	glasses.show(frame.content);
 
@@ -158,6 +166,36 @@ const paint = (): void => {
 };
 
 store.subscribe(() => repaint());
+
+/**
+ * One line, every time the microphone changes what it is doing — PRD 5b.
+ *
+ * The browser suite reads `globalThis.jarvis`; a WebView on somebody's phone
+ * has no such reader, and the numbers PRD 5b's risk table asks for (the open
+ * cost and lead-in of R5b.3, the byte rate of R5b.4, the speaker-role ratio of
+ * R5b.2) are measurable only while the glasses are actually on a face. So they
+ * are printed where the Even App's console and the simulator's `/api/console`
+ * can both be read, and a hardware session becomes "hold the touchpad and read
+ * the line" rather than an instrumented build.
+ *
+ * Keyed on the STATE plus a coarse bucket of captured audio — every change of
+ * what the microphone is doing, and one more line per ten seconds of audio
+ * while it is open. Never one per frame, and the second half is what makes
+ * R5b.4's byte rate readable as a rate rather than as a total.
+ */
+const BYTES_PER_LINE = 320_000;                 // 10 s at 16 kHz x 16 bit mono
+let lastMicKey = "";
+store.subscribe((s) => {
+	const v = s.voice;
+	if (!v) return;
+	const stats = (voice.glasses as { stats?: Record<string, number> } | null)?.stats;
+	const key = `${v.mic}|${v.device}|${v.held}|${v.live}|${Math.floor((stats?.bytes ?? 0) / BYTES_PER_LINE)}`;
+	if (key === lastMicKey) return;
+	lastMicKey = key;
+	const g = stats;
+	console.log(`[jarvis] mic ${v.mic} ${v.device} held=${v.held} live=${v.live} tracks=${voice.source.liveTracks} sent=${v.sent}`
+		+ (g ? ` frames=${g.frames} bytes=${g.bytes} openMs=${g.openMs} leadInMs=${g.leadInMs} roles=${g.self}/${g.other}/${g.unknown} dropped=${g.dropped}` : ""));
+});
 
 // The mode is the server's to decide — it can be changed by speaking, from
 // another device, or by the picker here — and the microphone has to follow it:
@@ -253,10 +291,17 @@ const start = async (): Promise<void> => {
 	state: () => store.state,
 	listening: () => store.listening(),
 	voice: () => voice.status,
-	/** Live microphone tracks this page holds. Zero is the whole promise of
-	 *  PushToTalk when the control is not held. */
-	tracks: () => voice.mic.liveTracks,
-	mic: () => ({ state: voice.mic.state, detail: voice.mic.detail, levelDb: Math.round(voice.mic.levelDb), ...voice.mic.stats }),
+	/** Live microphones this page holds open, on whichever device is in use.
+	 *  Zero is the whole promise of PushToTalk when the control is not held, and
+	 *  PRD 5b did not weaken it: the glasses count in the same units. */
+	tracks: () => voice.source.liveTracks,
+	mic: () => ({ state: voice.source.state, detail: voice.source.detail, device: voice.device, levelDb: Math.round(voice.source.levelDb), ...voice.source.stats }),
+	/** The glasses microphone's own numbers — PRD 5b's whole risk table, read
+	 *  off a running system instead of guessed at. `bytes` over the time the
+	 *  microphone was open is R5b.4's bandwidth; `openMs` and `leadInMs` are the
+	 *  lead-in R5b.3 says to measure before promising a hold-to-talk; the role
+	 *  counts are R5b.2's "the ratio is logged". */
+	glasses: () => (voice.glasses ? { attached: glasses.attached, error: glasses.error, ...(voice.glasses as { stats: object }).stats } : null),
 	connection: () => (connection ? { status: connection.status, detail: connection.detail, ...connection.stats } : null)
 };
 
@@ -264,6 +309,11 @@ const start = async (): Promise<void> => {
 // back. Both of these mean "the condition the backoff is waiting out may have
 // changed", and both are cheap to answer.
 document.addEventListener("visibilitychange", () => { if (!document.hidden) connection?.poke("visible"); });
+// R5b.1's third case. A WebView that is being torn down gets no SDK event, and
+// a microphone opened on the glasses outlives the page that opened it — so the
+// last thing this page does is ask for it to be closed. `pagehide` rather than
+// `beforeunload`: it is the one that fires on mobile.
+globalThis.addEventListener?.("pagehide", () => voice.suspend("close"));
 globalThis.addEventListener?.("online", () => connection?.poke("network up"));
 globalThis.addEventListener?.("pageshow", () => connection?.poke("pageshow"));
 

@@ -361,12 +361,20 @@ export class Companion {
 		// Never disabled. See #buildVoice.
 		talk.disabled = false;
 
+		// PRD 5b R5b.1: which microphone is open is part of what is being
+		// promised. "Everything spoken in the room reaches a model" means
+		// something different when the microphone is on the user's face, and a
+		// user who cannot see which one is open cannot know which promise they
+		// made.
+		const where = !v || v.device === "browser" ? "" : ` — ${v.device} microphone`;
 		n.voicenote.textContent = v?.mic === "denied"
-			? "The browser refused the microphone. Allow it for this page and press again."
+			? (v.device === "browser"
+				? "The browser refused the microphone. Allow it for this page and press again."
+				: `The Even App refused the ${v.device} microphone. Check the app's permissions and press again.`)
 			: v?.mic === "error"
 				? `Microphone: ${v.detail}`
 				: v?.live
-					? (v.held ? "Capturing while held." : "Capturing.")
+					? (v.held ? `Capturing while held${where}.` : `Capturing${where}.`)
 					: state.mode === MODES.PUSHTOTALK
 						? "Microphone off — hold to talk."
 						: "";

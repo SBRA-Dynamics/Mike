@@ -6,6 +6,11 @@
   "min_app_version": "2.2.10",
   "min_sdk_version": "0.0.15",
   "entrypoint": "index.html",
-  "permissions": [],
-  "supported_languages": ["en"]
+  "permissions": [
+    "g2-microphone",
+    "phone-microphone"
+  ],
+  "supported_languages": [
+    "en"
+  ]
 }

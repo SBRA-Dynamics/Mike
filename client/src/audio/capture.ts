@@ -31,6 +31,32 @@ export type MicState =
 	| "denied"
 	| "error";
 
+/**
+ * What `Voice` needs from a microphone, whichever one it is.
+ *
+ * PRD 5b's job is to make the glasses a second source for the pipeline PRD 5a
+ * built, and this type is where that split is made explicit: `Microphone` below
+ * implements it over `getUserMedia`, `GlassesMicrophone` (./glasses.ts)
+ * implements it over the Even Hub bridge, and `Voice` never learns which it
+ * has. Everything downstream of a segment stays PRD 5a's.
+ *
+ * `liveTracks` is in this interface rather than only on the browser one on
+ * purpose. Zero-when-not-held is the whole promise of PushToTalk, and it has to
+ * be a number the suite can read off either source — otherwise the glasses half
+ * of that promise would only ever be a claim.
+ */
+export type MicSource = {
+	readonly state: MicState;
+	readonly detail: string;
+	readonly live: boolean;
+	readonly liveTracks: number;
+	readonly speaking: boolean;
+	readonly levelDb: number;
+	readonly stats: { opens: number; segments: number; samples: number; deniedAt: number };
+	open(hold?: boolean): Promise<boolean>;
+	close(reason?: "release" | "close"): void;
+};
+
 export type MicOptions = {
 	/** A finished utterance. Called once per segment, in order. */
 	onSegment: (segment: Segment) => void;

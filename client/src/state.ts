@@ -6,7 +6,7 @@
 // in and calls subscribers out, and knows nothing about sockets, the DOM or the
 // SDK.
 
-import { MODE_LABEL, MODES } from "../../src/routing.js";
+import { DEFAULT_MODE, MODE_LABEL, MODES } from "../../src/routing.js";
 import type { VoiceStatus } from "./audio/voice.ts";
 import type { ConnectionStatus } from "./connection.ts";
 import type { EventMsg, ReadyMsg, SeqMsg, WorkerInfo } from "./protocol.ts";
@@ -101,6 +101,9 @@ export class Store {
 
 	#subs = new Set<(s: AppState) => void>();
 	#localSeq = 0;
+	/** False only while a transcript is being replayed — see applyHistory. The
+	 *  registry follows live events and `ready`, never history. */
+	#live = true;
 
 	subscribe(fn: (s: AppState) => void): () => void {
 		this.#subs.add(fn);
@@ -163,7 +166,21 @@ export class Store {
 	 *  the one that survived the restart. */
 	applyHistory(messages: SeqMsg[]): void {
 		this.state.transcript = [];
-		for (const m of messages) this.#reduce(m);
+		// Replaying a transcript rebuilds the CONVERSATION. It must not rebuild
+		// the registry: `ready.workers` is the server's snapshot of who exists
+		// right now, and a transcript is a record of what was said, which is not
+		// the same question. Folding worker names in from history resurrects
+		// every worker that has ever existed in this session — and handling
+		// `workerEnded` is not enough to undo it, because a worker ended from
+		// another device leaves no end event in THIS transcript and would linger
+		// for ever. A reload made it worse rather than better, which is how it
+		// was found.
+		this.#live = false;
+		try {
+			for (const m of messages) this.#reduce(m);
+		} finally {
+			this.#live = true;
+		}
 		this.state.transcript = this.state.transcript.slice(-TRANSCRIPT_LIMIT);
 		this.notify();
 	}
@@ -242,6 +259,48 @@ export class Store {
 		if (asking.length === 1) return said ? `${asking[0].worker} asks +${said}` : `${asking[0].worker} asks`;
 		if (asking.length > 1) return said ? `${asking.length} ask +${said}` : `${asking.length} ask`;
 		return said === 1 ? `${live[0].worker} spoke` : `${said} spoke`;
+	}
+
+	/**
+	 * The one line of status the lens can afford — R4.4, R5a.8, R5b.3.
+	 *
+	 * Derived state, so it lives with the state rather than in the wiring: it is
+	 * a pure function of the model and the clock, both faces read the same
+	 * answer, and the suite can ask it a question without starting a client.
+	 *
+	 * The order IS the specification, and every step of it is a decision:
+	 *
+	 *   1. A dead socket outranks everything. An answer that will never arrive
+	 *      must not read as one that is on its way.
+	 *   2. A hold outranks every notice (R5b.3). The user has a finger on the
+	 *      touchpad right now; there is no speaker on the glasses, so this line
+	 *      is the only feedback there is that the microphone opened — and
+	 *      "opening" and "held" are two words rather than one because the round
+	 *      trip that opens it costs roughly 160–200 ms, and saying it is live
+	 *      before it is would lose exactly the syllable the honesty was meant to
+	 *      save.
+	 *   3. Somebody the user is NOT talking to waiting on them outranks
+	 *      "thinking": thinking says something is happening that they already
+	 *      know about, and a waiting worker carries a name worth acting on.
+	 *   4. Then R5a.8's four states, then the mode — but only when it is not the
+	 *      default one, which would spend the line on the ordinary case.
+	 */
+	lensStatus(now = Date.now()): string | null {
+		const s = this.state;
+		if (s.connection === "fatal") return "stopped";
+		if (s.connection !== "online") return "offline";
+		if (s.voice?.held) return s.voice.live ? "held" : "opening";
+		const waiting = this.notice(now);
+		if (waiting) return waiting;
+		const listening = this.listening(now);
+		if (listening === "thinking") return "thinking";
+		if (listening === "heard") return "heard";
+		// Paused is what the user most needs to know, and hold-to-talk explains
+		// why nothing is happening when they speak.
+		if (s.mode === MODES.IGNORE) return MODE_LABEL[MODES.IGNORE];
+		if (listening === "listening") return "listening";
+		if (s.mode !== DEFAULT_MODE) return MODE_LABEL[s.mode] ?? s.mode;
+		return null;
 	}
 
 	/** When the next notice expires, so the caller can repaint exactly then
@@ -367,6 +426,18 @@ export class Store {
 				if (d.worker) this.#note(String(d.worker), d.kind === "question" ? "question" : "said");
 				break;
 
+			case "workerSpawned":
+				// The mirror image of the bug `workerEnded` fixes. A worker that
+				// has just been created IS the active one — `spawn_worker`
+				// switches as part of itself — so without this the picker offers
+				// every worker except the one being talked to, and shows "Jarvis"
+				// while the words are going to Bosse. A list that disagrees with
+				// reality is the same defect whichever way it leans.
+				this.state.worker = d.active ?? this.state.worker;
+				this.state.lastEvent = d.worker?.name ? `started ${d.worker.name}` : "started a worker";
+				if (d.worker?.name) this.#rememberWorker(d.worker as WorkerInfo);
+				break;
+
 			case "workerSwitched":
 				this.state.worker = d.active ?? null;
 				this.#clearNotice(d.active ?? null);
@@ -377,6 +448,31 @@ export class Store {
 				// Applied at the state change below, not here: Jarvis's own "now
 				// talking to Kalle" arrives AFTER this event and would overwrite
 				// it, and that sentence is the one thing the user already knows.
+				break;
+
+			case "workerEnded":
+				// A worker that has ended is gone, and the list has to say so.
+				// `state.workers` is what the companion's "Talking to" picker
+				// offers, and an entry there is a promise that switching to it
+				// will work — but nothing ever took a name OFF it: names were
+				// folded in from events and only ever corrected wholesale by
+				// `ready.workers` on a reconnect. So an ended worker stayed on
+				// offer for the rest of the session, long enough to be picked and
+				// answered with "he does not exist any more, you ended him".
+				if (d.worker?.name) this.#forgetWorker(String(d.worker.name));
+				this.state.lastEvent = d.worker?.name ? `${d.worker.name} ended` : m.kind;
+				break;
+
+			case "workerRenamed":
+				// The same bug in a different shape, and the easy one to leave
+				// behind: folding the new name in without taking the old one out
+				// leaves TWO entries for one worker, and picking the older of
+				// them fails exactly the way an ended worker did. The event
+				// carries `previousName` (src/tools.js) rather than leaving it to
+				// be inferred, so the entry is replaced rather than added.
+				if (d.previousName && d.worker?.name) this.#renameWorker(String(d.previousName), d.worker as WorkerInfo);
+				else if (d.worker?.name) this.#rememberWorker(d.worker as WorkerInfo);
+				this.state.lastEvent = d.previousName ? `${d.previousName} is now ${d.worker?.name}` : m.kind;
 				break;
 
 			case "modeChanged":
@@ -438,8 +534,51 @@ export class Store {
 	 *  mid-session would otherwise be invisible to the companion's list until
 	 *  the next reconnect. Names seen in events are folded in as they arrive. */
 	#rememberWorker(w: WorkerInfo): void {
+		// Live events only. This mechanism exists so a worker created mid-session
+		// appears without waiting for a reconnect; asked the same question by a
+		// replayed transcript it answers "everyone who ever existed".
+		if (!this.#live) return;
 		const known = this.state.workers.find((x) => x.name === w.name);
 		if (known) Object.assign(known, w);
 		else this.state.workers = [...this.state.workers, w];
+	}
+
+	/** Take a name off the list, and the notices with it. A worker that is gone
+	 *  cannot be gone back to, so "Bosse spoke" in the header would be an
+	 *  invitation to somewhere that no longer exists. */
+	#forgetWorker(name: string): void {
+		// The registry half is live-only for the same reason as #rememberWorker:
+		// `ready` already knows who is gone. The notice is not — it is
+		// conversation state, and dropping a notice for somebody who has ended is
+		// right whichever way the message arrived.
+		if (this.#live) this.state.workers = this.state.workers.filter((w) => w.name !== name);
+		this.#clearNotice(name);
+	}
+
+	/**
+	 * Replace an entry rather than adding one.
+	 *
+	 * Position is kept, because the picker's order is the order the user learnt.
+	 * Anything already standing under the NEW name is the same worker seen
+	 * twice — a rename has to leave exactly one entry whichever order the events
+	 * arrived in, and two entries for one worker is the bug this is fixing.
+	 *
+	 * Unlike an ending, the notice FOLLOWS: the worker is still there and may
+	 * still be waiting on an answer, it is only called something else now. (The
+	 * server does the same with its own addressee — `retarget` in src/tools.js.)
+	 */
+	#renameWorker(previous: string, w: WorkerInfo): void {
+		if (this.#live) {
+			let replaced = false;
+			const next: WorkerInfo[] = [];
+			for (const x of this.state.workers) {
+				if (x.name === previous) { next.push({ ...x, ...w }); replaced = true; continue; }
+				if (x.name === w.name) continue;
+				next.push(x);
+			}
+			if (!replaced) next.push(w);
+			this.state.workers = next;
+		}
+		for (const p of this.state.pending) if (p.worker === previous) p.worker = w.name;
 	}
 }

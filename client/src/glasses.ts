@@ -13,6 +13,8 @@
 // with the `callHandler` the SDK posts every message through); the simulator
 // injects the same object, which is why it is a faithful test of this path.
 
+import type { GlassesAudioFrame } from "./audio/glasses.ts";
+
 /** One container, full lens. R4.2: a nicer layout needs rebuildPageContainer,
  *  which flickers and costs a measured round trip, and ten rows have no space
  *  for chrome anyway. */
@@ -43,6 +45,10 @@ export type Gesture = "tap" | "doubleTap" | "swipeUp" | "swipeDown" | "holdStart
 
 export type GlassesHandlers = {
 	onGesture?: (g: Gesture) => void;
+	/** One `AudioEvent` off the bridge — PRD 5b R5b.1. Routed rather than
+	 *  handled: this layer owns the SDK, and audio/glasses.ts owns what audio
+	 *  means. It is by far the highest-rate event there is. */
+	onAudio?: (frame: GlassesAudioFrame) => void;
 	/** The app came back to the front: reconnect and repaint, do not sit on a
 	 *  stale screen (R4.5). */
 	onForeground?: () => void;
@@ -65,6 +71,37 @@ export const waitForHost = async (timeoutMs = 2000, step = 50): Promise<boolean>
 
 export const hasHostChannel = (): boolean =>
 	typeof (globalThis as any).flutter_inappwebview?.callHandler === "function";
+
+/**
+ * Stop the SDK narrating every audio frame — PRD 5b.
+ *
+ * 0.0.15 logs EVERY EvenHub event to the console, audio included, as a string
+ * with the whole PCM array serialised into it. With a microphone open that is
+ * ten of them a second, for as long as the user is listening: in the simulator
+ * it fills the automation API's 2000-entry console buffer in about two seconds,
+ * and in a WebView on a phone it is an hour-long session's worth of retained
+ * strings. There is no switch for it in the SDK.
+ *
+ * Only those lines are dropped — the prefix AND the audio payload have to both
+ * be there — so every other thing the SDK says still reaches the console, which
+ * is the only debugging channel a phone has. The serialisation itself happens
+ * before this and cannot be prevented from a plugin.
+ *
+ * Installed at most once. Two of these stacked would each wrap the other, and a
+ * hot reload would then cost a chain of them — the classic way a filter becomes
+ * a leak.
+ */
+let quietened = false;
+const quietenAudioLogging = (): void => {
+	if (quietened) return;
+	quietened = true;
+	const real = console.log.bind(console);
+	console.log = (...args: unknown[]) => {
+		const first = args[0];
+		if (typeof first === "string" && first.startsWith("[EvenAppBridge]") && first.includes("audioPcm")) return;
+		real(...args);
+	};
+};
 
 export class Glasses {
 	handlers: GlassesHandlers;
@@ -99,6 +136,7 @@ export class Glasses {
 				this.bridge = await this.opts.bridgeFactory();
 			} else {
 				this.sdk = await import("@evenrealities/even_hub_sdk");
+				quietenAudioLogging();
 				this.bridge = await this.sdk.waitForEvenAppBridge();
 			}
 			const result = await this.#call(this.bridge.createStartUpPageContainer({
@@ -186,8 +224,42 @@ export class Glasses {
 		]).finally(() => clearTimeout(timer));
 	}
 
+	/**
+	 * Open or close the microphone — PRD 5b R5b.1.
+	 *
+	 * Wrapped in the same deadline as every other bridge call: a hung
+	 * `audioControl` would otherwise leave a push-to-talk user holding a button
+	 * that never becomes live, with no way to find out.
+	 *
+	 * The host's answer is passed through UNCHANGED, including the `false` it
+	 * gives to a close that really did stop. Interpreting it belongs one layer
+	 * up, where the difference between "an open was refused" and "a close was
+	 * answered curtly" is known — audio/glasses.ts checks the answer of an open
+	 * and ignores the answer of a close, and says why.
+	 */
+	async audioControl(open: boolean, source: string): Promise<boolean> {
+		if (!this.bridge) return false;
+		try {
+			return (await this.#call<unknown>(this.bridge.audioControl(open, source))) === true;
+		} catch (e) {
+			// Recorded where the companion shows it, then rethrown: a microphone
+			// that could not be opened is the caller's problem to report, and a
+			// swallowed one here would look like a microphone that simply never
+			// delivered a frame.
+			this.error = (e as Error)?.message ?? String(e);
+			throw e;
+		}
+	}
+
 	#listen(): void {
 		this.#unsubscribe = this.bridge.onEvenHubEvent((event: any) => {
+			// Audio first, and on its own line, because it is not like the others:
+			// a gesture happens a few times a minute and an AudioEvent arrives ten
+			// times a second per open microphone (100 ms frames, measured through
+			// the simulator's bridge). Everything below it is off the hot path.
+			const audio = event?.audioEvent;
+			if (audio) { this.handlers.onAudio?.(audio); return; }
+
 			// Scroll gestures on a text container arrive as textEvent; taps and
 			// double taps arrive as sysEvent. Getting that backwards is the
 			// documented first mistake, so both are handled explicitly.

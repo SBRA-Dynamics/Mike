@@ -19,6 +19,7 @@ import { WebSocketServer } from "ws";
 
 import { startServer, connect, check, failed, section, sleep } from "./harness.mjs";
 import { validateC2S, S2C } from "../src/protocol.js";
+import { MODES } from "../src/routing.js";
 import { startProxy } from "./netcut.mjs";
 
 import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS } from "../client/src/lens/render.ts";
@@ -347,6 +348,183 @@ try {
 			const before = JSON.stringify(s.state);
 			s.apply(samples[type]);
 			check(`"${type}" ändrar något i modellen`, JSON.stringify(s.state) !== before);
+		}
+	}
+
+	section("modellen: arbetarlistan är vilka som FINNS, inte vilka som har funnits");
+	{
+		// The companion's "Talking to" picker reads state.workers, and an entry
+		// there is a promise that switching to it will work. Names were folded in
+		// from events and never taken out again, so an ended worker stayed on
+		// offer for the rest of the session — long enough to be picked and
+		// answered with "he does not exist any more, you ended him".
+		const names = (st) => st.state.workers.map((w) => w.name).join(",");
+		const worker = (name) => ({ name, model: "sonnet", cwd: "/tmp" });
+		const spawn = (st, name) => st.apply({ type: "event", kind: "workerSwitched", data: { active: name, worker: worker(name) } });
+		// The event the server ACTUALLY sends when a worker is created. The
+		// helper above models a switch, which is a different message, and the
+		// difference hid a real bug: `workerSpawned` was unhandled, so a
+		// freshly created worker was missing from the picker while being the
+		// one the user was talking to.
+		const spawned = (st, name) => st.apply({ type: "event", kind: "workerSpawned", data: { active: name, worker: worker(name) } });
+		const ended = (st, name, active = null) => st.apply({ type: "event", kind: "workerEnded", data: { worker: worker(name), active } });
+		const renamed = (st, from, to, active = null) =>
+			st.apply({ type: "event", kind: "workerRenamed", data: { worker: worker(to), previousName: from, active } });
+
+		{
+			const st = new Store();
+			spawned(st, "Bosse");
+			check("en nyskapad arbetare hamnar i listan", names(st) === "Bosse", names(st));
+			check("och är den man pratar med", st.state.worker === "Bosse", String(st.state.worker));
+			// Det som gick fel: listan erbjöd alla utom den aktiva, så väljaren
+			// visade "Jarvis" medan orden gick till Bosse.
+			check("väljaren kan alltså visa den aktiva",
+				st.state.workers.some((w) => w.name === st.state.worker), names(st));
+			ended(st, "Bosse");
+			check("och den försvinner när den avslutas", names(st) === "", names(st));
+		}
+
+		{
+			const st = new Store();
+			spawn(st, "Kalle");
+			spawn(st, "Bosse");
+			check("arbetare som skapas under sessionen syns i listan", names(st) === "Kalle,Bosse", names(st));
+
+			ended(st, "Kalle");
+			check("en avslutad arbetare försvinner ur listan", names(st) === "Bosse", names(st));
+			ended(st, "Bosse");
+			check("och när den sista avslutas är listan tom", names(st) === "", names(st));
+		}
+
+		{
+			// The same bug in a different shape, and the one it is easy to leave
+			// behind: a rename must REPLACE the entry, not add a second one.
+			const st = new Store();
+			spawn(st, "Kalle");
+			spawn(st, "Bosse");
+			renamed(st, "Kalle", "Karin");
+			check("ett namnbyte ger exakt en post, under det nya namnet",
+				names(st) === "Karin,Bosse", names(st));
+			check("och det gamla namnet finns inte kvar någonstans",
+				!st.state.workers.some((w) => w.name === "Kalle"), names(st));
+			check("platsen i listan behålls — ordningen är den användaren lärt sig",
+				st.state.workers[0].name === "Karin", names(st));
+
+			// Events can arrive in an order where the new name is already known.
+			renamed(st, "Bosse", "Karin");
+			check("och ett namnbyte till ett namn som redan finns ger fortfarande en post",
+				names(st) === "Karin", names(st));
+		}
+
+		{
+			// state.pending is the header's background notices, and the two
+			// events must treat it differently: an ended worker cannot be gone
+			// back to, a renamed one can.
+			const st = new Store();
+			spawn(st, "Kalle");
+			spawn(st, "Bosse");
+			st.apply({ type: "event", kind: "workerNotice", data: { worker: "Kalle", kind: "question" } });
+			st.apply({ type: "event", kind: "workerNotice", data: { worker: "Bosse", kind: "question" } });
+			check("två arbetare väntar på svar", /2 ask/.test(st.notice() ?? ""), String(st.notice()));
+
+			ended(st, "Kalle");
+			check("en avslutad arbetares notis försvinner med honom",
+				st.state.pending.map((p) => p.worker).join(",") === "Bosse", JSON.stringify(st.state.pending));
+			check("men den andres står kvar — han väntar fortfarande",
+				/Bosse asks/.test(st.notice() ?? ""), String(st.notice()));
+
+			renamed(st, "Bosse", "Berit");
+			check("och en omdöpt arbetares notis följer med till det nya namnet",
+				/Berit asks/.test(st.notice() ?? ""), String(st.notice()));
+			check("den räknas fortfarande som en enda notis",
+				st.state.pending.length === 1, JSON.stringify(st.state.pending));
+		}
+
+		{
+			// Both events carry `active`, which arms the addressee handoff applied
+			// at the `state` that ends the same turn (R3.5). Removing a name from
+			// the list must not disturb that.
+			const st = new Store();
+			spawn(st, "Kalle");
+			st.apply({ type: "state", busy: false, worker: "Kalle", mode: MODES.BYNAME, seq: 1 });
+			ended(st, "Kalle", null);
+			st.apply({ type: "state", busy: false, worker: null, mode: MODES.BYNAME, seq: 2 });
+			check("att avsluta den man talar med lämnar tillbaka en till Jarvis på linsen",
+				st.state.lens.from === "Jarvis" && st.state.worker === null,
+				JSON.stringify({ from: st.state.lens.from, worker: st.state.worker }));
+
+			const st2 = new Store();
+			spawn(st2, "Kalle");
+			st2.apply({ type: "state", busy: false, worker: "Kalle", mode: MODES.BYNAME, seq: 1 });
+			renamed(st2, "Kalle", "Karin", "Karin");
+			st2.apply({ type: "state", busy: false, worker: "Karin", mode: MODES.BYNAME, seq: 2 });
+			check("och ett namnbyte flyttar rubriken till det nya namnet",
+				st2.state.lens.from === "Karin" && names(st2) === "Karin",
+				JSON.stringify({ from: st2.state.lens.from, workers: names(st2) }));
+		}
+	}
+
+	section("modellen: historiken bygger samtalet, inte registret");
+	{
+		// The half that a reload makes WORSE rather than better, and the reason
+		// it is a separate bug: applyHistory replays every message through the
+		// same reducer, so folding worker names in from events rebuilt the
+		// registry as it was at any point in the past. `ready.workers` is the
+		// server's snapshot of who exists; a transcript is a record of what was
+		// said.
+		const names = (st) => st.state.workers.map((w) => w.name).join(",");
+		const worker = (name) => ({ name, model: "sonnet", cwd: "/tmp" });
+		const ready = (workers) => ({ sessionId: "s", worker: null, mode: MODES.BYNAME, workers, resumed: true, missed: 0, gap: false });
+
+		{
+			const st = new Store();
+			st.applyReady(ready([]));
+			st.applyHistory([
+				{ type: "event", kind: "workerSwitched", data: { active: "Kalle", worker: worker("Kalle") }, seq: 1 },
+				{ type: "text", text: "hej", from: "Kalle", seq: 2 },
+				{ type: "event", kind: "workerEnded", data: { worker: worker("Kalle"), active: null }, seq: 3 }
+			]);
+			check("en historik med skapa-och-avsluta lämnar listan som ready sa", names(st) === "", names(st));
+			check("men samtalet byggs som vanligt av historiken",
+				st.state.transcript.some((e) => e.text === "hej"), JSON.stringify(st.state.transcript.map((e) => e.text)));
+		}
+
+		{
+			// The cross-session case, and the one that proves the fix: the worker
+			// was ended from another device, so there is NO end event in this
+			// transcript to undo the spawn with. Handling workerEnded alone
+			// leaves this one on the list for ever.
+			const st = new Store();
+			st.applyReady(ready([]));
+			st.applyHistory([
+				{ type: "event", kind: "workerSwitched", data: { active: "Bosse", worker: worker("Bosse") }, seq: 1 },
+				{ type: "event", kind: "workerIdentity", data: { name: "Bosse", resume: "claude --resume abc" }, seq: 2 },
+				{ type: "text", text: "klart", from: "Bosse", seq: 3 }
+			]);
+			check("en arbetare som avslutats från en annan enhet återuppstår inte ur historiken",
+				names(st) === "", names(st));
+		}
+
+		{
+			// And ready's own list survives a replay that mentions nobody.
+			const st = new Store();
+			st.applyReady(ready([worker("Kalle")]));
+			st.applyHistory([{ type: "text", text: "hej", from: "jarvis", seq: 1 }]);
+			check("det ready sa står kvar efter en historik", names(st) === "Kalle", names(st));
+		}
+
+		{
+			// The regression risk of the fix above: it is easy to silence history
+			// and silence the live events with it, and then a worker created
+			// mid-session is invisible until the next reconnect — which is the
+			// bug this mechanism was written to solve in the first place.
+			const st = new Store();
+			st.applyReady(ready([]));
+			st.applyHistory([{ type: "text", text: "hej", from: "jarvis", seq: 1 }]);
+			st.apply({ type: "event", kind: "workerSwitched", data: { active: "Nina", worker: worker("Nina") }, seq: 2 });
+			check("men en arbetare som skapas live syns fortfarande direkt", names(st) === "Nina", names(st));
+			st.apply({ type: "event", kind: "workerEnded", data: { worker: worker("Nina"), active: null }, seq: 3 });
+			check("och försvinner live också", names(st) === "", names(st));
 		}
 	}
 
