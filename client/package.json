@@ -3,10 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Jarvis client — Even Hub plugin: lens view + companion view (PRD 4)",
+  "description": "Jarvis client \u2014 Even Hub plugin: lens view + companion view (PRD 4)",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node -e \"require('fs').copyFileSync('app.json','../public/app.json')\"",
     "preview": "vite preview",
     "pack": "npm run build && evenhub pack app.json ../public"
   },
