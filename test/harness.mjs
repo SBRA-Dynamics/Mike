@@ -19,22 +19,59 @@ export const check = (name, ok, detail = "") => {
 export const failed = () => failures;
 export const section = (name) => console.log(`\n${name}`);
 
+// Every server we spawn, so a suite that throws before stop() does not leave a
+// listener (and a temp directory) behind. 110 of those accumulated over one
+// afternoon and turned into the port-collision flake described in startServer.
+const spawned = new Set();
+const track = (proc) => {
+	spawned.add(proc);
+	proc.on("exit", () => spawned.delete(proc));
+};
+const killAll = () => { for (const p of spawned) { try { p.kill("SIGKILL"); } catch { } } };
+process.on("exit", killAll);
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { killAll(); process.exit(130); });
+process.on("uncaughtException", (e) => { killAll(); console.error(e); process.exit(1); });
+
 /** A server in its own temp data directory, so tests never see each other's sessions. */
 export async function startServer(extraArgs = []) {
 	const dataDir = mkdtempSync(join(tmpdir(), "jarvis-test-"));
-	const port = 34000 + Math.floor(Math.random() * 1000);
 	const token = "test-token-" + Math.random().toString(16).slice(2, 10);
 
-	const proc = spawn("node", ["server.js", "--port", String(port), "--host", "127.0.0.1",
+	// Port 0: the OS hands out one that is free, and tells us which.
+	//
+	// This used to pick a random port in a 1000-wide range and then poll
+	// /healthz on it. When that port was already taken the new server died of
+	// EADDRINUSE while the SQUATTER answered /healthz — so the harness happily
+	// went on to talk to a foreign server, whose token was different, and the
+	// run failed twenty lines later as a null readyMsg. With enough leaked
+	// servers around (and a crashing suite leaks one every time) that was a
+	// flake nobody could reproduce in isolation.
+	const proc = spawn("node", ["server.js", "--port", "0", "--host", "127.0.0.1",
 		"--token", token, "--data", dataDir, ...extraArgs], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+	track(proc);
 
 	let logText = "";
 	proc.stdout.on("data", (d) => { logText += d.toString(); });
 	proc.stderr.on("data", (d) => { logText += d.toString(); });
 
+	// The server logs the port it actually bound. Waiting for that line, rather
+	// than probing a port we guessed, means we can only ever reach our own.
+	let port = 0;
+	for (let i = 0; i < 100 && !port; i++) {
+		// Anchored on "jarvis-server": the MCP listener logs its own
+		// "on http://127.0.0.1:PORT/mcp" line first, and matching that one sent
+		// the whole suite at the tool surface instead of the server.
+		const m = logText.match(/jarvis-server \S+ protocol \S+ on https?:\/\/127\.0\.0\.1:(\d+)/);
+		if (m) port = Number(m[1]);
+		else if (proc.exitCode !== null) break;
+		else await sleep(100);
+	}
+	if (!port) {
+		try { proc.kill("SIGKILL"); } catch { }
+		throw new Error(`server never reported a port:\n${logText || "(no output)"}`);
+	}
+
 	const base = `http://127.0.0.1:${port}`;
-	// Fail loudly here. A server that never started otherwise shows up as a
-	// mysterious socket error twenty assertions later.
 	let up = false;
 	for (let i = 0; i < 100; i++) {
 		try { if ((await fetch(`${base}/healthz`)).ok) { up = true; break; } } catch { }
@@ -42,7 +79,7 @@ export async function startServer(extraArgs = []) {
 	}
 	if (!up) {
 		try { proc.kill("SIGKILL"); } catch { }
-		throw new Error(`server did not start on ${port}:\n${logText || "(no output)"}`);
+		throw new Error(`server did not answer on ${port}:\n${logText || "(no output)"}`);
 	}
 
 	return {
@@ -52,11 +89,13 @@ export async function startServer(extraArgs = []) {
 		async restart() {
 			proc.kill("SIGTERM");
 			await sleep(600);
+			// Same port on purpose: a reconnect test needs the URL to stay valid.
 			const next = await startServerOn(port, token, dataDir, extraArgs);
 			Object.assign(this, { proc: next.proc, log: next.log });
 			return this;
 		},
 		stop() {
+			try { this.proc.kill("SIGKILL"); } catch { }
 			try { proc.kill("SIGKILL"); } catch { }
 			try { rmSync(dataDir, { recursive: true, force: true }); } catch { }
 		}
@@ -66,6 +105,7 @@ export async function startServer(extraArgs = []) {
 async function startServerOn(port, token, dataDir, extraArgs) {
 	const proc = spawn("node", ["server.js", "--port", String(port), "--host", "127.0.0.1",
 		"--token", token, "--data", dataDir, ...extraArgs], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+	track(proc);
 	let logText = "";
 	proc.stdout.on("data", (d) => { logText += d.toString(); });
 	proc.stderr.on("data", (d) => { logText += d.toString(); });
@@ -137,6 +177,66 @@ export class TestClient {
 	close() { try { this.ws.close(); } catch { } }
 }
 
+/**
+ * Ask, over the WebSocket, for a credential for the MCP tool surface (PRD 2).
+ * Returns the grant event's data plus the bearer token parsed back out of the
+ * `--mcp-config` string — parsed rather than passed separately, so every test
+ * that uses it also proves the config claude is handed is well formed.
+ */
+export async function grantTools(client, role = "jarvis") {
+	const since = client.mark();
+	client.send({ type: "control", action: "mcpGrant", args: { role } });
+	const ev = await client.waitFor((m) => m.type === "event" && m.kind === "mcpGrant", 5000, "mcpGrant", since);
+	const parsed = JSON.parse(ev.data.config);
+	const server = parsed.mcpServers.jarvis;
+	return { ...ev.data, parsedConfig: parsed, token: server.headers.Authorization.replace(/^Bearer /, "") };
+}
+
+/**
+ * An MCP client that speaks exactly what claude 2.1.268 was observed to speak:
+ * POST /mcp, JSON-RPC, one JSON body back. Nothing here is a mock of the
+ * server — it talks to the real loopback listener the real claude talks to.
+ */
+export class McpClient {
+	constructor(grant) {
+		this.url = grant.url;
+		this.token = grant.token;
+		this.nextId = 0;
+	}
+
+	async raw(body, { token = this.token, method = "POST" } = {}) {
+		const res = await fetch(this.url, {
+			method,
+			headers: {
+				"Content-Type": "application/json",
+				Accept: "application/json, text/event-stream",
+				...(token ? { Authorization: `Bearer ${token}` } : {})
+			},
+			...(method === "POST" ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {})
+		});
+		const text = await res.text();
+		let json = null;
+		try { json = text ? JSON.parse(text) : null; } catch { }
+		return { status: res.status, json, text };
+	}
+
+	async rpc(method, params) {
+		const id = this.nextId++;
+		const { json } = await this.raw({ jsonrpc: "2.0", id, method, ...(params ? { params } : {}) });
+		return json;
+	}
+
+	initialize() { return this.rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "harness", version: "1" } }); }
+	listTools() { return this.rpc("tools/list"); }
+
+	/** Returns { isError, text } the way the model would see it. */
+	async call(name, args = {}) {
+		const r = await this.rpc("tools/call", { name, arguments: args });
+		if (r?.error) return { isError: true, text: r.error.message, rpcError: r.error };
+		return { isError: !!r?.result?.isError, text: r?.result?.content?.[0]?.text ?? "" };
+	}
+}
+
 /** Connect, say hello, and wait for ready — the normal path, in one call. */
 export async function connect(server, { token, sessionId, resumeFrom } = {}) {
 	const c = new TestClient(server.wsUrl);
@@ -147,7 +247,11 @@ export async function connect(server, { token, sessionId, resumeFrom } = {}) {
 		...(sessionId ? { sessionId } : {}),
 		...(resumeFrom !== undefined ? { resumeFrom } : {})
 	});
-	const ready = await c.waitFor((m) => m.type === "ready", 5000, "ready").catch(() => null);
+	// No .catch(() => null) here. Swallowing a missing ready handed every caller
+	// a client whose readyMsg was null, and the run then died with a TypeError
+	// in whatever line touched it first — a transport failure reported as a bug
+	// somewhere else entirely. If the handshake does not complete, say so here.
+	const ready = await c.waitFor((m) => m.type === "ready", 10_000, "ready");
 	c.readyMsg = ready;
 	return c;
 }

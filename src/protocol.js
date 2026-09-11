@@ -20,7 +20,10 @@ export const CONTROL = {
 	LIST_SESSIONS: "listSessions",
 	DELETE_SESSION: "deleteSession",
 	HISTORY: "history",
-	SET_TITLE: "setTitle"
+	SET_TITLE: "setTitle",
+	// PRD 2: hand this connection a short-lived credential for the MCP tool
+	// surface, so a Claude Code invocation bound to this session can act on it.
+	MCP_GRANT: "mcpGrant"
 };
 
 /** Server -> client */

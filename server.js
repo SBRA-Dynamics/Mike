@@ -30,6 +30,11 @@ import { SessionStore } from "./src/sessions.js";
 import { attachConnection } from "./src/connection.js";
 import { createEchoHandler } from "./src/handler.js";
 import { PROTOCOL_VERSION } from "./src/protocol.js";
+import { WorkerRegistry } from "./src/workers.js";
+import { createStubWorkerEngine } from "./src/workerEngine.js";
+import { createToolset } from "./src/tools.js";
+import { createMcpServer } from "./src/mcp.js";
+import { isKnownModel, MODEL_LIST } from "./src/models.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VERSION = "0.1.0";
@@ -50,6 +55,9 @@ if (has("help")) {
   --dev-proxy <url>    serve the client from a dev server instead of --static
   --data <dir>         session storage (default ~/.local/share/jarvis)
   --ping <ms>          keepalive interval (default 20000)
+  --mcp-port <n>       loopback port for the MCP tool surface (default: ephemeral)
+  --worker-model <m>   default model for a new worker (default sonnet)
+  --worker-cwd <dir>   default working directory for a new worker
   --help
 `);
 	process.exit(0);
@@ -65,13 +73,41 @@ const config = {
 	devProxy: flag("dev-proxy", process.env.JARVIS_DEV_PROXY || null),
 	dataDir: flag("data", process.env.JARVIS_DATA || path.join(homedir(), ".local", "share", "jarvis")),
 	pingIntervalMs: parseInt(flag("ping", "20000"), 10),
+	// The MCP listener is loopback-only and its port is not a contract: the
+	// grant handed to each Claude Code invocation carries the URL. A fixed port
+	// is only useful when something outside has to be pointed at it by hand.
+	mcpPort: parseInt(flag("mcp-port", process.env.JARVIS_MCP_PORT ?? "0"), 10),
+	// What a worker gets when the user does not name a model. Named here rather
+	// than buried in the registry because it is a product decision: Jarvis is
+	// the expensive one, workers are many and long-lived.
+	workerModel: flag("worker-model", process.env.JARVIS_WORKER_MODEL || "sonnet"),
+	workerCwd: flag("worker-cwd", process.env.JARVIS_WORKER_CWD || process.cwd()),
 	version: VERSION
 };
 
 const tokenWasGenerated = !flag("token", null) && !process.env.JARVIS_TOKEN;
 
+if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) { log.error(`--port must be a number, got "${flag("port", "")}"`); process.exit(1); }
+if (!Number.isInteger(config.pingIntervalMs) || config.pingIntervalMs < 1000) { log.error(`--ping must be at least 1000 ms`); process.exit(1); }
+if (!Number.isInteger(config.mcpPort) || config.mcpPort < 0 || config.mcpPort > 65535) { log.error(`--mcp-port must be a port number`); process.exit(1); }
+// Checked at startup, not at the first spawn_worker, because at the first
+// spawn the user is waiting on a lens for an answer about their own typo.
+if (!isKnownModel(config.workerModel)) { log.error(`--worker-model "${config.workerModel}" is unknown; use ${MODEL_LIST}`); process.exit(1); }
+
 const store = new SessionStore(path.join(config.dataDir, "sessions"));
 const handler = createEchoHandler({ log });
+
+// ------------------------------------------------------------- workers + tools
+// PRD 2. The registry is the state the tools mutate; the engine is the seam
+// PRD 3 replaces with real Claude Code sessions. Everything above the engine —
+// registry, tools, MCP transport — is finished work either way.
+const registry = new WorkerRegistry({
+	file: path.join(config.dataDir, "workers.json"),
+	log, defaultModel: config.workerModel, defaultCwd: config.workerCwd
+});
+const engine = createStubWorkerEngine({ log });
+const toolset = createToolset({ registry, engine, log });
+const mcp = createMcpServer({ store, toolset, registry, log });
 
 // ----------------------------------------------------------------- TLS certs
 // Re-read on mtime change so a certbot renewal lands without a restart
@@ -161,7 +197,8 @@ const onRequest = (req, res) => {
 		const body = JSON.stringify({
 			ok: true, version: VERSION, protocol: PROTOCOL_VERSION,
 			uptime: process.uptime(), sessions: store.sessions.size,
-			connections: [...store.sessions.values()].reduce((n, s) => n + s.connectionCount, 0)
+			connections: [...store.sessions.values()].reduce((n, s) => n + s.connectionCount, 0),
+			workers: registry.size, mcpPort: mcp.port
 		});
 		res.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) });
 		return res.end(body);
@@ -190,7 +227,7 @@ if (config.cert && config.key) {
 server.on("connection", (socket) => socket.setNoDelay(true));
 
 const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 4 * 1024 * 1024 });
-wss.on("connection", (ws, req) => attachConnection({ ws, req, store, config, handler, log }));
+wss.on("connection", (ws, req) => attachConnection({ ws, req, store, config, handler, log, registry, mcp }));
 
 server.on("clientError", (err, socket) => {
 	log.warn(`client error: ${err.code || err.message}`);
@@ -203,12 +240,27 @@ server.on("error", (e) => {
 	process.exit(1);
 });
 
+// Bound before the public listener so a client that connects in the first
+// millisecond cannot ask for a grant carrying port 0.
+try {
+	await mcp.listen(config.mcpPort);
+} catch (e) {
+	// Without the tool surface Jarvis can answer but not act, which is a
+	// half-working system that looks whole. Refuse to start instead.
+	log.error(`could not bind the MCP listener on 127.0.0.1:${config.mcpPort}: ${e.message}`);
+	process.exit(1);
+}
+
 server.listen(config.port, config.host, () => {
 	const scheme = config.cert ? "https" : "http";
+	// The bound port, not the requested one: --port 0 asks the OS to pick, and a
+	// log line claiming port 0 is useless to anything trying to connect.
+	config.port = server.address().port;
 	log.info(`jarvis-server ${VERSION} protocol ${PROTOCOL_VERSION} on ${scheme}://${config.host}:${config.port}`);
 	log.info(`ws ${scheme === "https" ? "wss" : "ws"}://${config.host}:${config.port}/ws`);
 	log.info(`client: ${config.devProxy ? `dev proxy ${config.devProxy}` : config.staticDir}`);
 	log.info(`sessions: ${store.sessions.size} loaded from ${config.dataDir}`);
+	log.info(`workers: default model ${config.workerModel}, default cwd ${config.workerCwd}`);
 	if (tokenWasGenerated) log.info(`token (generated): ${config.token}`);
 	if (scheme === "http") log.warn("no --cert/--key: serving plain HTTP");
 });
@@ -220,6 +272,7 @@ const shutdown = (signal) => {
 	shuttingDown = true;
 	log.info(`${signal} — shutting down`);
 	for (const client of wss.clients) { try { client.close(4004, "server restarting"); } catch { } }
+	mcp.close();
 	server.close(() => process.exit(0));
 	setTimeout(() => process.exit(0), 3000).unref();
 };
@@ -230,4 +283,4 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("uncaughtException", (e) => log.error(`UNCAUGHT: ${e.stack || e.message}`));
 process.on("unhandledRejection", (r) => log.error(`UNHANDLED REJECTION: ${r?.stack || r}`));
 
-export { config, store, wss, server };
+export { config, store, wss, server, registry, mcp };

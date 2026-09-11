@@ -9,7 +9,7 @@ import { C2S, CLOSE, CONTROL, PROTOCOL_VERSION, msg, validateC2S } from "./proto
 /** A connection must say hello before anything else, and quickly. */
 const HELLO_TIMEOUT_MS = 10_000;
 
-export function attachConnection({ ws, req, store, config, handler, log }) {
+export function attachConnection({ ws, req, store, config, handler, log, registry, mcp }) {
 	const peer = req.socket.remoteAddress;
 	let session = null;
 	let alive = true;
@@ -96,6 +96,10 @@ export function attachConnection({ ws, req, store, config, handler, log }) {
 		// number or be replayed to anyone else.
 		send(msg.ready(session.id, session.seq, {
 			worker: session.worker,
+			// R1.6 declares `workers` in ready and PRD 1 never filled it in. It is
+			// the registry PRD 2 introduced, and a client that has just come back
+			// needs it to render who exists before anything else happens.
+			workers: registry ? registry.list().map((w) => ({ name: w.name, model: w.model, cwd: w.cwd, busy: w.busy })) : [],
 			mode: session.mode,
 			resumed: asked,
 			missed: missed.length,
@@ -121,6 +125,29 @@ export function attachConnection({ ws, req, store, config, handler, log }) {
 				// another session's transcript by naming it.
 				const limit = Math.min(Number(m.args?.limit) || 200, 1000);
 				send(msg.event("history", { sessionId: session.id, messages: store.history(session.id, limit) }));
+				return true;
+			}
+
+			case CONTROL.MCP_GRANT: {
+				// Mint the credential a Claude Code invocation uses to reach the
+				// tools (PRD 2). Sent through send(), never emit(): this is a live
+				// token for THIS connection. emit() would fan it out to every other
+				// attached device and write it into the durable transcript, where it
+				// would outlive its hour by months.
+				//
+				// Any holder of the bearer token may ask for a "jarvis" grant,
+				// because R1.7 makes that token the one credential in the system.
+				// The "worker" role exists so the server can mint a grant that sees
+				// no tools at all (R2.4) — in PRD 3 the server mints these itself
+				// and a worker is never handed one.
+				if (!mcp) { send(msg.error("tools are not available")); return true; }
+				const role = m.args?.role === "worker" ? "worker" : "jarvis";
+				const grant = mcp.mintGrant({ sessionId: session.id, role });
+				send(msg.event("mcpGrant", {
+					role: grant.role, url: grant.url, config: grant.config,
+					expiresAt: grant.expiresAt, allowedTools: mcp.allowedToolNames(grant.role)
+				}));
+				log.info(`mcp grant for session=${session.id.slice(0, 8)} role=${grant.role}`);
 				return true;
 			}
 

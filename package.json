@@ -3,11 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Jarvis server — transport, sessions, static hosting (PRD 1)",
+  "description": "Jarvis server — transport, sessions, static hosting (PRD 1), MCP tool surface (PRD 2)",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/run.mjs"
+    "test": "node test/run.mjs && node test/crash-recovery.mjs && node test/mcp.mjs",
+    "test:live": "node test/mcp-live.mjs"
   },
-  "dependencies": { "ws": "^8.18.0" },
-  "engines": { "node": ">=20" }
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }

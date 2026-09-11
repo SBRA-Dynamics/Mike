@@ -1,0 +1,290 @@
+// The six tools from PRD 2, and nothing else.
+//
+// Each tool is a name, a description the model reads, a JSON schema, and a run
+// function. They are declared here and served by mcp.js, which owns the
+// transport, the auth and the event/log side effects — so this file stays
+// readable as "what Jarvis can do".
+//
+// Two rules shape every handler:
+//
+//  * Errors are ToolError with a message written to be read out loud on a
+//    50x10 lens (PRD 2 R2.5). Short, specific, no stack, no jargon. Anything
+//    that escapes as a plain Error is a bug and mcp.js says so generically
+//    rather than leaking it.
+//  * Nothing is a filesystem path except `cwd`, which workers.js validates.
+//    Names are matched, never joined onto a directory.
+//
+// Deliberately absent: a shell tool. Jarvis is a Claude Code session and has
+// Bash already; a second path to the same capability only creates ambiguity
+// about which one he should reach for (PRD 2, "Tools").
+
+import { MODEL_LIST } from "./models.js";
+import { msg } from "./protocol.js";
+import { ToolError } from "./workers.js";
+
+/** Largest transcript read_worker will return, whatever it is asked for.
+ *  The cost of this lands in Jarvis's context, not in a log file. */
+const MAX_READ_TURNS = 20;
+const DEFAULT_READ_TURNS = 6;
+
+// ------------------------------------------------------------------ argument checks
+// Tool arguments come from a model. "It said it would send a string" is not a
+// guarantee, and a TypeError deep in a handler reaches the user as
+// "internal error", which tells them nothing they can act on.
+
+const str = (v, field) => {
+	if (typeof v !== "string" || !v.trim()) throw new ToolError(`${field} is missing`);
+	return v;
+};
+const optStr = (v, field) => {
+	if (v === undefined || v === null || v === "") return undefined;
+	if (typeof v !== "string") throw new ToolError(`${field} must be text`);
+	return v;
+};
+const optInt = (v, field) => {
+	if (v === undefined || v === null) return undefined;
+	const n = typeof v === "string" ? Number(v) : v;
+	if (!Number.isFinite(n)) throw new ToolError(`${field} must be a number`);
+	return Math.trunc(n);
+};
+
+// ------------------------------------------------------------------ rendering
+// These strings are what Jarvis reads and then paraphrases onto the lens, so
+// they are written as short facts rather than sentences.
+
+const ago = (t) => {
+	const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+	if (s < 60) return "just now";
+	if (s < 3600) return `${Math.round(s / 60)}m ago`;
+	if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+	return `${Math.round(s / 86400)}d ago`;
+};
+
+const describe = (w, active) =>
+	`${w.name} — ${w.model}, ${w.cwd}, ${w.busy ? "busy" : "idle"}, active ${ago(w.lastActivity)}` +
+	(active === w.name ? "  [talking to]" : "");
+
+/** The public shape of a worker record: the tool surface must not hand out the
+ *  registry's internal fields (`key`, and whatever PRD 3 adds next to it). */
+const publicWorker = (w) => ({
+	name: w.name, id: w.id, model: w.model, cwd: w.cwd,
+	busy: w.busy, created: w.createdAt, lastActivity: w.lastActivity
+});
+
+/**
+ * Build the toolset.
+ *
+ * `ctx` per call is { session, registry, engine, log }. The session is the
+ * conversation the tool call belongs to — that is what makes spawn_worker able
+ * to switch "the active conversation" rather than some global.
+ */
+export function createToolset({ registry, engine, log }) {
+
+	/** Setting the active worker is one operation with one event, because PRD 2
+	 *  R2.2 says switching is part of spawning and not a second call. The
+	 *  session stores the NAME: it is what `ready`/`state` carry and what PRD 3
+	 *  injects as context, so rename and end have to keep it in step. */
+	const setActive = (session, worker) => {
+		session.worker = worker ? worker.name : null;
+		session.store.touch(session);
+		return session.worker;
+	};
+
+	/** A worker that ends or is renamed is not private to the session that did
+	 *  it: any other session pointing at that name is left naming somebody who
+	 *  does not exist. `ready` would then report a worker absent from its own
+	 *  workers list, and PRD 3 routes on exactly this field — so the whole
+	 *  store is brought along, and every affected session is told. */
+	const retarget = (session, fromName, toName) => {
+		for (const other of session.store.sessions.values()) {
+			if (other === session || other.worker !== fromName) continue;
+			other.worker = toName;
+			session.store.touch(other);
+			other.emit(msg.state({ worker: toName }));
+		}
+	};
+
+	const tools = [
+		{
+			name: "list_workers",
+			description: "List the workers that exist right now: name, model, working directory, whether they are busy, and when they were last active. Use this before guessing whether a worker exists.",
+			inputSchema: { type: "object", properties: {}, additionalProperties: false },
+			run: (_args, { session }) => {
+				const all = registry.list();
+				const active = session.worker;
+				const text = all.length
+					? all.map((w) => describe(w, active)).join("\n")
+					: "no workers";
+				return {
+					kind: "workersListed",
+					text,
+					data: { workers: all.map(publicWorker), active }
+				};
+			}
+		},
+
+		{
+			name: "spawn_worker",
+			description: "Create a new worker and switch the conversation to it in one step. The user is talking to the new worker when this returns. Fails if the name is taken or the model is unknown.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					name: { type: "string", description: "What the user called it, as spoken." },
+					model: { type: "string", description: `Which model to run: ${MODEL_LIST}. Omit to use the default.` },
+					cwd: { type: "string", description: "Absolute path the worker works in. Omit to inherit the default." },
+					prompt: { type: "string", description: "Optional first instruction to give the worker." }
+				},
+				required: ["name"],
+				additionalProperties: false
+			},
+			run: async (args, { session }) => {
+				const name = str(args.name, "name");
+				const model = optStr(args.model, "model");
+				const cwd = optStr(args.cwd, "cwd");
+				const prompt = optStr(args.prompt, "prompt");
+
+				const worker = registry.create({ name, model, cwd });
+				try {
+					const started = await engine.start(worker, { prompt });
+					if (started?.engineSessionId) registry.touch(worker, { engineSessionId: started.engineSessionId });
+				} catch (e) {
+					// The record must not outlive a failed start, or the name is
+					// taken by something that does not exist and the next attempt
+					// fails with the wrong reason.
+					registry.remove(worker.name);
+					log?.error(`spawn ${worker.name}: engine start failed: ${e.stack || e.message}`);
+					throw new ToolError(`could not start ${worker.name}`);
+				}
+
+				const active = setActive(session, worker);
+				return {
+					kind: "workerSpawned",
+					text: `${worker.name} is running ${worker.model} in ${worker.cwd}. You are now talking to ${worker.name}.`,
+					data: { worker: publicWorker(worker), active }
+				};
+			}
+		},
+
+		{
+			name: "switch_worker",
+			description: "Make an existing worker the one the user is talking to. Their transcript continues where it left off.",
+			inputSchema: {
+				type: "object",
+				properties: { name: { type: "string", description: "The worker's spoken name." } },
+				required: ["name"],
+				additionalProperties: false
+			},
+			run: (args, { session }) => {
+				const worker = registry.require(str(args.name, "name"));
+				registry.touch(worker);
+				const active = setActive(session, worker);
+				return {
+					kind: "workerSwitched",
+					text: `Now talking to ${worker.name} (${worker.model}, ${worker.cwd}).`,
+					data: { worker: publicWorker(worker), active }
+				};
+			}
+		},
+
+		{
+			name: "end_worker",
+			description: "End a worker. Its transcript is kept but it is no longer listed and its name becomes free again.",
+			inputSchema: {
+				type: "object",
+				properties: { name: { type: "string", description: "The worker's spoken name." } },
+				required: ["name"],
+				additionalProperties: false
+			},
+			run: async (args, { session }) => {
+				const worker = registry.require(str(args.name, "name"));
+				await engine.stop(worker);
+				registry.remove(worker.name);
+
+				// Ending the worker you were talking to puts you back in front of
+				// Jarvis rather than silently in front of somebody else.
+				let active = session.worker;
+				if (active && active === worker.name) active = setActive(session, null);
+				retarget(session, worker.name, null);
+
+				return {
+					kind: "workerEnded",
+					text: `${worker.name} has ended.${active ? "" : " You are back with Jarvis."}`,
+					data: { worker: publicWorker(worker), active }
+				};
+			}
+		},
+
+		{
+			name: "read_worker",
+			description: "Read the recent exchange from another worker, to answer a question about what it is doing. Returns a few turns, oldest first.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					name: { type: "string", description: "The worker's spoken name." },
+					turns: { type: "integer", description: `How many exchanges to read. Default ${DEFAULT_READ_TURNS}, at most ${MAX_READ_TURNS}.` }
+				},
+				required: ["name"],
+				additionalProperties: false
+			},
+			run: (args, { session }) => {
+				const worker = registry.require(str(args.name, "name"));
+				const asked = optInt(args.turns, "turns") ?? DEFAULT_READ_TURNS;
+				const turns = Math.min(Math.max(1, asked), MAX_READ_TURNS);
+
+				const lines = engine.transcript(worker, turns);
+				const text = lines.length
+					? lines.map((l) => `${l.role === "user" ? "user" : worker.name}: ${l.text}`).join("\n")
+					: `${worker.name} has not said anything yet.`;
+				return {
+					kind: "workerRead",
+					text,
+					data: { worker: publicWorker(worker), turns: lines.length, active: session.worker }
+				};
+			}
+		},
+
+		{
+			name: "rename_worker",
+			description: "Give a worker a different spoken name. Fails if the new name is taken.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					name: { type: "string", description: "The worker's current name." },
+					newName: { type: "string", description: "What to call it from now on." }
+				},
+				required: ["name", "newName"],
+				additionalProperties: false
+			},
+			run: (args, { session }) => {
+				const worker = registry.require(str(args.name, "name"));
+				const wasActive = session.worker === worker.name;
+				const before = worker.name;
+				registry.rename(before, str(args.newName, "newName"));
+				const active = wasActive ? setActive(session, worker) : session.worker;
+				retarget(session, before, worker.name);
+				return {
+					kind: "workerRenamed",
+					text: `${before} is now called ${worker.name}.`,
+					data: { worker: publicWorker(worker), previousName: before, active }
+				};
+			}
+		}
+	];
+
+	const byName = new Map(tools.map((t) => [t.name, t]));
+
+	return {
+		/** What tools/list answers with — the schema half only. */
+		definitions: () => tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+		has: (name) => byName.has(name),
+		/** Run one tool. Throws ToolError for anything the user should hear. */
+		run: async (name, args, ctx) => {
+			const tool = byName.get(name);
+			if (!tool) throw new ToolError(`there is no tool called "${String(name).slice(0, 30)}"`);
+			if (args !== undefined && args !== null && (typeof args !== "object" || Array.isArray(args))) {
+				throw new ToolError("the tool arguments were not an object");
+			}
+			return await tool.run(args ?? {}, ctx);
+		}
+	};
+}
