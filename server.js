@@ -43,7 +43,7 @@ import { createWhisperClient, createNullTranscriber } from "./src/whisper.js";
 import { DEFAULT_MAX_AUDIO_BYTES } from "./src/audio.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 
 const argv = process.argv.slice(2);
 const flag = (n, d) => { const i = argv.indexOf("--" + n); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : d; };

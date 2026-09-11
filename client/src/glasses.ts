@@ -237,6 +237,35 @@ export class Glasses {
 	 * answered curtly" is known — audio/glasses.ts checks the answer of an open
 	 * and ignores the answer of a close, and says why.
 	 */
+	/**
+	 * A photograph, from the phone's own camera or its album.
+	 *
+	 * `getUserMedia` is the obvious way to read a QR code and it does not work
+	 * here: the microphone reaches us through the SDK, not through the browser,
+	 * and this WebView grants no camera to page script. The host has its own
+	 * picker, it returns base64, and the decoding is ours either way — so the
+	 * only thing that changes is where the pixels come from.
+	 *
+	 * Null when the user backs out, which is not an error and must not read as
+	 * one. Needs `camera` (or `album`) in app.json; neither needs the startup
+	 * page, because both are the phone's, not the glasses'.
+	 */
+	async captureImage(from: "camera" | "album"): Promise<string | null> {
+		if (!this.bridge) return null;
+		try {
+			const asset = await this.#call<any>(from === "album"
+				? this.bridge.pickImageFromAlbum()
+				: this.bridge.captureImageFromCamera());
+			const b64 = asset?.base64;
+			if (typeof b64 !== "string" || !b64) return null;
+			// Some hosts hand back a bare base64 payload and some a data: URL.
+			return b64.startsWith("data:") ? b64 : `data:${asset.mimeType || "image/jpeg"};base64,${b64}`;
+		} catch (e) {
+			this.error = (e as Error)?.message ?? String(e);
+			return null;
+		}
+	}
+
 	async audioControl(open: boolean, source: string): Promise<boolean> {
 		if (!this.bridge) return false;
 		try {

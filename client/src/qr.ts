@@ -71,6 +71,34 @@ export const decodeFrame = (data: Uint8ClampedArray, width: number, height: numb
 	}
 };
 
+/**
+ * Decode a still image — what the host's camera and album hand back.
+ *
+ * Drawn through an <img> and a canvas rather than decoded by hand: the host
+ * returns a JPEG, and writing a JPEG decoder to avoid one canvas would be a
+ * strange way to spend an evening.
+ */
+export const decodeImage = (dataUrl: string): Promise<string | null> => new Promise((resolve) => {
+	const img = new Image();
+	img.onload = () => {
+		try {
+			const canvas = document.createElement("canvas");
+			// A 12-megapixel photograph decoded at full size is slow enough to
+			// look like a hang. The code is large in the frame; a long edge of
+			// 1400 px is plenty, and jsQR is happier with fewer pixels.
+			const scale = Math.min(1, 1400 / Math.max(img.width, img.height));
+			canvas.width = Math.max(1, Math.round(img.width * scale));
+			canvas.height = Math.max(1, Math.round(img.height * scale));
+			const ctx = canvas.getContext("2d", { willReadFrequently: true });
+			if (!ctx) return resolve(null);
+			ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+			resolve(decodeFrame(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height));
+		} catch { resolve(null); }
+	};
+	img.onerror = () => resolve(null);
+	img.src = dataUrl;
+});
+
 export type ScannerOptions = {
 	video: HTMLVideoElement;
 	canvas: HTMLCanvasElement;

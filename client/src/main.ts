@@ -6,13 +6,23 @@
 // changes the store, the store repaints both faces from the same frame.
 
 import { pcmToBase64, Voice } from "./audio/voice.ts";
-import { Scanner, settingsFromScan } from "./qr.ts";
+import { decodeImage, Scanner, settingsFromScan } from "./qr.ts";
+
+/** What a scanned code does, wherever the pixels came from. Straight into the
+ *  path the ?token= link already uses: scanning is an input device, not a
+ *  second way of being configured. */
+const applyScan = (text: string): void => {
+	const read = settingsFromScan(text);
+	if (!read.ok) { companion.note(read.error); return; }
+	companion.note(`Scanned ${read.host}. Connecting…`);
+	void applySettings({ server: read.settings.server, token: read.settings.token });
+};
 
 /** The camera, while it is reading a code. Null the rest of the time — a
  *  scanner left alive is a camera light left on. */
 let scanner: Scanner | null = null;
 import { Connection, wsUrlFrom } from "./connection.ts";
-import { Glasses } from "./glasses.ts";
+import { Glasses, hasHostChannel } from "./glasses.ts";
 import { renderLens } from "./lens/render.ts";
 import type { LensFrame } from "./lens/render.ts";
 import { Store } from "./state.ts";
@@ -124,6 +134,21 @@ const companion = new Companion(root, {
 	setMode: (mode) => { connection?.control(CONTROL.SET_MODE, { mode }); },
 
 	scanQr: (ui) => {
+		// In the Even app, page script has no camera: the microphone reaches us
+		// through the SDK and getUserMedia is not granted at all. The host has
+		// its own picker, so there the code is photographed and decoded; only a
+		// real browser gets the live scanner.
+		if (hasHostChannel()) {
+			void (async () => {
+				companion.note("Opening the camera…");
+				const image = await glasses.captureImage("camera");
+				if (!image) { companion.note("No picture taken."); return; }
+				const text = await decodeImage(image);
+				if (!text) { companion.note("No QR code in that picture. Try again, closer."); return; }
+				applyScan(text);
+			})();
+			return;
+		}
 		scanner?.stop();
 		scanner = new Scanner({
 			video: ui.video,
@@ -132,12 +157,7 @@ const companion = new Companion(root, {
 			onResult: (text) => {
 				scanner?.stop();
 				ui.show(false);
-				const read = settingsFromScan(text);
-				if (!read.ok) { companion.note(read.error); return; }
-				// Straight into the same path the ?token= link uses. Scanning is
-				// an input device, not a second way of being configured.
-				companion.note(`Scanned ${read.host}. Connecting…`);
-				void applySettings({ server: read.settings.server, token: read.settings.token });
+				applyScan(text);
 			}
 		});
 		ui.show(true);
