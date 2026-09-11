@@ -138,6 +138,14 @@ export class Connection {
 		return this.send({ type: C2S.SAY, text, origin });
 	}
 
+	/** One segment of speech — PRD 5a R5a.6. One message per segment, never a
+	 *  stream: whisper is markedly better given a whole utterance (R5a.3), and a
+	 *  segment that cannot be sent is dropped rather than queued, exactly like a
+	 *  typed line. */
+	audio(pcm: string, info: { durationMs?: number } = {}): boolean {
+		return this.send({ type: C2S.AUDIO, pcm, final: true, sampleRate: 16_000, ...info });
+	}
+
 	interrupt(): boolean { return this.send({ type: C2S.INTERRUPT }); }
 
 	control(action: string, args?: Record<string, unknown>): boolean {

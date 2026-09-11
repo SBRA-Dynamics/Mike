@@ -151,3 +151,32 @@ details.settings > summary::before { content: "⚙ "; }
 	background: #2a261c;
 	border-bottom: 1px solid var(--line);
 }
+
+/* ------------------------------------------------------------------- voice */
+/* PRD 5a. Two controls with two different promises: the switch leaves the
+   microphone open, the hold opens it for exactly as long as it is held. The
+   hold is never disabled — in PushToTalk it is the only way to speak a mode
+   command back out again (R5a.4). */
+
+.voice {
+	display: flex; gap: 8px; align-items: center;
+	padding: 10px 14px 0;
+	background: var(--surface);
+}
+.voice button { flex: none; }
+.voice button.mic.on { background: #2f5d3c; border-color: #3d7a4f; }
+.voice button.mic.denied { background: #4a2626; border-color: #7a3d3d; color: var(--error); }
+/* Held reads as ON AIR: this is the one control whose current state the user
+   has to be able to see without hearing anything back. */
+.voice button.talk.held { background: #5d2f2f; border-color: #a04b4b; color: #ffd7d7; }
+.voice .voicenote {
+	flex: 1; min-width: 0;
+	overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.chip.listening.live { color: var(--lens); border-color: #1d4a2b; }
+/* A quiet pulse while somebody is actually talking into it, so "listening" and
+   "hearing something right now" are not the same picture. */
+.chip.listening.speaking { background: #143020; }
+
+.settings .modenote { margin-top: -4px; }

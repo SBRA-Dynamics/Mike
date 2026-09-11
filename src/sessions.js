@@ -56,6 +56,27 @@ export class Session {
 		return seq;
 	}
 
+	/**
+	 * Send to every attached connection, and forget it.
+	 *
+	 * No sequence number, no transcript line, no replay — the opposite of
+	 * emit() in every way that matters. It exists for the messages an always-on
+	 * microphone produces by the dozen (PRD 5a): in Ignore mode every overheard
+	 * sentence in the room would otherwise write `heard`, `notHeard` and a
+	 * `state` into the durable transcript, which is a disk problem and, with
+	 * speech in it, a worse one than that.
+	 *
+	 * The rule for choosing: is this a fact about the conversation, or a fact
+	 * about this moment on this screen? Words that reached a model are the
+	 * first; words the gate threw away are the second.
+	 */
+	transient(message) {
+		for (const ws of [...this.sockets]) {
+			try { ws.send(JSON.stringify(message)); }
+			catch { this.sockets.delete(ws); }
+		}
+	}
+
 	/** Everything after `from`, for a reconnecting client. */
 	replay(from) {
 		return this.recent.filter((e) => e.seq > from).map((e) => e.msg);

@@ -5,6 +5,7 @@
 // the connection is opened with. Everything after that is one loop — a message
 // changes the store, the store repaints both faces from the same frame.
 
+import { pcmToBase64, Voice } from "./audio/voice.ts";
 import { Connection, wsUrlFrom } from "./connection.ts";
 import { Glasses } from "./glasses.ts";
 import { renderLens } from "./lens/render.ts";
@@ -12,7 +13,7 @@ import type { LensFrame } from "./lens/render.ts";
 import { Store } from "./state.ts";
 import type { AppState } from "./state.ts";
 import { CONTROL } from "./protocol.ts";
-import { MODES, MODE_LABEL } from "../../src/routing.js";
+import { DEFAULT_MODE, MODES, MODE_LABEL } from "../../src/routing.js";
 import { SettingsStore, browserStorage, bridgeStorage, readUrlSettings, scrubUrl } from "./settings.ts";
 import { Companion } from "./ui/companion.ts";
 
@@ -33,10 +34,36 @@ const lensStatus = (s: AppState): string | null => {
 	// and it is the only status that carries a name worth acting on.
 	const waiting = store.notice();
 	if (waiting) return waiting;
-	if (s.busy) return "thinking";
+	// R5a.8: idle, listening, heard, thinking — on the lens this is one short
+	// line sharing the slot the background notices use. "heard" is shown as the
+	// state rather than the words: the fifty-column line has no room for a
+	// sentence, and the companion shows the sentence.
+	const listening = store.listening();
+	if (listening === "thinking") return "thinking";
+	if (listening === "heard") return "heard";
+	// The mode matters more than "listening" when it is not the default one:
+	// paused is what the user most needs to know, and hold-to-talk explains why
+	// nothing is happening when they speak.
 	if (s.mode === MODES.IGNORE) return MODE_LABEL[MODES.IGNORE];
+	if (listening === "listening") return s.voice?.held ? "held" : "listening";
+	// R5a.4: a mode other than the default is shown on the lens, because "a mode
+	// the user cannot see is a mode they will be surprised by". The default one
+	// is not: it would spend the status line on the ordinary case.
+	if (s.mode !== DEFAULT_MODE) return MODE_LABEL[s.mode] ?? s.mode;
 	return null;
 };
+
+/** The microphone and everything the addressing mode does with it — PRD 5a.
+ *  Built before the glasses, because the touchpad's hold routes into it. */
+const voice = new Voice({
+	// One message per segment. `connection` may be null (the page has not
+	// connected yet, or the token is missing), and a segment that cannot be sent
+	// is dropped with a note rather than queued — an utterance that arrives four
+	// minutes late lands in a conversation that has moved on.
+	send: (pcm, info) => connection?.audio(pcmToBase64(pcm), { durationMs: info.durationMs }) ?? false,
+	onChange: (status) => store.setVoice(status),
+	onNote: (text) => companion.note(text)
+});
 
 const glasses = new Glasses({
 	onGesture: (g) => {
@@ -53,13 +80,18 @@ const glasses = new Glasses({
 				return;
 			case "doubleTap": return;   // the exit dialog is the SDK's, not ours
 			case "holdStart":
+				// R4.3 reserves the hold for push-to-talk, and R5a.4 makes it
+				// unconditional: no page state, no active worker and no connection
+				// status may stop it, because in PushToTalk it is the only way to
+				// speak a mode command back out again.
+				//
+				// In this phase it opens the BROWSER's microphone, which is what
+				// the phone has. PRD 5b swaps in the glasses' own, and nothing
+				// downstream of the segment changes.
+				void voice.holdStart();
+				return;
 			case "holdEnd":
-				// R4.3 reserves the hold for push-to-talk. PRD 5's PushToTalk mode
-				// captures exactly the span between these two, so they are routed
-				// and named here rather than being a gap to find later. They reach
-				// this point unconditionally — no page state, no active worker and
-				// no connection status gates them — because in that mode the hold
-				// is the only way to speak a mode command back out again.
+				voice.holdEnd();
 				return;
 		}
 	},
@@ -81,7 +113,12 @@ const companion = new Companion(root, {
 	whoIs: () => { connection?.control(CONTROL.WHO_IS, {}); },
 	reconnect: () => { connection?.poke("manual"); },
 	newSession: () => { void newSession(); },
-	saveSettings: (patch) => { void applySettings(patch); }
+	saveSettings: (patch) => { void applySettings(patch); },
+	// R5a.1: the microphone is asked for when the user turns it on, never at
+	// page load. This is the only path to getUserMedia in the client.
+	setMic: (on) => { void voice.setEnabled(on); },
+	holdStart: () => { void voice.holdStart(); },
+	holdEnd: () => { voice.holdEnd(); }
 });
 
 // ------------------------------------------------------------------ painting
@@ -109,15 +146,23 @@ let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 const paint = (): void => {
 	const s = store.state;
 	frame = renderLens({ from: s.lens.from, text: s.lens.text, status: lensStatus(s), page: s.lens.page });
-	companion.render(s, frame);
+	companion.render(s, frame, store.listening());
 	glasses.show(frame.content);
 
 	if (expiryTimer) { clearTimeout(expiryTimer); expiryTimer = null; }
-	const due = store.nextNoticeExpiry();
-	if (due !== null) expiryTimer = setTimeout(() => { expiryTimer = null; paint(); }, due + 50);
+	// Two things fade on their own now: a background notice and "heard". The
+	// nearer of the two decides when to repaint, so neither is left on screen
+	// after it stopped being true.
+	const due = [store.nextNoticeExpiry(), store.nextListeningExpiry()].filter((v): v is number => v !== null);
+	if (due.length) expiryTimer = setTimeout(() => { expiryTimer = null; paint(); }, Math.min(...due) + 50);
 };
 
 store.subscribe(() => repaint());
+
+// The mode is the server's to decide — it can be changed by speaking, from
+// another device, or by the picker here — and the microphone has to follow it:
+// switching into PushToTalk closes the microphone, and out of it opens one.
+store.subscribe((s) => { if (s.mode !== voice.mode) void voice.setMode(s.mode); });
 
 // ---------------------------------------------------------------- connecting
 
@@ -193,6 +238,26 @@ const start = async (): Promise<void> => {
 	companion.fillSettings(settingsStore.value.server, settingsStore.value.token);
 	openConnection();
 	companion.focusInput();
+};
+
+/**
+ * A read-only window onto the running client.
+ *
+ * It exists because some of what this phase promises is not visible in the DOM:
+ * how many microphone tracks the page is holding open is the difference between
+ * PushToTalk keeping its promise and only claiming to (R5a.4), and a test that
+ * asserted it from a button's colour would pass with the microphone on. Reading
+ * only, and nothing here changes anything.
+ */
+(globalThis as unknown as { jarvis: unknown }).jarvis = {
+	state: () => store.state,
+	listening: () => store.listening(),
+	voice: () => voice.status,
+	/** Live microphone tracks this page holds. Zero is the whole promise of
+	 *  PushToTalk when the control is not held. */
+	tracks: () => voice.mic.liveTracks,
+	mic: () => ({ state: voice.mic.state, detail: voice.mic.detail, levelDb: Math.round(voice.mic.levelDb), ...voice.mic.stats }),
+	connection: () => (connection ? { status: connection.status, detail: connection.detail, ...connection.stats } : null)
 };
 
 // R4.5: a backgrounded WebView's socket is usually gone by the time it comes

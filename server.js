@@ -39,6 +39,8 @@ import { createMcpServer } from "./src/mcp.js";
 import { isKnownModel, MODEL_LIST, resolveModel } from "./src/models.js";
 import { createJarvis, DEFAULT_CONTEXT_TURNS, DEFAULT_CONTEXT_BUDGET_TOKENS } from "./src/jarvis.js";
 import { DEFAULT_MODE, isMode, MODES } from "./src/routing.js";
+import { createWhisperClient, createNullTranscriber } from "./src/whisper.js";
+import { DEFAULT_MAX_AUDIO_BYTES } from "./src/audio.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VERSION = "0.1.0";
@@ -74,6 +76,9 @@ if (has("help")) {
   --context-budget <n> token budget for that quote (default 1200)
   --turn-timeout <ms>  how long one model turn may take (default 600000)
   --mode <m>           addressing mode for a fresh session (default byname)
+  --whisper <url|off>  the transcription service (default http://127.0.0.1:3461)
+  --whisper-timeout <ms>  how long one transcription may take (default 20000)
+  --audio-max-bytes <n>   biggest accepted audio segment (default 1000000)
   --help
 `);
 	process.exit(0);
@@ -119,6 +124,14 @@ const config = {
 	contextBudget: parseInt(flag("context-budget", process.env.JARVIS_CONTEXT_BUDGET ?? String(DEFAULT_CONTEXT_BUDGET_TOKENS)), 10),
 	turnTimeoutMs: parseInt(flag("turn-timeout", process.env.JARVIS_TURN_TIMEOUT ?? "600000"), 10),
 	defaultMode: flag("mode", process.env.JARVIS_MODE || DEFAULT_MODE),
+
+	// PRD 5a. The service is a separate process on loopback (see
+	// services/whisper/serve.py); this is where it is, not something this
+	// process starts. `off` is a real configuration: a server with no GPU
+	// behind it should still run, and say plainly that it cannot hear.
+	whisper: flag("whisper", process.env.JARVIS_WHISPER || "http://127.0.0.1:3461"),
+	whisperTimeoutMs: parseInt(flag("whisper-timeout", process.env.JARVIS_WHISPER_TIMEOUT ?? "20000"), 10),
+	audioMaxBytes: parseInt(flag("audio-max-bytes", process.env.JARVIS_AUDIO_MAX_BYTES ?? String(DEFAULT_MAX_AUDIO_BYTES)), 10),
 	version: VERSION
 };
 config.jarvisCwd = config.jarvisCwd || config.workerCwd;
@@ -136,7 +149,9 @@ if (!isKnownModel(config.jarvisModel)) { log.error(`--jarvis-model "${config.jar
 if (!isMode(config.defaultMode)) { log.error(`--mode must be one of ${Object.values(MODES).join(", ")}`); process.exit(1); }
 if (!["jarvis", "echo"].includes(config.handler)) { log.error(`--handler must be jarvis or echo`); process.exit(1); }
 if (!["claude", "stub"].includes(config.engine)) { log.error(`--engine must be claude or stub`); process.exit(1); }
-for (const [name, v] of [["--context-turns", config.contextTurns], ["--context-budget", config.contextBudget], ["--turn-timeout", config.turnTimeoutMs]]) {
+if (config.whisper !== "off" && !/^https?:\/\//.test(config.whisper)) { log.error(`--whisper must be a URL or "off", got "${config.whisper}"`); process.exit(1); }
+for (const [name, v] of [["--context-turns", config.contextTurns], ["--context-budget", config.contextBudget], ["--turn-timeout", config.turnTimeoutMs],
+	["--whisper-timeout", config.whisperTimeoutMs], ["--audio-max-bytes", config.audioMaxBytes]]) {
 	if (!Number.isInteger(v) || v <= 0) { log.error(`${name} must be a positive number`); process.exit(1); }
 }
 
@@ -179,9 +194,19 @@ const jarvis = createJarvis({
 // long, and it borrows nothing from the engine but the binary.
 const classifier = config.engine === "stub" ? null : createClassifier({ cli: createClaudeRunner({ bin: config.claudeBin, log }), log });
 
+// ---------------------------------------------------------------- listening
+// PRD 5a R5a.5. Built either way, because the client decides when to open a
+// microphone and the answer to "can you hear me" has to be a sentence rather
+// than a crash. Whether the service is actually up is asked below, once, for
+// the log — never per utterance, which would put a round trip in front of
+// every segment.
+const transcriber = config.whisper === "off"
+	? createNullTranscriber()
+	: createWhisperClient({ url: config.whisper, log, timeoutMs: config.whisperTimeoutMs });
+
 const handler = config.handler === "echo"
-	? createEchoHandler({ log })
-	: createJarvisHandler({ classifier, log, jarvis, registry, engine });
+	? createEchoHandler({ log, transcriber, audioMaxBytes: config.audioMaxBytes })
+	: createJarvisHandler({ classifier, log, jarvis, registry, engine, transcriber, audioMaxBytes: config.audioMaxBytes });
 
 // ----------------------------------------------------------------- TLS certs
 // Re-read on mtime change so a certbot renewal lands without a restart
@@ -276,6 +301,9 @@ const onRequest = (req, res) => {
 			// Enough to tell, from outside, which build is running and whether
 			// Jarvis is the same conversation he was before the restart (R3.7).
 			handler: config.handler, engine: engine.name,
+			// Enough for an operator to tell "it cannot hear" from "it did not
+			// understand" without reading the log.
+			transcription: { service: transcriber.name, url: transcriber.url, maxBytes: config.audioMaxBytes },
 			jarvis: { sessionId: jarvis.sessionId, model: jarvis.model, turns: jarvis.turns }
 		});
 		res.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) });
@@ -341,6 +369,14 @@ server.listen(config.port, config.host, () => {
 	log.info(`workers: default model ${config.workerModel}, default cwd ${config.workerCwd}`);
 	log.info(`handler ${config.handler}, engine ${engine.name} (${config.claudeBin}), jarvis ${config.jarvisModel} session ${jarvis.sessionId.slice(0, 8)} cwd ${config.jarvisCwd}`);
 	log.info(`routing: default mode ${config.defaultMode}, ${config.contextTurns} worker turns quoted to Jarvis`);
+	// Asked once, after the listener is up so a slow answer delays nothing.
+	// Not fatal either way: the whisper service can be started or restarted
+	// under a running server, and the next segment will simply work.
+	void transcriber.health().then((h) => {
+		if (h.ok) log.info(`whisper: ${h.model ?? "?"} on ${h.device ?? "?"} at ${transcriber.url}`);
+		else if (config.whisper === "off") log.warn("whisper: off — spoken input will be refused with a message");
+		else log.warn(`whisper: ${transcriber.url} is not answering (${h.error}) — spoken input will say so until it is`);
+	});
 	if (tokenWasGenerated) log.info(`token (generated): ${config.token}`);
 	if (scheme === "http") log.warn("no --cert/--key: serving plain HTTP");
 });

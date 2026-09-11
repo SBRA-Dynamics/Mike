@@ -10,7 +10,7 @@ export const PROTOCOL_VERSION = 1;
 export const C2S = {
 	HELLO: "hello",         // { protocol, token, sessionId?, resumeFrom? }
 	SAY: "say",             // { text, origin? }
-	AUDIO: "audio",         // { pcm, final }            (PRD 5a)
+	AUDIO: "audio",         // { pcm, final, sampleRate?, durationMs? }  (PRD 5a)
 	INTERRUPT: "interrupt", // {}
 	CONTROL: "control"      // { action, args }
 };
@@ -28,7 +28,7 @@ export const CONTROL = {
 	// PRD 3. These are conversation-level, so the transport passes them through
 	// to the handler rather than answering them itself — but they live here
 	// because R1.6 says one shared schema file, and the client imports this one.
-	SET_MODE: "setMode",            // { mode: "ignore" | "byname" | "always" }
+	SET_MODE: "setMode",            // { mode: "ignore" | "byname" | "always" | "pushtotalk" }
 	SWITCH_WORKER: "switchWorker",  // { name } or { name: null } to go back to Jarvis
 	WHO_IS: "whoIs"                 // { name? } -> the worker's Claude Code session id
 };
@@ -52,6 +52,16 @@ export const CLOSE = {
 };
 
 const isStr = (v) => typeof v === "string";
+
+/** The one audio format on the wire — 16 kHz, signed 16-bit little-endian,
+ *  mono. Chosen in R5a.1 so the glasses frames of PRD 5b need no conversion. */
+export const AUDIO_SAMPLE_RATE = 16_000;
+export const AUDIO_BYTES_PER_SAMPLE = 2;
+
+/** Base64 characters, so it can be checked before decoding: 2 MB of base64 is
+ *  ~1.5 MB of PCM, about 47 seconds. Also comfortably inside the WebSocket's
+ *  own 4 MB maxPayload, so the two limits cannot disagree. */
+export const MAX_AUDIO_BASE64 = 2_000_000;
 
 // A sessionId becomes a filename. "type is string" is not validation: a client
 // sending "../../../x" made the server write outside its data directory, which
@@ -93,6 +103,21 @@ export function validateC2S(raw) {
 
 		case C2S.AUDIO:
 			if (!isStr(raw.pcm)) return { ok: false, error: "audio needs base64 pcm" };
+			// R5a.6: a segment is bounded on the server as well as in the client,
+			// because an unbounded audio message is a way to fill a disk. This is
+			// the outer wall — a length check on the string, before anything
+			// allocates a buffer from it — and the handler applies the (smaller)
+			// configured limit to the decoded bytes. The client's own maximum
+			// segment is 15 s; this allows three times that, so a legitimate
+			// segment is never refused here and an abusive one never gets far.
+			if (raw.pcm.length > MAX_AUDIO_BASE64) return { ok: false, error: "audio segment too long" };
+			// The pipeline is 16 kHz s16le mono from both sources (R5a.1, R5b.1).
+			// A client that resampled to something else is a bug worth naming
+			// rather than a stream to transcribe at the wrong speed.
+			if (raw.sampleRate !== undefined && raw.sampleRate !== AUDIO_SAMPLE_RATE) {
+				return { ok: false, error: `audio must be ${AUDIO_SAMPLE_RATE} Hz` };
+			}
+			if (raw.final !== undefined && typeof raw.final !== "boolean") return { ok: false, error: "final must be a boolean" };
 			return { ok: true, msg: raw };
 
 		case C2S.INTERRUPT:

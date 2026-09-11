@@ -11,53 +11,14 @@
 // completes under it and the page is photographed mid-connect. Here the page
 // runs in real time and is asked questions.
 
-import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 
 import { startServer, check, failed, section, sleep, ROOT } from "./harness.mjs";
+import { launchChrome, CHROME } from "./chrome.mjs";
 import { renderLens } from "../client/src/lens/render.ts";
 
-/** Whichever Chrome this machine has. Named rather than assumed, so a missing
- *  browser is a clear message instead of an ENOENT twenty lines down. */
-const CHROME = ["google-chrome", "google-chrome-stable", "chromium"]
-	.find((bin) => spawnSync(bin, ["--version"], { encoding: "utf8" }).status === 0);
-
-let chrome = null;
-let profile = null;
-let ws = null;
-let nextId = 1;
-const pending = new Map();
-const consoleErrors = [];
-
-/** One DevTools call. */
-const cdp = (method, params = {}) => new Promise((resolve, reject) => {
-	const id = nextId++;
-	pending.set(id, { resolve, reject });
-	ws.send(JSON.stringify({ id, method, params }));
-	setTimeout(() => { if (pending.delete(id)) reject(new Error(`${method} svarade inte`)); }, 10_000);
-});
-
-/** Evaluate an expression in the page and get the value back. */
-const evaluate = async (expression) => {
-	const r = await cdp("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
-	if (r.exceptionDetails) throw new Error(`sidan kastade: ${r.exceptionDetails.text} ${r.exceptionDetails.exception?.description ?? ""}`);
-	return r.result?.value;
-};
-
-const waitFor = async (expression, ms, label) => {
-	const until = Date.now() + ms;
-	let last;
-	while (Date.now() < until) {
-		last = await evaluate(expression);
-		if (last) return last;
-		await sleep(200);
-	}
-	throw new Error(`tiden gick ut medan vi väntade på ${label} (senast: ${JSON.stringify(last)})`);
-};
-
+let browser = null;
 const servers = [];
 
 try {
@@ -71,43 +32,10 @@ try {
 
 	// ----------------------------------------------------------------- chrome
 	section("skrivbordet: serverns adress i en vanlig webbläsare (krav 1)");
-	profile = mkdtempSync(join(tmpdir(), "jarvis-chrome-"));
-	chrome = spawn(CHROME, [
-		"--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
-		// Port 0: Chrome writes the one it actually took into the profile, so
-		// nothing here is a guess.
-		"--remote-debugging-port=0", `--user-data-dir=${profile}`, url
-	], { stdio: ["ignore", "pipe", "pipe"] });
-
-	let debugPort = 0;
-	const portFile = join(profile, "DevToolsActivePort");
-	for (let i = 0; i < 100 && !debugPort; i++) {
-		try { debugPort = Number(readFileSync(portFile, "utf8").split("\n")[0]); } catch { await sleep(100); }
-	}
-	check("webbläsaren startade", debugPort > 0, String(debugPort));
-
-	const targets = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json();
-	const page = targets.find((t) => t.type === "page" && t.url.startsWith(`http://127.0.0.1:${server.port}`));
-	check("sidan laddades från servern, inte från någon annanstans", !!page, JSON.stringify(targets.map((t) => t.url)));
-
-	ws = new WebSocket(page.webSocketDebuggerUrl);
-	await new Promise((resolve, reject) => {
-		ws.addEventListener("open", resolve);
-		ws.addEventListener("error", () => reject(new Error("kunde inte tala med webbläsaren")));
-	});
-	ws.addEventListener("message", (e) => {
-		const m = JSON.parse(e.data);
-		if (m.id && pending.has(m.id)) {
-			const { resolve, reject } = pending.get(m.id);
-			pending.delete(m.id);
-			return m.error ? reject(new Error(m.error.message)) : resolve(m.result);
-		}
-		if (m.method === "Runtime.exceptionThrown") consoleErrors.push(m.params.exceptionDetails?.text ?? "exception");
-		if (m.method === "Runtime.consoleAPICalled" && m.params.type === "error") {
-			consoleErrors.push(m.params.args.map((a) => a.value ?? a.description).join(" "));
-		}
-	});
-	await cdp("Runtime.enable");
+	browser = await launchChrome(url);
+	const { evaluate, waitFor, consoleErrors } = browser;
+	check("webbläsaren startade och sidan kom från servern, inte från någon annanstans",
+		browser.page.url.startsWith(`http://127.0.0.1:${server.port}`), browser.page.url);
 
 	// ------------------------------------------------------------------ state
 	await waitFor(`document.querySelectorAll(".lens .row").length === 10`, 15_000, "linsrutan");
@@ -168,11 +96,9 @@ try {
 	console.error("\ntestriggen kraschade:", err.stack || err.message);
 	check("testriggen överlevde", false, err.message);
 } finally {
-	try { ws?.close(); } catch { }
-	try { chrome?.kill("SIGKILL"); } catch { }
+	try { browser?.close(); } catch { }
 	await sleep(300);
 	for (const s of servers) { try { s.stop(); } catch { } }
-	if (profile) { try { rmSync(profile, { recursive: true, force: true }); } catch { } }
 }
 
 console.log(failed() === 0 ? "\nPASS\n" : `\nFAIL (${failed()})\n`);

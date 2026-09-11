@@ -1,0 +1,34 @@
+[Unit]
+# PRD 5a R5a.5. Install:
+#   sudo cp ~/jarvis/services/whisper/jarvis-whisper.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now jarvis-whisper
+#
+# The Jarvis server defaults to http://127.0.0.1:3461 for transcription, which
+# is the port below. Neither one starts the other: the model takes a couple of
+# seconds to load and should outlive a server restart, and a server whose ears
+# are not up says so in one line rather than refusing to run.
+Description=Jarvis transcription service (whisper on the GPU)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=robin
+Group=robin
+WorkingDirectory=/home/robin/jarvis
+Environment=HOME=/home/robin
+# The venv built the way services/whisper/serve.py documents. cuBLAS and cuDNN
+# come from pip inside it and are loaded by the service itself, so there is no
+# LD_LIBRARY_PATH to keep in sync here.
+ExecStart=/home/robin/.local/share/jarvis/venv/bin/python /home/robin/jarvis/services/whisper/serve.py \
+  --port 3461 --host 127.0.0.1
+Restart=always
+RestartSec=5
+# Loading a model and touching the GPU takes a few seconds; stopping is instant.
+TimeoutStartSec=120
+TimeoutStopSec=15
+StandardOutput=append:/home/robin/jarvis-whisper.log
+StandardError=append:/home/robin/jarvis-whisper.log
+
+[Install]
+WantedBy=multi-user.target

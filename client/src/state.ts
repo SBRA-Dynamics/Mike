@@ -7,6 +7,7 @@
 // SDK.
 
 import { MODE_LABEL, MODES } from "../../src/routing.js";
+import type { VoiceStatus } from "./audio/voice.ts";
 import type { ConnectionStatus } from "./connection.ts";
 import type { EventMsg, ReadyMsg, SeqMsg, WorkerInfo } from "./protocol.ts";
 
@@ -41,6 +42,14 @@ export type AppState = {
 	/** Workers that have spoken while the user was with somebody else. A reply
 	 *  from one of them is a notice, not the conversation — see `notice()`. */
 	pending: Pending[];
+	/** The microphone, as the capture layer last reported it (PRD 5a). Null
+	 *  before voice is wired up, which is also what a build with no microphone
+	 *  support would look like. */
+	voice: VoiceStatus | null;
+	/** The last thing the server said it heard, and when. Kept out of the
+	 *  transcript entry so the indicator can expire it without touching the
+	 *  conversation (R5a.8). */
+	heard: { text: string; confidence: number | null; at: number } | null;
 };
 
 export type Pending = {
@@ -52,6 +61,18 @@ export type Pending = {
 /** How long a "said something" notice stays before it fades. Long enough to
  *  look up from what you are doing, short enough not to become wallpaper. */
 export const NOTICE_MS = 8000;
+
+/** How long "heard" stays up before the indicator falls back to listening or
+ *  idle — R5a.8's four states are idle, listening, heard, thinking, and `heard`
+ *  is the only one of them that is a moment rather than a condition. Long
+ *  enough to read a sentence back, short enough that it is gone before the
+ *  answer needs the row. */
+export const HEARD_MS = 3000;
+
+/** What the user is told is happening, in the order that matters when two are
+ *  true at once. Thinking outranks heard: once a turn has started, that the
+ *  words were understood is settled. */
+export type ListeningState = "idle" | "listening" | "heard" | "thinking";
 
 /** How many lines of transcript the companion keeps. A phone that has been
  *  open all day should not hold a week of conversation in memory. */
@@ -73,7 +94,9 @@ export class Store {
 		lens: { from: JARVIS, text: "Connecting…", page: 0 },
 		pending: [],
 		glasses: "unknown",
-		sessions: []
+		sessions: [],
+		voice: null,
+		heard: null
 	};
 
 	#subs = new Set<(s: AppState) => void>();
@@ -99,6 +122,32 @@ export class Store {
 	setGlasses(glasses: AppState["glasses"]): void {
 		this.state.glasses = glasses;
 		this.notify();
+	}
+
+	setVoice(voice: VoiceStatus): void {
+		this.state.voice = voice;
+		this.notify();
+	}
+
+	/**
+	 * Which of R5a.8's four states is true — the one question the user must
+	 * always be able to answer about a voice interface.
+	 *
+	 * `now` is a parameter so the answer is a function of the state rather than
+	 * of when it happened to be asked, which is what makes it testable.
+	 */
+	listening(now = Date.now()): ListeningState {
+		if (this.state.busy) return "thinking";
+		if (this.state.heard && now - this.state.heard.at < HEARD_MS) return "heard";
+		return this.state.voice?.live ? "listening" : "idle";
+	}
+
+	/** When the "heard" indicator stops being true, so the caller can repaint
+	 *  exactly then instead of polling. Null when nothing is on a clock. */
+	nextListeningExpiry(now = Date.now()): number | null {
+		if (this.state.busy || !this.state.heard) return null;
+		const left = this.state.heard.at + HEARD_MS - now;
+		return left > 0 ? left : null;
 	}
 
 	applyReady(ready: ReadyMsg): void {
@@ -267,10 +316,22 @@ export class Store {
 			}
 
 			case "heard":
-				// PRD 5 owns what the lens does with the user's own words (the
-				// PRD's open question). Until then they are transcript only, so
-				// they cannot cost a row that the answer needs.
-				this.state.transcript.push({ seq: m.seq, from: "you", text: m.text, kind: "said", at: Date.now() });
+				// What was understood, shown as soon as it exists and before the
+				// answer (R5a.8). It stays out of the lens BODY on purpose — the
+				// lens shows the reply, and the user already knows what they said
+				// — but it drives the status line through listening() above, so
+				// "it heard me and decided I wasn't talking to it" and "it didn't
+				// hear me" look different.
+				this.state.heard = { text: m.text, confidence: m.confidence ?? null, at: Date.now() };
+				// A dropped utterance's `heard` arrives with no sequence number:
+				// the server sends it per connection rather than writing every
+				// overheard sentence into the transcript. Give it a local one, or
+				// two of them in a row look like the same entry to the companion's
+				// render memo.
+				this.state.transcript.push({
+					seq: typeof m.seq === "number" ? m.seq : -(++this.#localSeq),
+					from: "you", text: m.text, kind: "said", at: Date.now()
+				});
 				return;
 
 			case "event":

@@ -13,11 +13,20 @@
 //      no state the user can reach from which they cannot speak their way out.
 //   2. The mode gate, then the destination.
 //
-// | mode   | what is admitted                                          |
-// |--------|-----------------------------------------------------------|
-// | ignore | nothing but the mode commands (spoken input; see ORIGIN)   |
-// | byname | utterances starting with "Jarvis" or the active worker's name |
-// | always | everything                                                 |
+// | mode       | what is admitted                                          |
+// |------------|-----------------------------------------------------------|
+// | ignore     | nothing but the mode commands (spoken input; see ORIGIN)   |
+// | byname     | utterances starting with "Jarvis" or the active worker's name |
+// | always     | everything                                                 |
+// | pushtotalk | everything — but the microphone is only open while held    |
+//
+// PushToTalk is the one mode whose behaviour is a microphone decision rather
+// than a routing one (R5a.4): the hold IS the address, so what reaches this
+// file while the control is held is admitted exactly as Always admits it. The
+// difference lives in the client, which keeps the microphone closed the rest of
+// the time — and that is the whole reason the mode exists, so nothing here may
+// second-guess it. A prefix still overrides during a hold, because stripAddress
+// runs before the verbatim fallthrough for every mode.
 //
 // and an admitted utterance goes to Jarvis if it named him, otherwise to the
 // active worker, otherwise to Jarvis (PRD 3's three rules).
@@ -34,7 +43,7 @@
 
 import { normalizeName } from "./names.js";
 
-export const MODES = { IGNORE: "ignore", BYNAME: "byname", ALWAYS: "always" };
+export const MODES = { IGNORE: "ignore", BYNAME: "byname", ALWAYS: "always", PUSHTOTALK: "pushtotalk" };
 
 /** Where an utterance came from. The addressing mode exists to filter AMBIENT
  *  SPEECH — the wearer talking to someone else in a kitchen — and typing has no
@@ -59,7 +68,10 @@ export const isMode = (v) => Object.values(MODES).includes(v);
 export const MODE_LABEL = {
 	[MODES.IGNORE]: "paused",
 	[MODES.BYNAME]: "by name",
-	[MODES.ALWAYS]: "always"
+	[MODES.ALWAYS]: "always",
+	// Two words, because "ptt" on a lens is a thing nobody has ever read
+	// correctly the first time.
+	[MODES.PUSHTOTALK]: "hold to talk"
 };
 
 /** The name Jarvis answers to. Folded once, here, so the rest of the file can
@@ -143,7 +155,10 @@ const MODE_COMMANDS = [
 	{ to: MODES.IGNORE, re: new RegExp(`^(?:${VERB} )?(?:pause|paus|pausa|stop|stoppa|mute|tysta) (?:the )?(?:input|inputen|ingangen|lyssnandet)$`) },
 	{ to: "previous", re: new RegExp(`^(?:${VERB} )?(?:continue|resume|unpause|fortsatt|fortsatta|aterta|aterupta) (?:the )?(?:input|inputen|ingangen|lyssnandet)$`) },
 	{ to: MODES.ALWAYS, re: new RegExp(`^(?:${VERB} )?(?:the )?input (?:to|till) (?:always|alltid|allt)$`) },
-	{ to: MODES.BYNAME, re: new RegExp(`^(?:${VERB} )?(?:the )?input (?:to|till) (?:by ?name|byname|via namn|namn)$`) }
+	{ to: MODES.BYNAME, re: new RegExp(`^(?:${VERB} )?(?:the )?input (?:to|till) (?:by ?name|byname|via namn|namn)$`) },
+	// "håll in" folds to "hall in", and a hyphenated "push-to-talk" folds to
+	// three words — so the optional spaces cover the written form too.
+	{ to: MODES.PUSHTOTALK, re: new RegExp(`^(?:${VERB} )?(?:the )?input (?:to|till) (?:push ?to ?talk|hall in|halla in|hall inne|tryck och tala)$`) }
 ];
 
 /**
