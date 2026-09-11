@@ -1,0 +1,32 @@
+[Unit]
+# PRD 1 R1.8. Install:
+#   sudo cp ~/jarvis/jarvis-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now jarvis-server
+Description=Jarvis server (transport, sessions, client hosting)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=robin
+Group=robin
+WorkingDirectory=/home/robin/jarvis
+# systemd starts with a bare PATH. node lives under nvm, and later phases spawn
+# claude from ~/.local/bin; both have to be spelled out.
+Environment=PATH=/home/robin/.nvm/versions/node/v24.16.0/bin:/home/robin/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=/home/robin
+# Token from a root-only file: never on the command line, where ps exposes it
+# to every user on the machine.
+EnvironmentFile=/etc/jarvis.env
+ExecStart=/home/robin/.nvm/versions/node/v24.16.0/bin/node /home/robin/jarvis/server.js \
+  --port 3470 --host 127.0.0.1
+Restart=always
+RestartSec=5
+# A real file, never an inherited tty. A previous server wrote 69 GB of one
+# stacktrace after its terminal closed, because every console.log then threw
+# EIO into an uncaught handler and requests silently stopped completing.
+StandardOutput=append:/home/robin/jarvis-server.log
+StandardError=append:/home/robin/jarvis-server.log
+
+[Install]
+WantedBy=multi-user.target

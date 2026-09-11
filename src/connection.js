@@ -4,7 +4,7 @@
 // disposable and a session is not — nothing here may own conversation state,
 // and a socket dying must never disturb work in flight.
 
-import { C2S, CLOSE, PROTOCOL_VERSION, msg, validateC2S } from "./protocol.js";
+import { C2S, CLOSE, CONTROL, PROTOCOL_VERSION, msg, validateC2S } from "./protocol.js";
 
 /** A connection must say hello before anything else, and quickly. */
 const HELLO_TIMEOUT_MS = 10_000;
@@ -56,6 +56,8 @@ export function attachConnection({ ws, req, store, config, handler, log }) {
 		}
 		if (!session) return fail(CLOSE.BAD_PROTOCOL, "say hello first");
 
+		if (m.type === C2S.CONTROL && handleTransportControl(m)) return;
+
 		try {
 			await handler.onMessage(session, m, { peer });
 		} catch (e) {
@@ -80,7 +82,12 @@ export function attachConnection({ ws, req, store, config, handler, log }) {
 		session.attach(ws);
 		ws.sessionId = session.id;
 
-		const from = Number.isInteger(m.resumeFrom) ? m.resumeFrom : 0;
+		// No cursor means "I have nothing and want nothing replayed" — a fresh
+		// client asks for history explicitly. Treating it as 0 replayed the whole
+		// buffer to every new connection, which is both surprising and the reason
+		// the test suite was non-deterministic.
+		const asked = Number.isInteger(m.resumeFrom);
+		const from = asked ? m.resumeFrom : session.seq;
 		const gapped = session.replayGap(from);
 		const missed = gapped ? [] : session.replay(from);
 
@@ -90,7 +97,7 @@ export function attachConnection({ ws, req, store, config, handler, log }) {
 		send(msg.ready(session.id, session.seq, {
 			worker: session.worker,
 			mode: session.mode,
-			resumed: from > 0,
+			resumed: asked,
 			missed: missed.length,
 			gap: gapped
 		}));
@@ -99,7 +106,40 @@ export function attachConnection({ ws, req, store, config, handler, log }) {
 		if (gapped) send(msg.error("too much missed to replay; reload the transcript", false));
 
 		log.info(`hello from ${peer} session=${session.id.slice(0, 8)} resumeFrom=${from} missed=${missed.length}${gapped ? " GAP" : ""}`);
-		handler.onOpen?.(session, { peer, resumed: from > 0 });
+		handler.onOpen?.(session, { peer, resumed: asked });
+	}
+
+	/** Control actions the transport owns (PRD 1 R1.5). Returns true when handled. */
+	function handleTransportControl(m) {
+		switch (m.action) {
+			case CONTROL.LIST_SESSIONS:
+				send(msg.event("sessions", { sessions: store.list(Number(m.args?.limit) || 50) }));
+				return true;
+
+			case CONTROL.HISTORY: {
+				// Answers for this session only: a client must not be able to read
+				// another session's transcript by naming it.
+				const limit = Math.min(Number(m.args?.limit) || 200, 1000);
+				send(msg.event("history", { sessionId: session.id, messages: store.history(session.id, limit) }));
+				return true;
+			}
+
+			case CONTROL.DELETE_SESSION: {
+				const target = m.args?.sessionId;
+				if (target !== undefined && target !== session.id) {
+					send(msg.error("can only delete the session you are attached to"));
+					return true;
+				}
+				const id = session.id;
+				send(msg.event("sessionDeleted", { sessionId: id }));
+				store.delete(id);
+				log.info(`deleted session ${id.slice(0, 8)} at client request`);
+				return true;
+			}
+
+			default:
+				return false;   // the handler may know it
+		}
 	}
 
 	function send(message) {

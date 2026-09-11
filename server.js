@@ -104,7 +104,18 @@ const MIME = {
 const serveStatic = (req, res, url) => {
 	// Resolve inside the root and verify: a request for ../../etc/passwd must
 	// not escape, and normalising alone is not enough to prove it did not.
-	const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";
+	let decoded;
+	try {
+		decoded = decodeURIComponent(url.pathname);
+	} catch {
+		// A malformed escape like "/%" throws. Unhandled, it left the request
+		// unanswered and the socket open, before any authentication.
+		res.writeHead(400, { "Content-Type": "text/plain" }).end("bad request path");
+		return;
+	}
+	// A NUL byte can truncate a path inside a syscall; nothing legitimate has one.
+	if (decoded.includes("\0")) { res.writeHead(400, { "Content-Type": "text/plain" }).end("bad request path"); return; }
+	const rel = decoded.replace(/^\/+/, "") || "index.html";
 	const full = path.resolve(config.staticDir, rel);
 	if (full !== config.staticDir && !full.startsWith(config.staticDir + path.sep)) {
 		res.writeHead(403).end("forbidden");

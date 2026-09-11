@@ -94,16 +94,34 @@ export class TestClient {
 
 	send(obj) { this.ws.send(JSON.stringify(obj)); }
 
-	/** Wait for a message matching a predicate, or time out. */
-	async waitFor(pred, ms = 5000, label = "message") {
+	/** Index to pass as `since`, so a wait ignores everything already received. */
+	mark() { return this.messages.length; }
+
+	/**
+	 * Wait for a message matching a predicate, or time out.
+	 *
+	 * `since` matters more than it looks. Without it, a loop that waits for a
+	 * repeated message type — "state busy:false" after each turn — matches the
+	 * one from the PREVIOUS turn and returns instantly, so the loop races ahead
+	 * and the test passes while measuring nothing. Pass mark() before sending.
+	 */
+	async waitFor(pred, ms = 5000, label = "message", since = 0) {
 		const until = Date.now() + ms;
 		while (Date.now() < until) {
-			const hit = this.messages.find(pred);
+			const hit = this.messages.slice(since).find(pred);
 			if (hit) return hit;
 			if (this.closed) return null;
 			await sleep(25);
 		}
 		throw new Error(`timed out waiting for ${label}`);
+	}
+
+	/** Send, then wait for the turn to close — the safe pairing for a loop. */
+	async sayAndSettle(text, ms = 8000) {
+		const since = this.mark();
+		this.send({ type: "say", text });
+		await this.waitFor((m) => m.type === "state" && m.busy === false, ms, `idle after ${JSON.stringify(text)}`, since);
+		return this.messages.slice(since);
 	}
 
 	async waitForClose(ms = 5000) {

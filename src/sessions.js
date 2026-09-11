@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, renameSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { isSessionId } from "./protocol.js";
 
 /** How many outbound messages are kept for replay after a reconnect. */
 const REPLAY_DEPTH = 500;
@@ -56,10 +57,14 @@ export class Session {
 		return this.recent.filter((e) => e.seq > from).map((e) => e.msg);
 	}
 
-	/** True when the client asked to resume from further back than we kept. */
+	/** True when we cannot honestly satisfy the client's cursor — either it is
+	 *  further back than the buffer reaches, or ahead of us, which is what a
+	 *  server rewind or a wiped data directory looks like from outside. */
 	replayGap(from) {
-		if (!this.recent.length) return from > 0 && from < this.seq;
-		return from > 0 && from < this.recent[0].seq - 1;
+		if (from <= 0) return false;
+		if (from > this.seq) return true;                       // client is ahead of us
+		if (!this.recent.length) return from < this.seq;        // nothing buffered to bridge with
+		return from < this.recent[0].seq - 1;                   // older than the buffer
 	}
 
 	attach(ws) { this.sockets.add(ws); }
@@ -90,14 +95,50 @@ export class SessionStore {
 			if (!f.endsWith(".meta.json")) continue;
 			try {
 				const meta = JSON.parse(readFileSync(join(this.dir, f), "utf8"));
-				if (meta?.id) this.sessions.set(meta.id, new Session(this, meta));
+				if (!meta?.id) continue;
+
+				// emit() appends to the log before rewriting the meta, so a crash
+				// between the two leaves meta behind. Handing those numbers out again
+				// would label two different messages with the same seq and make every
+				// later replay quietly wrong. The log is the authority.
+				const logged = this.#lastLoggedSeq(meta.id);
+				if (logged > (meta.seq ?? 0)) {
+					console.error(`[sessions] ${meta.id}: meta seq ${meta.seq ?? 0} is behind the log (${logged}); trusting the log`);
+					meta.seq = logged;
+				}
+
+				const session = new Session(this, meta);
+				this.sessions.set(meta.id, session);
+				this.touch(session);   // rewrite the reconciled meta immediately
 			} catch { /* a corrupt meta file must not stop the server booting */ }
 		}
+	}
+
+	/** Highest seq actually written to the transcript, or 0. */
+	#lastLoggedSeq(id) {
+		const p = this.#logPath(id);
+		if (!existsSync(p)) return 0;
+		try {
+			const lines = readFileSync(p, "utf8").split("\n");
+			for (let i = lines.length - 1; i >= 0; i--) {
+				const line = lines[i].trim();
+				if (!line) continue;
+				try {
+					const v = JSON.parse(line);
+					if (Number.isInteger(v?.seq)) return v.seq;
+				} catch { /* torn last line from a crash; look further back */ }
+			}
+		} catch { /* unreadable log; meta is all we have */ }
+		return 0;
 	}
 
 	get(id) { return this.sessions.get(id) ?? null; }
 
 	create(id = randomUUID()) {
+		// Second line of defence. The protocol already rejects non-UUID ids, but an
+		// id becomes a filename here and this must not depend on a caller
+		// remembering to validate.
+		if (!isSessionId(id)) throw new Error(`refusing to create session with unsafe id ${JSON.stringify(id)}`);
 		const s = new Session(this, { id, createdAt: Date.now() });
 		this.sessions.set(id, s);
 		this.touch(s);

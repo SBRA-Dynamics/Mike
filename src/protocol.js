@@ -15,6 +15,14 @@ export const C2S = {
 	CONTROL: "control"      // { action, args }
 };
 
+/** Control actions the transport itself owns (PRD 1 R1.5). */
+export const CONTROL = {
+	LIST_SESSIONS: "listSessions",
+	DELETE_SESSION: "deleteSession",
+	HISTORY: "history",
+	SET_TITLE: "setTitle"
+};
+
 /** Server -> client */
 export const S2C = {
 	READY: "ready",   // { sessionId, cursor, protocol, worker, workers, mode }
@@ -34,6 +42,13 @@ export const CLOSE = {
 };
 
 const isStr = (v) => typeof v === "string";
+
+// A sessionId becomes a filename. "type is string" is not validation: a client
+// sending "../../../x" made the server write outside its data directory, which
+// was only survivable because the process does not run as root. Ids are
+// server-generated UUIDs, so a client may only ever echo one back.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const isSessionId = (v) => typeof v === "string" && UUID_RE.test(v);
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 /**
@@ -50,7 +65,7 @@ export function validateC2S(raw) {
 		case C2S.HELLO:
 			if (!Number.isInteger(raw.protocol)) return { ok: false, error: "hello needs a protocol number" };
 			if (!isStr(raw.token) || !raw.token) return { ok: false, error: "hello needs a token" };
-			if (raw.sessionId !== undefined && !isStr(raw.sessionId)) return { ok: false, error: "sessionId must be a string" };
+			if (raw.sessionId !== undefined && !isSessionId(raw.sessionId)) return { ok: false, error: "sessionId must be a UUID issued by the server" };
 			if (raw.resumeFrom !== undefined && !Number.isInteger(raw.resumeFrom)) return { ok: false, error: "resumeFrom must be an integer" };
 			return { ok: true, msg: raw };
 

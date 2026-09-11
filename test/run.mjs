@@ -3,7 +3,8 @@
 //   node test/run.mjs
 
 import { startServer, connect, TestClient, check, failed, section, sleep } from "./harness.mjs";
-import { validateC2S, PROTOCOL_VERSION, CLOSE } from "../src/protocol.js";
+import { validateC2S, PROTOCOL_VERSION, CLOSE, CONTROL } from "../src/protocol.js";
+import { request } from "node:http";
 
 const server = await startServer();
 
@@ -43,11 +44,12 @@ try {
 	check("ready har protokollversion", c1.readyMsg?.protocol === PROTOCOL_VERSION);
 	const sessionId = c1.readyMsg.sessionId;
 
+	const since1 = c1.mark();
 	c1.send({ type: "say", text: "hej" });
-	const echo = await c1.waitFor((m) => m.type === "text" && m.text.includes("hej"), 5000, "eko");
+	const echo = await c1.waitFor((m) => m.type === "text" && m.text.includes("hej"), 5000, "eko", since1);
 	check("eko kommer tillbaka", echo.text === "echo: hej", echo.text);
 	check("varje meddelande har seq", typeof echo.seq === "number" && echo.seq > 0);
-	await c1.waitFor((m) => m.type === "state" && m.busy === false, 5000, "idle");
+	await c1.waitFor((m) => m.type === "state" && m.busy === false, 5000, "idle", since1);
 	check("busy följt av idle", c1.of("state").some((m) => m.busy) && c1.of("state").some((m) => !m.busy));
 
 	const seqs = c1.messages.filter((m) => m.seq !== undefined).map((m) => m.seq);
@@ -71,7 +73,7 @@ try {
 	section("återanslutning och replay — R1.3");
 	// Wait for the turn to close, or the trailing state message lands after the
 	// snapshot and is legitimately replayed — which is correct behaviour, not a bug.
-	await c2.waitFor((m) => m.type === "state" && m.busy === false, 5000, "idle");
+	await c2.waitFor((m) => m.type === "state" && m.busy === false, 5000, "idle", c2.mark() - 1);
 	const before = c2.messages.at(-1).seq;
 	c2.close();
 	await sleep(200);
@@ -83,8 +85,7 @@ try {
 
 	// A turn that happens while nobody is attached must be waiting on return.
 	const c4 = await connect(server, { sessionId });
-	c4.send({ type: "say", text: "medan ingen lyssnar" });
-	await c4.waitFor((m) => m.type === "state" && m.busy === false, 5000, "idle");
+	await c4.sayAndSettle("medan ingen lyssnar");
 	const mark = c4.messages.at(-1).seq;
 	c4.close();
 	await sleep(200);
@@ -92,11 +93,19 @@ try {
 	const c5 = await connect(server, { sessionId, resumeFrom: mark - 3 });
 	check("replay levererar det missade", c5.readyMsg.missed >= 1, `missed=${c5.readyMsg.missed}`);
 	const replayed = c5.messages.filter((m) => m.seq !== undefined && m.seq > mark - 3);
-	check("replay dupliceras inte", new Set(replayed.map((m) => m.seq)).size === replayed.length);
+	check("replay levererade faktiskt något att kontrollera", replayed.length > 0, `${replayed.length} meddelanden`);
+	check("replay dupliceras inte", replayed.length > 0 && new Set(replayed.map((m) => m.seq)).size === replayed.length,
+		JSON.stringify(replayed.map((m) => m.seq)));
 
-	const c6 = await connect(server, { sessionId, resumeFrom: 1 });
-	check("för gammal resumeFrom rapporteras som gap istället för tyst tapp",
-		c6.readyMsg.gap === true || c6.readyMsg.missed > 0, JSON.stringify(c6.readyMsg));
+	const ahead = await connect(server, { sessionId, resumeFrom: 999_999 });
+	check("klient före servern rapporteras som gap, inte tyst tapp",
+		ahead.readyMsg.gap === true, JSON.stringify(ahead.readyMsg));
+	ahead.close();
+
+	const fresh = await connect(server);
+	check("ny anslutning utan resumeFrom replayar ingenting",
+		fresh.readyMsg.missed === 0 && fresh.readyMsg.resumed === false, JSON.stringify(fresh.readyMsg));
+	fresh.close();
 
 	// -------------------------------------------------------- turn survives drop
 	section("en tur överlever att anslutningen dör — R1.3");
@@ -131,11 +140,32 @@ try {
 
 	// ------------------------------------------------------------ static safety
 	section("statiska filer — R1.2");
-	const escape = await fetch(`${server.base}/../../../../etc/passwd`);
-	const escapeBody = await escape.text();
-	check("sökvägsflykt blockeras", !escapeBody.includes("root:"), `status ${escape.status}`);
-	const encoded = await fetch(`${server.base}/%2e%2e%2f%2e%2e%2fetc%2fpasswd`);
-	check("kodad sökvägsflykt blockeras", !(await encoded.text()).includes("root:"), `status ${encoded.status}`);
+	// fetch() normalises "../" client-side, so the old version of this test
+	// never sent a traversal at all. Write the request line by hand.
+	const rawGet = (path) => new Promise((resolve) => {
+		const req = request({ host: "127.0.0.1", port: server.port, path, method: "GET" }, (res) => {
+			let body = "";
+			res.on("data", (d) => { body += d; });
+			res.on("end", () => resolve({ status: res.statusCode, body }));
+		});
+		req.on("error", (e) => resolve({ status: -1, body: e.message }));
+		req.end();
+	});
+
+	for (const path of [
+		"/../../../../etc/passwd",
+		"/%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+		"/..%2f..%2f..%2fetc%2fpasswd",
+		"/....//....//etc/passwd"
+	]) {
+		const r = await rawGet(path);
+		check(`sökvägsflykt blockeras: ${path}`, !r.body.includes("root:"), `status ${r.status}`);
+	}
+	const malformed = await rawGet("/%");
+	check("trasig procentkodning svarar 400 istället för att hänga",
+		malformed.status === 400, `status ${malformed.status}`);
+	const nul = await rawGet("/a%00b");
+	check("NUL i sökvägen avvisas", nul.status === 400, `status ${nul.status}`);
 
 	// ---------------------------------------------------------- persistence
 	section("omstart — R1.5");
@@ -148,12 +178,54 @@ try {
 	await server.restart();
 	const c10 = await connect(server, { sessionId });
 	check("sessionen finns efter omstart", c10.readyMsg?.sessionId === sessionId);
+	c10.send({ type: "control", action: CONTROL.HISTORY, args: { limit: 500 } });
+	const hist = await c10.waitFor((m) => m.type === "event" && m.kind === "history", 5000, "historik");
+	check("titeln överlevde omstarten",
+		hist.data.messages.some((h) => h.kind === "titleChanged" && h.data?.title === "överlever omstart"),
+		`${hist.data.messages.length} rader i transkriptet`);
 	check("seq fortsätter, nollställs inte", c10.readyMsg.cursor >= seqBeforeRestart,
 		`${c10.readyMsg.cursor} < ${seqBeforeRestart}`);
 	c10.send({ type: "say", text: "efter omstart" });
 	check("konversationen fungerar efter omstart",
 		!!(await c10.waitFor((m) => m.type === "text" && m.text.includes("efter omstart"), 5000, "eko")));
 	c10.close();
+
+	section("sessionId får inte bli ett filnamn");
+	for (const evil of ["../../../ESCAPED", "..", "a/b", "nope"]) {
+		const c = new TestClient(server.wsUrl);
+		await c.ready;
+		c.send({ type: "hello", protocol: PROTOCOL_VERSION, token: server.token, sessionId: evil });
+		const closed = await c.waitForClose(4000).catch(() => null);
+		check(`avvisar sessionId ${JSON.stringify(evil)}`, closed?.code === CLOSE.BAD_MESSAGE, JSON.stringify(closed));
+	}
+
+	section("transportkontroller — R1.5");
+	const ctl = await connect(server);
+	const ctlId = ctl.readyMsg.sessionId;
+	await ctl.sayAndSettle("något att ha i historiken");
+
+	ctl.send({ type: "control", action: CONTROL.LIST_SESSIONS });
+	const listed = await ctl.waitFor((m) => m.type === "event" && m.kind === "sessions", 5000, "sessionslista");
+	check("listSessions returnerar sessioner", listed.data.sessions.some((x) => x.id === ctlId));
+
+	ctl.send({ type: "control", action: CONTROL.HISTORY });
+	const hist2 = await ctl.waitFor((m) => m.type === "event" && m.kind === "history", 5000, "historik");
+	check("history returnerar transkriptet",
+		hist2.data.messages.some((h) => h.type === "text" && String(h.text).includes("något att ha")),
+		`${hist2.data.messages.length} rader`);
+
+	ctl.send({ type: "control", action: CONTROL.DELETE_SESSION, args: { sessionId: "11111111-2222-4333-8444-555555555555" } });
+	const refused = await ctl.waitFor((m) => m.type === "error", 5000, "vägran");
+	check("kan inte radera någon annans session", /only delete/.test(refused.message), refused.message);
+
+	ctl.send({ type: "control", action: CONTROL.DELETE_SESSION });
+	await ctl.waitFor((m) => m.type === "event" && m.kind === "sessionDeleted", 5000, "raderad");
+	await sleep(200);
+	const after = await connect(server);
+	after.send({ type: "control", action: CONTROL.LIST_SESSIONS });
+	const listed2 = await after.waitFor((m) => m.type === "event" && m.kind === "sessions", 5000, "lista");
+	check("raderad session är borta ur listan", !listed2.data.sessions.some((x) => x.id === ctlId));
+	after.close();
 
 	section("loggen");
 	const logText = server.log();
