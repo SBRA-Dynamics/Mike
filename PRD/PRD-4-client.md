@@ -56,7 +56,7 @@ lens has no room for chrome anyway.
 | tap | show more of a truncated reply, else repeat the last |
 | swipe up/down | scroll within a long reply |
 | double tap | system exit dialog (mode 1 — required, QA rejects mode 0) |
-| long press | reserved for push-to-talk fallback (PRD 5) |
+| long press | reserved for push-to-talk fallback (PRD 5b) |
 
 ### R4.4 — Companion view
 

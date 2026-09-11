@@ -1,4 +1,4 @@
-// Routing — PRD 3 "Routing", gated by the addressing mode from PRD 5 R5.4.
+// Routing — PRD 3 "Routing", gated by the addressing mode from PRD 5a R5a.4.
 //
 // Every utterance is classified here before anything else sees it, and the
 // classification is a rule rather than a model call. A classifier in this path
@@ -9,7 +9,7 @@
 // Two layers, in this order, and the order is the point:
 //
 //   1. The mode commands. Matched in EVERY mode, including Ignore, before the
-//      gate. R5.4 calls this a safety property, not a convenience: there must be
+//      gate. R5a.4 calls this a safety property, not a convenience: there must be
 //      no state the user can reach from which they cannot speak their way out.
 //   2. The mode gate, then the destination.
 //
@@ -24,7 +24,7 @@
 //
 // Reading note, because the two PRDs can be read against each other here:
 // PRD 3's rule 3 says an unaddressed utterance "goes to the active worker
-// verbatim", and R5.4's table says ByName admits only named utterances. Both
+// verbatim", and R5a.4's table says ByName admits only named utterances. Both
 // are true at once only if rule 3 describes what happens to an utterance that
 // got through the gate — which is what is implemented. In ByName an unnamed
 // utterance is therefore dropped (and reported, so it is never mysterious); in
@@ -147,7 +147,7 @@ const MODE_COMMANDS = [
 ];
 
 /**
- * Match a mode command. `text` may or may not be addressed to Jarvis: R5.4
+ * Match a mode command. `text` may or may not be addressed to Jarvis: R5a.4
  * writes every command as "Hey Jarvis, ..." but a bare "pausa input" has to
  * work too, because the user who is paused has just learned that nothing they
  * say is getting through and will start dropping words.
@@ -188,7 +188,7 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 	const raw = String(text ?? "").trim();
 	if (!raw) return { kind: "empty" };
 
-	// 1. Mode commands, before the gate, in every mode. R5.4.
+	// 1. Mode commands, before the gate, in every mode. R5a.4.
 	const cmd = matchModeCommand(raw);
 	if (cmd) return { kind: "mode", to: cmd.to };
 
@@ -224,7 +224,7 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
  *
  *  "Continue" restores what was in use before the pause rather than a fixed
  *  default: pausing during a work session and resuming into ByName would
- *  silently undo a setting the user chose (R5.4). */
+ *  silently undo a setting the user chose (R5a.4). */
 export function applyModeCommand(to, { mode, previousMode }) {
 	if (to === "previous") {
 		const back = isMode(previousMode) && previousMode !== MODES.IGNORE ? previousMode : DEFAULT_MODE;

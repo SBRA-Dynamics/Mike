@@ -50,7 +50,7 @@ export function createEchoHandler({ log }) {
 					}
 					break;
 				case C2S.AUDIO:
-					session.emit(msg.error("audio is not implemented until PRD 5"));
+					session.emit(msg.error("audio is not implemented until PRD 5a"));
 					break;
 				default:
 					log.warn(`handler ignored ${m.type}`);
@@ -86,7 +86,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier 
 		// One short line, because this is the confirmation that the user is not
 		// shouting into a paused microphone.
 		session.emit(msg.text(`Input: ${MODE_LABEL[session.mode]}.`, "system"));
-		// R5.4: the mode is part of the state message, and a client that only
+		// R5a.4: the mode is part of the state message, and a client that only
 		// watched `state` would otherwise never learn it changed.
 		session.emit(state(session, false));
 		log?.info(`mode ${before} -> ${session.mode} session=${session.id.slice(0, 8)}`);
@@ -183,7 +183,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier 
 					const worker = activeWorker(session);
 					const decision = route(m.text, {
 						mode: session.mode, worker: worker?.name ?? null,
-						// Absent means spoken. PRD 5's audio path transcribes and
+						// Absent means spoken. PRD 5a's audio path transcribes and
 						// routes with `voice`; a keyboard client sends `typed`.
 						origin: m.origin === "typed" ? ORIGIN.TYPED : ORIGIN.VOICE
 					});
@@ -206,7 +206,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier 
 							//
 							// Both of these go through emit(), so they are durable
 							// and replayed. That is right today, when `say` is a
-							// deliberate act. Once PRD 5 puts an always-on mic in
+							// deliberate act. Once PRD 5a puts an always-on mic in
 							// front of this, `Ignore` mode would write two entries
 							// per overheard sentence into the transcript, and these
 							// two want a transient per-connection channel — the one
@@ -248,7 +248,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier 
 					return handleControl(session, m);
 
 				case C2S.AUDIO:
-					session.emit(msg.error("audio is not implemented until PRD 5"));
+					session.emit(msg.error("audio is not implemented until PRD 5a"));
 					return;
 
 				default:
@@ -267,7 +267,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier 
 
 			case CONTROL.SET_MODE: {
 				// The typed equivalent of the spoken command, so the desktop and
-				// the glasses behave alike (R5.4).
+				// the glasses behave alike (R5a.4).
 				const to = String(m.args?.mode ?? "").toLowerCase();
 				if (!isMode(to)) return session.emit(msg.error(`mode must be ${Object.values(MODES).join(", ")}`));
 				return setMode(session, to);

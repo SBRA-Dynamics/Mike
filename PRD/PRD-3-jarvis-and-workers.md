@@ -43,7 +43,7 @@ normalisation used everywhere else.
 ### The prefix requirement is conditional
 
 Whether a prefix is required at all is set by the **addressing mode** defined in
-PRD 5 R5.4 — `ByName` (the default) requires it, `Always` does not, `Ignore`
+PRD 5a R5a.4 — `ByName` (the default) requires it, `Always` does not, `Ignore`
 drops everything but the mode commands, and `PushToTalk` requires no prefix but
 only hears what is said while the touchpad is held. The routing rules above describe
 `ByName`; in `Always` every utterance goes to the active worker, or to Jarvis

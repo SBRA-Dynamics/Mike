@@ -28,7 +28,7 @@ export class Session {
 		// State later phases own; carried here so it survives a restart.
 		this.worker = meta.worker ?? null;
 		this.mode = meta.mode ?? "byname";
-		// What "continue input" goes back to (PRD 5 R5.4). Durable for the same
+		// What "continue input" goes back to (PRD 5a R5a.4). Durable for the same
 		// reason `mode` is: a restart that resumed into ByName would silently
 		// undo a setting the user chose before pausing.
 		this.previousMode = meta.previousMode ?? null;
@@ -85,8 +85,8 @@ export class Session {
 }
 
 export class SessionStore {
-	/** `defaultMode` is the addressing mode a FRESH session starts in (PRD 5
-	 *  R5.4 "defaults from config for a fresh session"). An existing session
+	/** `defaultMode` is the addressing mode a FRESH session starts in (PRD 5a
+	 *  R5a.4 "defaults from config for a fresh session"). An existing session
 	 *  keeps whatever it was last set to — the whole point of persisting it. */
 	constructor(dir, { defaultMode = "byname" } = {}) {
 		this.dir = dir;

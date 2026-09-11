@@ -45,10 +45,19 @@ These are settled and not revisited by the phase PRDs:
 | **2** | MCP server in the same process: the tool surface Jarvis acts through | Getting tool calls back into a running server |
 | **3** | Jarvis + workers: identity, routing, context injection, handoff, end-to-end tests | Routing correctness; Jarvis doing the work himself |
 | **4** | Even Hub SDK client: lens view + companion view | Lens is 50×10; everything must fit |
-| **5** | Voice pipeline: capture, VAD, wake word, server-side STT | Battery, kitchen noise, latency |
+| **5a** | Voice from the browser: capture, VAD, segments, server-side STT, addressing modes | Whisper latency, VAD splitting sentences |
+| **5b** | Voice from the glasses: the G2 mic array as a source for 5a's pipeline | Battery, bandwidth, speakerRole accuracy |
 
-Phases 1–3 need no glasses. Phase 4 makes the client real. Phase 5 is the only
-one with physical unknowns, and is deliberately last so nothing else waits on it.
+Phases 1–3 need no glasses. Phase 4 makes the client real.
+
+Phase 5 is split because every unknown in it is a *glasses* unknown — battery,
+BLE bandwidth, whether an always-on microphone on someone's face is practical.
+None of those are unknowns about transcription, segmentation or addressing. So
+5a builds the whole pipeline against a microphone that is always available and
+costs nothing to test, and is useful on its own for dictating from the desktop;
+5b then has one job, which is to turn glasses audio into the segments 5a already
+handles. If the hardware turns out not to allow always-on capture, 5a is
+unaffected and the product still works.
 
 ## Architecture
 

@@ -86,7 +86,7 @@ const track = (s) => { servers.push(s); return s; };
 
 try {
 	// ================================================================ routing
-	section("routing: vem orden går till (R3.2, PRD 5 R5.4)");
+	section("routing: vem orden går till (R3.2, PRD 5a R5a.4)");
 
 	check("namnprefixet plockas bort innan Jarvis ser texten",
 		route("Jarvis, starta en arbetare", { worker: null }).text === "starta en arbetare",
@@ -112,7 +112,7 @@ try {
 		route("Mans, hej", { worker: "Måns" }).kind === "worker");
 	check("tomt yttrande är inget yttrande", route("   ", { worker: "Bosse" }).kind === "empty");
 
-	section("routing: lägena (PRD 5 R5.4)");
+	section("routing: lägena (PRD 5a R5a.4)");
 	check("byname utan tilltal släpps inte fram",
 		route("vad är klockan", { worker: "Bosse", mode: MODES.BYNAME }).kind === "dropped");
 	check("always släpper fram allt till den aktiva arbetaren — ordagrant",

@@ -10,7 +10,7 @@ export const PROTOCOL_VERSION = 1;
 export const C2S = {
 	HELLO: "hello",         // { protocol, token, sessionId?, resumeFrom? }
 	SAY: "say",             // { text, origin? }
-	AUDIO: "audio",         // { pcm, final }            (PRD 5)
+	AUDIO: "audio",         // { pcm, final }            (PRD 5a)
 	INTERRUPT: "interrupt", // {}
 	CONTROL: "control"      // { action, args }
 };
@@ -38,7 +38,7 @@ export const S2C = {
 	READY: "ready",   // { sessionId, cursor, protocol, worker, workers, mode }
 	TEXT: "text",     // { text, from }
 	STATE: "state",   // { busy, worker, mode }
-	HEARD: "heard",   // { text, confidence }             (PRD 5)
+	HEARD: "heard",   // { text, confidence }             (PRD 5a)
 	EVENT: "event",   // { kind, data }
 	ERROR: "error"    // { message, fatal }
 };
@@ -83,7 +83,7 @@ export function validateC2S(raw) {
 			if (!isStr(raw.text)) return { ok: false, error: "say needs text" };
 			if (raw.text.length > 100_000) return { ok: false, error: "text too long" };
 			// Where the words came from decides whether the addressing mode gates
-			// them (PRD 5 R5.4). Absent means spoken, which is the gated case: a
+			// them (PRD 5a R5a.4). Absent means spoken, which is the gated case: a
 			// client that forgets to declare itself is filtered rather than
 			// having its user's kitchen conversation forwarded to a model.
 			if (raw.origin !== undefined && raw.origin !== "typed" && raw.origin !== "voice") {
