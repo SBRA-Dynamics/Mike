@@ -1,0 +1,153 @@
+/* The companion view — R4.4. Dark, because it is read in a kitchen at night
+   next to a pair of glasses, and because the Even App's own surface is dark
+   (#232323 / #E5E5E5 are its brand values). No framework: the whole view is
+   four regions and a settings drawer. */
+
+:root {
+	--bg: #1b1c1e;
+	--surface: #232427;
+	--surface-2: #2b2d31;
+	--line: #35373c;
+	--text: #e5e5e5;
+	--muted: #9aa0a6;
+	--lens: #6ef08a;
+	--you: #8ab4f8;
+	--error: #ff8a80;
+	--ok: #6ef08a;
+	--warn: #ffcc66;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+	margin: 0;
+	height: 100%;
+	background: var(--bg);
+	color: var(--text);
+	font: 15px/1.45 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif;
+	touch-action: manipulation;
+	-webkit-text-size-adjust: 100%;
+	overscroll-behavior: none;
+}
+
+#app { display: flex; flex-direction: column; height: 100%; }
+
+/* ------------------------------------------------------------------- header */
+
+.bar {
+	display: flex; align-items: center; gap: 10px;
+	padding: 10px 14px;
+	background: var(--surface);
+	border-bottom: 1px solid var(--line);
+}
+.bar h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+.spacer { flex: 1; }
+
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.online { background: var(--ok); }
+.dot.connecting { background: var(--warn); }
+.dot.offline { background: var(--warn); opacity: .6; }
+.dot.fatal { background: var(--error); }
+
+.chip {
+	font-size: 12px; color: var(--muted);
+	background: var(--surface-2); border: 1px solid var(--line);
+	border-radius: 999px; padding: 2px 9px; white-space: nowrap;
+}
+.chip.worker { color: var(--text); }
+.chip.warn { color: var(--warn); border-color: #4a4128; }
+
+/* --------------------------------------------------------------------- lens */
+
+.lenswrap { padding: 12px 14px 4px; }
+.lenswrap .caption {
+	display: flex; justify-content: space-between; align-items: baseline;
+	font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em;
+	margin-bottom: 6px;
+}
+
+/* The real thing: fifty columns by ten rows. The box is sized in `ch` so it is
+   exactly as wide as the text it may contain — a line that overflows it is a
+   bug the eye can catch without measuring. */
+.lens {
+	width: 50ch; max-width: 100%;
+	background: #05140a;
+	border: 1px solid #1d4a2b;
+	border-radius: 6px;
+	padding: 6px 8px;
+	overflow-x: auto;
+}
+.lens .row {
+	font: 13px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	color: var(--lens);
+	white-space: pre;
+	min-height: 1.35em;
+}
+.lens .row.header { color: #b7ffca; border-bottom: 1px solid #14361e; padding-bottom: 2px; margin-bottom: 2px; }
+.lens.stale { opacity: .45; }
+
+/* --------------------------------------------------------------- transcript */
+
+.transcript { flex: 1; overflow-y: auto; padding: 8px 14px 14px; }
+.entry { margin: 8px 0; }
+.entry .who { font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+.entry .what { white-space: pre-wrap; overflow-wrap: anywhere; }
+.entry.said .who { color: var(--you); }
+.entry.said .what { color: #cfe0ff; }
+.entry.error .what { color: var(--error); }
+.entry.note .what { color: var(--muted); font-style: italic; }
+
+.lastevent {
+	padding: 6px 14px; font-size: 12px; color: var(--muted);
+	border-top: 1px solid var(--line); background: var(--surface);
+	white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ----------------------------------------------------------------- composer */
+
+.composer {
+	display: flex; gap: 8px; padding: 10px 14px;
+	background: var(--surface); border-top: 1px solid var(--line);
+}
+input[type="text"], input[type="password"], select {
+	flex: 1; min-width: 0;
+	background: var(--surface-2); color: var(--text);
+	border: 1px solid var(--line); border-radius: 8px;
+	padding: 10px 12px; font: inherit;
+}
+input:focus, select:focus { outline: 2px solid #3d6ea5; outline-offset: -1px; }
+button {
+	background: var(--surface-2); color: var(--text);
+	border: 1px solid var(--line); border-radius: 8px;
+	padding: 10px 14px; font: inherit; cursor: pointer;
+}
+button:active { background: #3a3d42; }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: #2f5d3c; border-color: #3d7a4f; }
+
+/* ----------------------------------------------------------------- settings */
+
+details.settings { border-top: 1px solid var(--line); background: var(--surface); }
+details.settings > summary {
+	padding: 10px 14px; cursor: pointer; font-size: 13px; color: var(--muted);
+	list-style: none;
+}
+details.settings > summary::-webkit-details-marker { display: none; }
+details.settings > summary::before { content: "⚙ "; }
+.settings .body { padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+.settings label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+.settings .row { display: flex; gap: 8px; align-items: center; }
+.settings .row > * { flex: 1; }
+.settings .row > button { flex: none; }
+.settings .note { font-size: 12px; color: var(--muted); }
+.settings code { font: 12px ui-monospace, Menlo, monospace; color: #cfe0ff; overflow-wrap: anywhere; }
+
+/* A standing notice: no glasses, no token. One line, quiet, always visible —
+   never in the transcript, which a history read replaces wholesale. */
+.notice {
+	padding: 8px 14px;
+	font-size: 12px;
+	color: var(--warn);
+	background: #2a261c;
+	border-bottom: 1px solid var(--line);
+}

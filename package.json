@@ -3,16 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Jarvis server \u2014 transport and sessions (PRD 1), MCP tool surface (PRD 2), Jarvis and workers (PRD 3)",
+  "description": "Jarvis — transport and sessions (PRD 1), MCP tool surface (PRD 2), Jarvis and workers (PRD 3), Even Hub client (PRD 4)",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/run.mjs && node test/crash-recovery.mjs && node test/mcp.mjs && node test/prd3.mjs",
-    "test:live": "node test/mcp-live.mjs && node test/e2e-live.mjs"
+    "build:client": "npm --prefix client install && npm --prefix client run build",
+    "test": "node test/run.mjs && node test/crash-recovery.mjs && node test/mcp.mjs && node test/prd3.mjs && node test/prd4.mjs",
+    "test:lens": "node test/prd4-lens.mjs",
+    "test:live": "node test/mcp-live.mjs && node test/e2e-live.mjs",
+    "test:browser": "node test/prd4-browser.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
   }
 }
