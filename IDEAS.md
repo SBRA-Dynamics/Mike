@@ -47,6 +47,21 @@ live. Matching should fold the way spoken names already do in `names.js`
 not a jail: an absolute path must keep working, because the alias list will
 always be missing whatever is needed today.
 
+**Let the list learn.** Every list of "the common cases" is incomplete the
+moment it is written, which is why the absolute path has to keep working — but
+it also means a list that can only be edited by hand will always be one project
+behind. So when a worker is started with an absolute path that has no name,
+Jarvis can ask: *"should I call that one MyFilesystem?"* A yes writes the
+entry. The list then grows by being used instead of by being maintained, and the
+question costs nothing when the answer is no.
+
+Two things to get right if this is built. He must ask only when the path is
+genuinely unnamed, or it becomes a tic — and the name he proposes should come
+from the directory itself, because the user has just said what they want it
+called by choosing where to work. Writing a config file from a model's decision
+is the one part that deserves a guard: a suggested name goes through the same
+folding and validation as a worker's, and nothing outside the map is touched.
+
 **Natural extension, not required.** The same map is what would let "the folder
 we are talking about" resolve without Jarvis reading it out of context — though
 that already works, which is a good argument for keeping this small.
