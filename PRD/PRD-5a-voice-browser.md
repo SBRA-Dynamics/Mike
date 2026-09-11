@@ -137,6 +137,16 @@ before the mode gate, never after it.
 | "Hey Jarvis, change input to always" / "ändra input till alltid" | → Always |
 | "Hey Jarvis, change input to by name" / "ändra input till via namn" | → ByName |
 | "Hey Jarvis, change input to push to talk" / "ändra input till håll in" | → PushToTalk |
+| "turn on the mic" / "slå på mikrofonen" | microphone on |
+| "turn off the mic" / "stäng av micken" | microphone off |
+
+The last two are not modes — they are whether there is a microphone for a mode
+to listen with — but they are matched at the same point and for a sharper
+reason. Turning it off leaves the user unable to be heard at all, so the way
+back must be one they can reach: hold the touchpad and say it. The server has no
+microphone and does not own the switch; it relays the request so every attached
+device agrees about whether anything is listening, and the request is transient,
+because replaying it on a reconnect would open a microphone hours later.
 
 Transitions available in each mode:
 

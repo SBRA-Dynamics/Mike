@@ -161,6 +161,43 @@ const MODE_COMMANDS = [
 	{ to: MODES.PUSHTOTALK, re: new RegExp(`^(?:${VERB} )?(?:the )?input (?:to|till) (?:push ?to ?talk|hall in|halla in|hall inne|tryck och tala)$`) }
 ];
 
+/** Turning the microphone on and off by voice.
+ *
+ * The microphone switch is not the addressing mode — it is whether there is a
+ * microphone for a mode to listen with — but the commands need the same
+ * guarantee, and for a sharper reason. Saying "turn the mic off" leaves the
+ * user in a state where nothing they say can be heard at all, so the way back
+ * has to be one they can reach: holding the touchpad and saying it. That works
+ * because these, like the mode commands, are matched before the gate in every
+ * mode, and because a hold is unconditional (R5a.4).
+ *
+ * The noun list is deliberately only the microphone's names. A broader word
+ * like "ljudet" would catch a sentence meant for a worker — and these are
+ * matched before everything, so a false positive here costs a turn the user
+ * has to repeat. Predictability over reach, the same trade PRD 3 makes for
+ * name-prefix routing. */
+const MIC_COMMANDS = [
+	{ on: true, re: new RegExp(`^(?:${VERB} |turn |sla |satt |slag )?(?:on|pa) (?:the |min )?(?:mic|mick|micken|micken|mikken|microphone|mikrofon|mikrofonen)$`) },
+	{ on: true, re: new RegExp(`^(?:turn |sla |satt |slag )?(?:the |min )?(?:mic|mick|micken|micken|mikken|microphone|mikrofon|mikrofonen) (?:on|pa)$`) },
+	{ on: false, re: new RegExp(`^(?:${VERB} |turn |sla |stang )?(?:off|av) (?:the |min )?(?:mic|mick|micken|micken|mikken|microphone|mikrofon|mikrofonen)$`) },
+	{ on: false, re: new RegExp(`^(?:turn |sla |stang |stanga )?(?:the |min )?(?:mic|mick|micken|micken|mikken|microphone|mikrofon|mikrofonen) (?:off|av)$`) }
+];
+
+/** Same shape as matchModeCommand, and matched at the same point. Returns
+ *  { on } or null. */
+export function matchMicCommand(text) {
+	const candidates = [text];
+	const bare = stripAddress(text, JARVIS_NAME);
+	if (bare !== null) candidates.push(bare);
+
+	for (const c of candidates) {
+		const { folded } = foldWithIndex(c);
+		if (!folded) continue;
+		for (const cmd of MIC_COMMANDS) if (cmd.re.test(folded)) return { on: cmd.on };
+	}
+	return null;
+}
+
 /**
  * Match a mode command. `text` may or may not be addressed to Jarvis: R5a.4
  * writes every command as "Hey Jarvis, ..." but a bare "pausa input" has to
@@ -192,6 +229,7 @@ export function matchModeCommand(text) {
  *
  *   { kind: "empty" }
  *   { kind: "mode", to }                     — a mode command, always first
+ *   { kind: "mic", on }                      — the microphone switch, likewise
  *   { kind: "jarvis", text }                 — address stripped
  *   { kind: "worker", name, text }           — address stripped if there was one
  *   { kind: "dropped", reason: "paused" | "unaddressed" }
@@ -206,6 +244,11 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 	// 1. Mode commands, before the gate, in every mode. R5a.4.
 	const cmd = matchModeCommand(raw);
 	if (cmd) return { kind: "mode", to: cmd.to };
+
+	// The microphone switch, on the same footing and for the same reason: the
+	// state it can put the user in is one they must be able to speak out of.
+	const mic = matchMicCommand(raw);
+	if (mic) return { kind: "mic", on: mic.on };
 
 	// 2. The gate — for speech only. See ORIGIN above for why typing skips it.
 	const gated = origin !== ORIGIN.TYPED;

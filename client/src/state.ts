@@ -81,6 +81,18 @@ const TRANSCRIPT_LIMIT = 400;
 const JARVIS = "Jarvis";
 
 export class Store {
+	/**
+	 * The server asking for the microphone to be turned on or off, because the
+	 * user said so out loud.
+	 *
+	 * A one-shot callback rather than a field in `state`, deliberately. A field
+	 * would have to be reconciled against `voice.enabled` on every notify, and
+	 * the moment the user flicked the switch in the UI the two would disagree
+	 * and the reconciler would flick it back. A request is an event: it happens
+	 * once and then it is over.
+	 */
+	onMicRequest: ((on: boolean) => void) | null = null;
+
 	state: AppState = {
 		connection: "idle",
 		connectionDetail: "",
@@ -483,6 +495,14 @@ export class Store {
 				if (d.previousName && d.worker?.name) this.#renameWorker(String(d.previousName), d.worker as WorkerInfo);
 				else if (d.worker?.name) this.#rememberWorker(d.worker as WorkerInfo);
 				this.state.lastEvent = d.previousName ? `${d.previousName} is now ${d.worker?.name}` : m.kind;
+				break;
+
+			case "micRequested":
+				// Said out loud and acted on here. The server has no microphone;
+				// it only relays what was asked for, so every attached device
+				// agrees about whether anything is listening.
+				this.state.lastEvent = d.on ? "mic on" : "mic off";
+				this.onMicRequest?.(d.on === true);
 				break;
 
 			case "modeChanged":

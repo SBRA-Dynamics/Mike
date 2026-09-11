@@ -202,6 +202,12 @@ store.subscribe((s) => {
 // switching into PushToTalk closes the microphone, and out of it opens one.
 store.subscribe((s) => { if (s.mode !== voice.mode) void voice.setMode(s.mode); });
 
+// The microphone switch, said out loud. Turning it ON from a voice command can
+// only have reached us through an open microphone or a hold, so the browser has
+// already granted permission and this cannot be the call that asks for it
+// (R5a.1 keeps that on the control).
+store.onMicRequest = (on) => { if (on !== voice.enabled) void voice.setEnabled(on); };
+
 // ---------------------------------------------------------------- connecting
 
 // Reassigned once, in start(), when the host is known: on the phone the SDK's

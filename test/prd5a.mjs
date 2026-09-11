@@ -491,5 +491,47 @@ try {
 	for (const d of fakeDirs) { try { rmSync(d, { recursive: true, force: true }); } catch { /* gone */ } }
 }
 
+section("mikrofonen går att slå på och av med rösten");
+{
+	// The switch is not the mode, but it needs the same guarantee: saying "mic
+	// off" leaves the user unable to be heard at all, so the way back must be
+	// reachable — a hold, in every mode, matched before the gate.
+	const said = (text, mode = MODES.BYNAME) => route(text, { mode, worker: "Bosse" });
+	for (const [text, on] of [["slå på mikrofonen", true], ["Hey Jarvis, turn on the mic", true],
+		["stäng av micken", false], ["turn the microphone off", false], ["mic off", false]]) {
+		const r = said(text);
+		check(`"${text}" styr mikrofonen`, r.kind === "mic" && r.on === on, JSON.stringify(r));
+	}
+	for (const mode of Object.values(MODES)) {
+		const r = said("stäng av mikrofonen", mode);
+		check(`och gäller i läge ${mode}`, r.kind === "mic" && r.on === false, JSON.stringify(r));
+	}
+	check("men kapar inte vanligt tal",
+		route("kan du slå på micken i mötesrummet sen", { worker: "Bosse", origin: ORIGIN.TYPED }).kind === "worker");
+	check("och inte heller ett ord som bara liknar",
+		route("slå på ljudet i filmen", { worker: "Bosse", origin: ORIGIN.TYPED }).kind === "worker");
+
+	// Over the wire: the server relays, the client acts. It must be transient —
+	// replaying it on a reconnect would open somebody's microphone hours later.
+	// No transcription needed: the command arrives as text either way.
+	const server = await startJarvis("off");
+	const c = await connect(server);
+	const since = c.mark();
+	c.send({ type: "say", text: "stäng av mikrofonen", origin: "typed" });
+	const ev = await c.waitFor((m) => m.type === "event" && m.kind === "micRequested", 20_000, "micRequested", since);
+	check("servern vidarebefordrar begäran", ev.data.on === false, JSON.stringify(ev.data));
+	check("och den är transient, inte en del av samtalet", ev.seq === undefined, JSON.stringify(ev));
+	check("användaren får veta att det gick igenom",
+		c.messages.slice(since).some((m) => m.type === "text" && /Mic off/.test(m.text)));
+
+	const st = new Store();
+	let asked = null;
+	st.onMicRequest = (on) => { asked = on; };
+	st.apply({ ...ev, seq: 1 });
+	check("klienten agerar på begäran", asked === false, String(asked));
+
+	c.close(); server.stop();
+}
+
 console.log(failed() === 0 ? "\nPASS\n" : `\nFAIL (${failed()})\n`);
 process.exit(failed() === 0 ? 0 : 1);

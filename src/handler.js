@@ -276,6 +276,25 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 			case "mode":
 				return setMode(session, decision.to);
 
+			case "mic":
+				// The switch lives in the client — the server has no microphone
+				// and should not pretend to own one. It says what was asked for
+				// and every attached device acts on it, which also keeps the
+				// phone and the glasses from disagreeing about whether anyone is
+				// listening.
+				//
+				// Transient: this is a device state, not something that happened
+				// in the conversation, and replaying it on reconnect would turn
+				// somebody's microphone on hours later.
+				session.transient(msg.event("micRequested", { on: decision.on }));
+				// Said out loud, because the user who just turned their own
+				// microphone off needs to know it worked — and the lens status
+				// they would otherwise read it from is about to say "mic off"
+				// for a different reason.
+				session.transient(msg.text(decision.on ? "Mic on." : "Mic off. Hold to talk.", "system"));
+				log?.info(`mic ${decision.on ? "on" : "off"} by voice session=${session.id.slice(0, 8)}`);
+				return;
+
 			case "dropped":
 				// Reported, never silent. A user whose words are being dropped
 				// needs to know which of the two reasons it is, or the system is
