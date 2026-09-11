@@ -1,8 +1,13 @@
 # Jarvis
 
 Talk to Claude Code from a pair of Even Realities G2 glasses — or from a browser
-tab — without holding a button, without a phone app in the way, and without
-anything leaving the house.
+tab — without holding a button and without a phone app in the way.
+
+What stays on your machine: your voice, which is transcribed by whisper on the
+GPU and never uploaded; the transcripts; and the route, which is your own server
+and certificate rather than somebody's tunnel. What does not: the conversation
+itself, because the thing doing the work is Claude Code, and every turn goes to
+Anthropic like any other.
 
 One long-lived agent, **Jarvis**, is who you reach. He delegates real work to
 **workers**: named Claude Code sessions with their own model, directory and
