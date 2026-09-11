@@ -7,8 +7,18 @@
   "min_sdk_version": "0.0.15",
   "entrypoint": "index.html",
   "permissions": [
-    "g2-microphone",
-    "phone-microphone"
+    {
+      "name": "g2-microphone",
+      "desc": "Hears what you say through the glasses, so you can talk to Jarvis with your hands busy. Audio is transcribed on your own server and never uploaded anywhere else."
+    },
+    {
+      "name": "phone-microphone",
+      "desc": "Used instead of the glasses microphone when the glasses are not available, so the app still works on the phone alone."
+    },
+    {
+      "name": "network",
+      "desc": "Connects to your own Jarvis server, which is the only thing this app talks to. The address is yours and is set by you."
+    }
   ],
   "supported_languages": [
     "en"

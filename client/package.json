@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build && node -e \"require('fs').copyFileSync('app.json','../public/app.json')\"",
     "preview": "vite preview",
-    "pack": "npm run build && evenhub pack app.json ../public"
+    "pack": "npm run build && evenhub pack app.json ../public -o ../jarvis.ehpk"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.15",
