@@ -83,20 +83,71 @@ normal pauses do not split a sentence. A segment ends on silence or at a maximum
 length. Segments, not a continuous stream, go to the server: whisper is far
 better given a whole utterance.
 
-### R5.4 — Wake word
+### R5.4 — Addressing modes
 
-`speakerRole` filtering solves *other people*. It does not solve *the wearer
-talking to someone else*, which in a kitchen is most of what he says.
+`speakerRole` filtering solves *other people talking*. It does not solve *the
+wearer talking to someone else*, which in a kitchen is most of what he says. So
+an addressing rule is still required — but the right rule depends on the
+situation, and the user must be able to change it by voice.
 
-So: an addressing rule is still required. Default is the same prefix the router
-already uses — an utterance must begin with "Jarvis" or the active worker's
-name, checked after transcription on the server, where the full text is
-available and no keyword spotter is needed on the phone.
+Three modes:
 
-Cheap, no extra model, and consistent with how routing already works.
+| mode | what reaches the conversation |
+|---|---|
+| **Ignore** | nothing — input is paused |
+| **ByName** | only utterances beginning with "Jarvis" or the active worker's name |
+| **Always** | everything the wearer says |
 
-A **conversation mode** may follow a reply for a few seconds, during which the
-prefix is not required, so a back-and-forth does not need his name every turn.
+`ByName` is the default. `Always` is for sitting down to work, when every
+sentence is meant for the system. `Ignore` is for a dinner conversation.
+
+#### The mode commands are always live
+
+**In every mode, including Ignore, the mode commands are recognised and acted
+on.** This is a safety property, not a convenience: there must be no state the
+user can reach from which they cannot speak their way out. They are matched
+before the mode gate, never after it.
+
+| said | effect |
+|---|---|
+| "Hey Jarvis, pause input" / "pausa input" | → Ignore |
+| "Hey Jarvis, continue input" / "fortsätt input" | → the mode in use before it was paused |
+| "Hey Jarvis, change input to always" / "ändra input till alltid" | → Always |
+| "Hey Jarvis, change input to by name" / "ändra input till via namn" | → ByName |
+
+Transitions available in each mode, as specified by the user:
+
+- **Ignore** → continue (back to the previous mode)
+- **ByName** → pause, or change to always
+- **Always** → pause, or change to by name
+
+"Continue" restores the mode that was active before pausing rather than a fixed
+default: pausing during a work session and resuming into `ByName` would silently
+undo a setting the user chose.
+
+#### Matching
+
+The commands arrive through speech recognition, so the matcher must tolerate
+what that produces: casing, trailing punctuation, "Hey Jarvis" / "Hej Jarvis" /
+bare "Jarvis", and the Swedish and English forms of each. Matching happens on
+the server against the transcribed text, where the whole utterance is available.
+
+The same commands work when typed, so the desktop and the glasses behave alike.
+
+#### Conversation mode
+
+After a reply, a short window may follow during which `ByName` does not require
+the prefix, so a back-and-forth does not need his name every turn. This is a
+timeout on top of the mode, not a fourth mode, and it never applies in `Ignore`.
+
+#### Visibility and persistence
+
+The current mode is part of the `state` message, shown by the client, and shown
+on the lens status line when it is anything other than the default. A mode the
+user cannot see is a mode they will be surprised by.
+
+The mode is per session and survives a server restart. It defaults from config
+for a fresh session.
 
 ### R5.5 — Transcription service
 
@@ -146,6 +197,9 @@ always-on, and everything downstream is unchanged.
 
 1. Speaking "Jarvis, what time is it" with hands busy produces an answer on the
    lens without touching anything
+1b. "Hey Jarvis, pausa input" stops everything reaching the conversation, and
+   "Hey Jarvis, fortsätt input" brings back the mode that was active before —
+   both work with the mic already running and nothing touched
 2. Another person talking nearby does not produce a turn
 3. The wearer talking to that person does not produce a turn
 4. What was heard is shown before the answer

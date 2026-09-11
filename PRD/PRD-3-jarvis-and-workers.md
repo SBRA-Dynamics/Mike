@@ -40,6 +40,17 @@ The prefix is stripped before Jarvis sees the text. Dictation variants
 ("Jarvis." / "Jarvis," / "jarvis") all count, and the check runs after the same
 normalisation used everywhere else.
 
+### The prefix requirement is conditional
+
+Whether a prefix is required at all is set by the **addressing mode** defined in
+PRD 5 R5.4 — `ByName` (the default) requires it, `Always` does not, `Ignore`
+drops everything but the mode commands. The routing rules above describe
+`ByName`; in `Always` every utterance goes to the active worker, or to Jarvis
+when there is none, and a prefix still overrides.
+
+The mode commands are matched before the mode gate, in every mode, so there is
+no state the user cannot speak their way out of.
+
 ### Escape hatch
 
 If the prefix is ever ambiguous — a worker legitimately discussing someone named
