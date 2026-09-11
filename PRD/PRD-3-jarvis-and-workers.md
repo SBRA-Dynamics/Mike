@@ -228,6 +228,18 @@ A scripted run, no glasses, driving the WebSocket directly:
 8. Restart the server; reconnect; Jarvis and both workers are still there
 9. `claude --resume <Bosse id>` in a terminal shows the same conversation
 
+## Deferred ideas
+
+**A room, rather than one active worker.** Several workers present at once,
+with Robin and Jarvis, all hearing each other. The plumbing is nearly there —
+replies already land in one shared session, and the background-notice work is
+half of showing several voices at once. The hard part is addressing: with one
+listener the prefix rule is unambiguous, but in a room "can you look at that"
+has to be given to somebody, and deciding that per utterance is the classifier
+in the hot path that PRD 3 rejected for being slow and occasionally wrong. The
+likely answer is a chair who hands out the floor, which is what Jarvis already
+is. Raised 2026-09-11; a weekend project at most.
+
 ## Open questions
 
 - When Jarvis is addressed mid-worker, should the **answer** come from Jarvis
