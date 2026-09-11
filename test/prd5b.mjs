@@ -885,5 +885,30 @@ try {
 	clearTimeout(watchdog);
 }
 
+section("linsen ljuger inte om att den lyssnar");
+{
+	const st = new Store();
+	st.state.connection = "online";
+	const voice = (over) => { st.state.voice = { enabled: false, live: false, held: false, speaking: false, mic: "closed", detail: "", sent: 0, lastSegmentMs: 0, device: "glasses", ...over }; };
+
+	st.state.mode = "always"; voice({});
+	check("always med mikrofonen av säger att den är av", st.lensStatus() === "mic off", String(st.lensStatus()));
+	voice({ enabled: true });
+	check("always med mikrofonen på säger always", st.lensStatus() === "always", String(st.lensStatus()));
+
+	st.state.mode = "byname"; voice({});
+	check("standardläget med mikrofonen av säger ingenting", st.lensStatus() === null, String(st.lensStatus()));
+
+	st.state.mode = "pushtotalk"; voice({});
+	check("håll-in-läget nämner inte en stängd mikrofon — det är hela läget",
+		st.lensStatus() !== "mic off", String(st.lensStatus()));
+
+	st.state.mode = "ignore"; voice({});
+	check("pausat väger tyngre än mikrofonens läge", st.lensStatus() === "paused", String(st.lensStatus()));
+
+	st.state.mode = "always"; voice({ held: true, live: true });
+	check("ett pågående håll väger tyngst av allt", st.lensStatus() === "held", String(st.lensStatus()));
+}
+
 console.log(failed() === 0 ? "\nPASS\n" : `\nFAIL (${failed()})\n`);
 process.exit(failed() === 0 ? 0 : 1);

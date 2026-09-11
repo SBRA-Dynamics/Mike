@@ -299,6 +299,16 @@ export class Store {
 		// why nothing is happening when they speak.
 		if (s.mode === MODES.IGNORE) return MODE_LABEL[MODES.IGNORE];
 		if (listening === "listening") return "listening";
+
+		// A mode that wants an open microphone, without one, is the one state
+		// that actively lies. "always" reads as "I am hearing everything" while
+		// the switch is off and nothing is being heard at all — and the hold
+		// still works, being unconditional by design, so there is no symptom to
+		// suspect the switch from. Say the actionable half.
+		if (s.mode !== MODES.PUSHTOTALK && s.mode !== MODES.IGNORE && s.voice && !s.voice.enabled) {
+			return s.mode === DEFAULT_MODE ? null : "mic off";
+		}
+
 		if (s.mode !== DEFAULT_MODE) return MODE_LABEL[s.mode] ?? s.mode;
 		return null;
 	}
