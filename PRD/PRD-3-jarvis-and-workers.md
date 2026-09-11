@@ -51,6 +51,22 @@ when there is none, and a prefix still overrides.
 The mode commands are matched before the mode gate, in every mode, so there is
 no state the user cannot speak their way out of.
 
+**The gate applies to speech, not to the keyboard (decided 2026-09-11.)** The
+addressing mode exists to filter ambient speech — the wearer talking to someone
+else in a kitchen. Typing has no ambient problem: a typed line was aimed at the
+machine by the act of typing it. So an utterance carries its origin, and only
+`voice` is gated. Addressing still *works* when typed ("Jarvis, ..." routes to
+him and the prefix is stripped); what typing skips is the requirement to
+address. `Ignore` therefore pauses listening, not the keyboard, and the lens
+still reads "paused" because that is the truth about the microphone.
+
+Without this, the mode is one setting per session while the session deliberately
+spans the PC and the glasses (requirement 3) — so choosing `ByName` for the
+kitchen would have forced every typed line on the desktop to begin with a
+worker's name. An utterance with no declared origin counts as speech: a client
+that forgets to say what it is gets filtered rather than forwarding a dinner
+conversation to a model.
+
 ### Escape hatch
 
 If the prefix is ever ambiguous — a worker legitimately discussing someone named

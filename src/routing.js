@@ -15,7 +15,7 @@
 //
 // | mode   | what is admitted                                          |
 // |--------|-----------------------------------------------------------|
-// | ignore | nothing but the mode commands                              |
+// | ignore | nothing but the mode commands (spoken input; see ORIGIN)   |
 // | byname | utterances starting with "Jarvis" or the active worker's name |
 // | always | everything                                                 |
 //
@@ -35,6 +35,23 @@
 import { normalizeName } from "./names.js";
 
 export const MODES = { IGNORE: "ignore", BYNAME: "byname", ALWAYS: "always" };
+
+/** Where an utterance came from. The addressing mode exists to filter AMBIENT
+ *  SPEECH — the wearer talking to someone else in a kitchen — and typing has no
+ *  ambient problem: every typed line was aimed at the machine by the act of
+ *  typing it. So the gate applies to `voice` and never to `typed`.
+ *
+ *  Two consequences worth stating plainly:
+ *   * Ignore pauses LISTENING, not the keyboard. The lens still reads "paused",
+ *     which is the truth about the microphone.
+ *   * Addressing still works when typed: "Jarvis, ..." from a keyboard reaches
+ *     Jarvis and the prefix is stripped, exactly as when spoken. What typing
+ *     skips is the REQUIREMENT to address, not the ability to.
+ *
+ *  `voice` is the default for anything that does not say, so a client that
+ *  forgets to declare itself is filtered rather than forwarding a dinner
+ *  conversation to a model. */
+export const ORIGIN = { TYPED: "typed", VOICE: "voice" };
 export const DEFAULT_MODE = MODES.BYNAME;
 export const isMode = (v) => Object.values(MODES).includes(v);
 
@@ -167,7 +184,7 @@ export function matchModeCommand(text) {
  * Nothing here mutates anything: the caller owns the session, and a classifier
  * that changed state would be impossible to test one utterance at a time.
  */
-export function route(text, { mode = DEFAULT_MODE, worker = null } = {}) {
+export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGIN.VOICE } = {}) {
 	const raw = String(text ?? "").trim();
 	if (!raw) return { kind: "empty" };
 
@@ -175,8 +192,9 @@ export function route(text, { mode = DEFAULT_MODE, worker = null } = {}) {
 	const cmd = matchModeCommand(raw);
 	if (cmd) return { kind: "mode", to: cmd.to };
 
-	// 2. The gate.
-	if (mode === MODES.IGNORE) return { kind: "dropped", reason: "paused" };
+	// 2. The gate — for speech only. See ORIGIN above for why typing skips it.
+	const gated = origin !== ORIGIN.TYPED;
+	if (gated && mode === MODES.IGNORE) return { kind: "dropped", reason: "paused" };
 
 	const toJarvis = stripAddress(raw, JARVIS_NAME);
 	if (toJarvis !== null) {
@@ -194,7 +212,7 @@ export function route(text, { mode = DEFAULT_MODE, worker = null } = {}) {
 		return { kind: "worker", name: worker, text: toWorker || worker };
 	}
 
-	if (mode === MODES.BYNAME) return { kind: "dropped", reason: "unaddressed" };
+	if (gated && mode === MODES.BYNAME) return { kind: "dropped", reason: "unaddressed" };
 
 	// 3. Always: unaddressed goes to the active worker verbatim, or to Jarvis
 	//    when there is none — which is also what "starting a session means

@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startServer, connect, check, failed, section, sleep, ROOT } from "./harness.mjs";
-import { route, stripAddress, matchModeCommand, applyModeCommand, MODES } from "../src/routing.js";
+import { route, stripAddress, matchModeCommand, applyModeCommand, MODES, ORIGIN } from "../src/routing.js";
 import { buildWorkerContext, composePrompt } from "../src/jarvis.js";
 
 const FAKE = join(ROOT, "test", "fixtures", "fake-claude.mjs");
@@ -44,6 +44,13 @@ const say = async (c, text, ms = 20_000) => {
 	const since = c.mark();
 	c.send({ type: "say", text });
 	await c.waitFor((m) => m.type === "state" && m.busy === false, ms, `idle after ${JSON.stringify(text)}`, since);
+	return c.messages.slice(since);
+};
+/** The same, but declared as coming from a keyboard rather than a microphone. */
+const type = async (c, text, ms = 20_000) => {
+	const since = c.mark();
+	c.send({ type: "say", text, origin: "typed" });
+	await c.waitFor((m) => m.type === "state" && m.busy === false, ms, `idle after typing ${JSON.stringify(text)}`, since);
 	return c.messages.slice(since);
 };
 const textsOf = (turn) => turn.filter((m) => m.type === "text");
@@ -108,6 +115,27 @@ try {
 		route("vad är klockan", { worker: "Bosse", mode: MODES.IGNORE }).kind === "dropped");
 	check("ignore släpper inte ens fram ett tilltal",
 		route("Jarvis, vad är klockan", { worker: null, mode: MODES.IGNORE }).kind === "dropped");
+
+	// The gate filters ambient speech. Typing has no ambient problem, so the
+	// keyboard is never asked to address anyone — but it may.
+	section("grinden gäller talet, inte tangentbordet");
+	const typed = { origin: ORIGIN.TYPED };
+	check("skrivet utan tilltal når arbetaren i byname",
+		JSON.stringify(route("lista filerna", { worker: "Bosse", mode: MODES.BYNAME, ...typed })) ===
+		JSON.stringify({ kind: "worker", name: "Bosse", text: "lista filerna" }));
+	check("skrivet utan tilltal och utan arbetare går till Jarvis",
+		route("lista filerna", { worker: null, mode: MODES.BYNAME, ...typed }).kind === "jarvis");
+	check("talat utan tilltal släpps fortfarande i byname",
+		route("lista filerna", { worker: "Bosse", mode: MODES.BYNAME, origin: ORIGIN.VOICE }).kind === "dropped");
+	check("utan angiven härkomst behandlas orden som tal",
+		route("lista filerna", { worker: "Bosse", mode: MODES.BYNAME }).kind === "dropped");
+	check("ignore pausar lyssnandet, inte tangentbordet",
+		route("lista filerna", { worker: "Bosse", mode: MODES.IGNORE, ...typed }).kind === "worker");
+	check("skrivet tilltal fungerar fortfarande och prefixet klipps bort",
+		JSON.stringify(route("Jarvis, lista filerna", { worker: "Bosse", mode: MODES.BYNAME, ...typed })) ===
+		JSON.stringify({ kind: "jarvis", text: "lista filerna" }));
+	check("lägeskommandon fungerar även skrivna",
+		route("pausa input", { worker: "Bosse", mode: MODES.BYNAME, ...typed }).kind === "mode");
 
 	section("lägeskommandon matchas före grinden, i varje läge");
 	const commands = [
@@ -397,6 +425,32 @@ try {
 	}
 
 	// ================================================== the scripted run
+	// Over the wire, not just through route(): the handler has to actually pass
+	// the origin along, and that wiring is what a unit test cannot see.
+	section("tangentbordet över tråden");
+	{
+		const server = await startJarvis();
+		const c = await connect(server);
+		await say(c, "Jarvis, starta en arbetare som heter Bosse.");
+		check("en arbetare är aktiv", (await connect(server, { sessionId: c.readyMsg.sessionId })).readyMsg.worker === "Bosse");
+
+		const spoken = await say(c, "lista filerna i mappen");
+		check("talat utan tilltal rapporteras som ohört", !!eventOf(spoken, "notHeard"), JSON.stringify(spoken.map((m) => m.type + ":" + (m.kind ?? ""))));
+
+		const written = await type(c, "lista filerna i mappen");
+		check("samma ord skrivna når arbetaren", !eventOf(written, "notHeard") && textsOf(written).length > 0,
+			JSON.stringify(written.map((m) => m.type + ":" + (m.kind ?? ""))));
+		check("och arbetaren fick dem ordagrant",
+			textsOf(written).some((m) => String(m.text).includes("lista filerna i mappen")), JSON.stringify(textsOf(written)));
+
+		const bad = c.mark();
+		c.send({ type: "say", text: "hej", origin: "smoke-signal" });
+		const err = await c.waitFor((m) => m.type === "error", 5000, "fel om okänd härkomst", bad);
+		check("en påhittad härkomst avvisas", /origin/.test(String(err.message)), JSON.stringify(err));
+
+		c.close(); server.stop();
+	}
+
 	section("PRD 3:s manusstyrda körning, steg 1–9");
 	{
 		const server = track(await startJarvis());

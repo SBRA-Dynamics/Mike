@@ -98,6 +98,10 @@ Three modes:
 | **ByName** | only utterances beginning with "Jarvis" or the active worker's name |
 | **Always** | everything the wearer says |
 
+The table is about **spoken** input, which is the only kind with an ambient
+problem. Typed input is never gated by the mode — see PRD 3, "The prefix
+requirement is conditional". Everything else here applies to both.
+
 `ByName` is the default. `Always` is for sitting down to work, when every
 sentence is meant for the system. `Ignore` is for a dinner conversation.
 

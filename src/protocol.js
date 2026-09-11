@@ -9,7 +9,7 @@ export const PROTOCOL_VERSION = 1;
 /** Client -> server */
 export const C2S = {
 	HELLO: "hello",         // { protocol, token, sessionId?, resumeFrom? }
-	SAY: "say",             // { text }
+	SAY: "say",             // { text, origin? }
 	AUDIO: "audio",         // { pcm, final }            (PRD 5)
 	INTERRUPT: "interrupt", // {}
 	CONTROL: "control"      // { action, args }
@@ -82,6 +82,13 @@ export function validateC2S(raw) {
 		case C2S.SAY:
 			if (!isStr(raw.text)) return { ok: false, error: "say needs text" };
 			if (raw.text.length > 100_000) return { ok: false, error: "text too long" };
+			// Where the words came from decides whether the addressing mode gates
+			// them (PRD 5 R5.4). Absent means spoken, which is the gated case: a
+			// client that forgets to declare itself is filtered rather than
+			// having its user's kitchen conversation forwarded to a model.
+			if (raw.origin !== undefined && raw.origin !== "typed" && raw.origin !== "voice") {
+				return { ok: false, error: "origin must be typed or voice" };
+			}
 			return { ok: true, msg: raw };
 
 		case C2S.AUDIO:

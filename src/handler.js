@@ -16,7 +16,7 @@
 //   * making sure a failed turn is a sentence, not a stack trace
 
 import { C2S, CONTROL, msg } from "./protocol.js";
-import { MODES, MODE_LABEL, applyModeCommand, isMode, route } from "./routing.js";
+import { MODES, MODE_LABEL, applyModeCommand, isMode, route, ORIGIN } from "./routing.js";
 
 export function createEchoHandler({ log }) {
 	return {
@@ -157,7 +157,12 @@ export function createJarvisHandler({ log, jarvis, registry, engine }) {
 			switch (m.type) {
 				case C2S.SAY: {
 					const worker = activeWorker(session);
-					const decision = route(m.text, { mode: session.mode, worker: worker?.name ?? null });
+					const decision = route(m.text, {
+						mode: session.mode, worker: worker?.name ?? null,
+						// Absent means spoken. PRD 5's audio path transcribes and
+						// routes with `voice`; a keyboard client sends `typed`.
+						origin: m.origin === "typed" ? ORIGIN.TYPED : ORIGIN.VOICE
+					});
 
 					switch (decision.kind) {
 						case "empty":
