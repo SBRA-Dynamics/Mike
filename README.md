@@ -138,6 +138,9 @@ services/whisper/    the transcription service
 PRD/                 why any of it is shaped the way it is
 ```
 
+Ideas with no home yet are in [`IDEAS.md`](IDEAS.md), with the reasoning
+attached so it does not have to be worked out twice.
+
 ## Non-goals
 
 Images on the lens, text-to-speech (the G2 has no speaker), transcription on the
