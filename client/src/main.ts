@@ -28,6 +28,11 @@ const root = document.getElementById("app")!;
 const lensStatus = (s: AppState): string | null => {
 	if (s.connection === "fatal") return "stopped";
 	if (s.connection !== "online") return "offline";
+	// Somebody the user is not talking to is waiting on them. It outranks
+	// "thinking", which says something is happening that they already know about,
+	// and it is the only status that carries a name worth acting on.
+	const waiting = store.notice();
+	if (waiting) return waiting;
 	if (s.busy) return "thinking";
 	if (s.mode === MODES.IGNORE) return MODE_LABEL[MODES.IGNORE];
 	return null;
@@ -96,11 +101,20 @@ const repaint = (immediate = false): void => {
 	paint();
 };
 
+/** A fading notice has to disappear on its own, so a repaint is scheduled for
+ *  the moment it expires rather than polled for. Identical frames are not
+ *  re-sent to the glasses, so an extra repaint costs nothing over BLE. */
+let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+
 const paint = (): void => {
 	const s = store.state;
 	frame = renderLens({ from: s.lens.from, text: s.lens.text, status: lensStatus(s), page: s.lens.page });
 	companion.render(s, frame);
 	glasses.show(frame.content);
+
+	if (expiryTimer) { clearTimeout(expiryTimer); expiryTimer = null; }
+	const due = store.nextNoticeExpiry();
+	if (due !== null) expiryTimer = setTimeout(() => { expiryTimer = null; paint(); }, due + 50);
 };
 
 store.subscribe(() => repaint());

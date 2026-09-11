@@ -23,7 +23,7 @@ import { startProxy } from "./netcut.mjs";
 
 import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS } from "../client/src/lens/render.ts";
 import { Connection, wsUrlFrom } from "../client/src/connection.ts";
-import { Store } from "../client/src/state.ts";
+import { Store, NOTICE_MS } from "../client/src/state.ts";
 import { readUrlSettings, SettingsStore } from "../client/src/settings.ts";
 import { Glasses, hasHostChannel } from "../client/src/glasses.ts";
 import { getTextWidth } from "../client/node_modules/@evenrealities/pretext/dist/font_measure.js";
@@ -232,6 +232,57 @@ try {
 		feed({ type: "text", from: "Jarvis", text: "Nu pratar du med Doris." });
 		feed({ type: "state", busy: false, worker: "Doris", mode: "byname" });
 		check("ett gammalt återupptagande läcker inte in", /Doris/.test(s.state.lens.text), s.state.lens.text);
+	}
+
+	// A reply from somebody the user is not talking to is a notice, not the
+	// conversation. The lens keeps what they are reading; the header says who is
+	// waiting, and a question stays while a remark fades.
+	section("bakgrundssvar blir en notis, inte en kapning av linsen");
+	{
+		const s = new Store();
+		let n = 0;
+		const feed = (m) => s.apply({ ...m, seq: ++n });
+		const t0 = Date.now();
+
+		feed({ type: "state", busy: false, worker: "Kalle", mode: "byname" });
+		feed({ type: "text", from: "Kalle", text: "Jag tittar på det." });
+		feed({ type: "text", from: "Bosse", text: "Jag är klar med bygget.", background: true });
+		check("linsen står kvar hos den man pratar med", s.state.lens.from === "Kalle", s.state.lens.from);
+		check("och texten är oförändrad", /tittar på det/.test(s.state.lens.text), s.state.lens.text);
+		check("men svaret finns i transkriptet", s.state.transcript.some((e) => /klar med bygget/.test(e.text)));
+		check("ingen notis förrän servern sagt vilken sort det är", s.notice(t0) === null, String(s.notice(t0)));
+
+		feed({ type: "event", kind: "workerNotice", data: { worker: "Bosse", kind: "said" } });
+		check("ett påstående nämner vem", s.notice() === "Bosse spoke", String(s.notice()));
+		check("och det bleknar av sig självt", s.notice(Date.now() + NOTICE_MS + 100) === null, String(s.notice(Date.now() + NOTICE_MS + 100)));
+
+		feed({ type: "event", kind: "workerNotice", data: { worker: "Doris", kind: "question" } });
+		check("en fråga bleknar aldrig", s.notice(Date.now() + NOTICE_MS * 10) === "Doris asks", String(s.notice(Date.now() + NOTICE_MS * 10)));
+
+		feed({ type: "event", kind: "workerNotice", data: { worker: "Bosse", kind: "said" } });
+		check("en fråga slår ett påstående och räknar resten", s.notice() === "Doris asks +1", String(s.notice()));
+
+		feed({ type: "event", kind: "workerNotice", data: { worker: "Ester", kind: "question" } });
+		check("flera frågor räknas", s.notice() === "2 ask +1", String(s.notice()));
+
+		// Att bli satt framför någon besvarar det de sa.
+		feed({ type: "event", kind: "workerSwitched", data: { active: "Doris", worker: { name: "Doris" } } });
+		feed({ type: "state", busy: false, worker: "Doris", mode: "byname" });
+		check("växling till den som frågade tar bort just den notisen",
+			s.notice() === "Ester asks +1", String(s.notice()));
+
+		// Flera påståenden och inga frågor räknas utan namn.
+		const s2 = new Store();
+		let m2 = 0;
+		const feed2 = (m) => s2.apply({ ...m, seq: ++m2 });
+		feed2({ type: "event", kind: "workerNotice", data: { worker: "A", kind: "said" } });
+		feed2({ type: "event", kind: "workerNotice", data: { worker: "B", kind: "said" } });
+		feed2({ type: "event", kind: "workerNotice", data: { worker: "C", kind: "said" } });
+		check("tre som bara sagt något räknas", s2.notice() === "3 spoke", String(s2.notice()));
+		check("samma arbetare två gånger blir en notis", (() => {
+			feed2({ type: "event", kind: "workerNotice", data: { worker: "A", kind: "said" } });
+			return s2.notice() === "3 spoke";
+		})(), String(s2.notice()));
 	}
 
 	// ============================================================== modellen

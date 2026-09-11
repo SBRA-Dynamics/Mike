@@ -115,7 +115,9 @@ export const msg = {
 	// the name made a test count ready as a replayed message, and a real client
 	// would make the same mistake.
 	ready: (sessionId, cursor, extra = {}) => ({ type: S2C.READY, sessionId, cursor, protocol: PROTOCOL_VERSION, ...extra }),
-	text: (text, from = "system") => ({ type: S2C.TEXT, text, from }),
+	// `extra` carries the background-reply fields: a reply from a worker the user
+	// is not talking to is a notice, not the conversation (see handler.js).
+	text: (text, from = "system", extra = {}) => ({ type: S2C.TEXT, text, from, ...extra }),
 	state: (state) => ({ type: S2C.STATE, ...state }),
 	heard: (text, confidence = null) => ({ type: S2C.HEARD, text, confidence }),
 	event: (kind, data = {}) => ({ type: S2C.EVENT, kind, data }),

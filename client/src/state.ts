@@ -38,7 +38,20 @@ export type AppState = {
 	glasses: "unknown" | "attached" | "absent";
 	/** Answers to the listSessions control, for the settings panel. */
 	sessions: { id: string; title: string; updatedAt: number }[];
+	/** Workers that have spoken while the user was with somebody else. A reply
+	 *  from one of them is a notice, not the conversation — see `notice()`. */
+	pending: Pending[];
 };
+
+export type Pending = {
+	worker: string;
+	kind: "question" | "said";
+	at: number;
+};
+
+/** How long a "said something" notice stays before it fades. Long enough to
+ *  look up from what you are doing, short enough not to become wallpaper. */
+export const NOTICE_MS = 8000;
 
 /** How many lines of transcript the companion keeps. A phone that has been
  *  open all day should not hold a week of conversation in memory. */
@@ -58,6 +71,7 @@ export class Store {
 		transcript: [],
 		lastEvent: null,
 		lens: { from: JARVIS, text: "Connecting…", page: 0 },
+		pending: [],
 		glasses: "unknown",
 		sessions: []
 	};
@@ -145,6 +159,49 @@ export class Store {
 	 *  unrelated turn. */
 	#pending: { from: string; text: string | null; fromName: string | null } | null = null;
 
+	/** Record a notice about somebody the user is not talking to. One per
+	 *  worker: the newest thing they said is the one worth going back for. */
+	#note(worker: string, kind: Pending["kind"]): void {
+		const now = Date.now();
+		const at = this.state.pending.find((p) => p.worker === worker);
+		if (at) { at.kind = kind; at.at = now; return; }
+		this.state.pending.push({ worker, kind, at: now });
+	}
+
+	/** Being put in front of somebody answers whatever they were saying. */
+	#clearNotice(worker: string | null): void {
+		if (!worker) return;
+		this.state.pending = this.state.pending.filter((p) => p.worker !== worker);
+	}
+
+	/**
+	 * The header's middle slot: what is waiting, in the fewest words that still
+	 * say who and how urgent.
+	 *
+	 * A question always outranks a statement — it is the one that cannot be
+	 * allowed to fade — and a statement disappears on its own once it is final.
+	 * Names are used when there is one of a kind, counts when there are several,
+	 * because "Bosse" tells you where to go and "3" does not.
+	 */
+	notice(now = Date.now()): string | null {
+		const live = this.state.pending.filter((p) => p.kind === "question" || now - p.at < NOTICE_MS);
+		if (live.length !== this.state.pending.length) this.state.pending = live;
+		if (!live.length) return null;
+
+		const asking = live.filter((p) => p.kind === "question");
+		const said = live.length - asking.length;
+		if (asking.length === 1) return said ? `${asking[0].worker} asks +${said}` : `${asking[0].worker} asks`;
+		if (asking.length > 1) return said ? `${asking.length} ask +${said}` : `${asking.length} ask`;
+		return said === 1 ? `${live[0].worker} spoke` : `${said} spoke`;
+	}
+
+	/** When the next notice expires, so the caller can repaint exactly then
+	 *  rather than polling. Null when nothing is on a clock. */
+	nextNoticeExpiry(now = Date.now()): number | null {
+		const fading = this.state.pending.filter((p) => p.kind !== "question").map((p) => p.at + NOTICE_MS - now);
+		return fading.length ? Math.max(0, Math.min(...fading)) : null;
+	}
+
 	#say(from: string, text: string, kind: Entry["kind"], seq: number): void {
 		this.state.transcript.push({ seq, from, text, kind, at: Date.now() });
 		// The lens shows the latest thing said, not a scroll (R4.2), and a new
@@ -156,6 +213,14 @@ export class Store {
 	#reduce(m: SeqMsg): void {
 		switch (m.type) {
 			case "text":
+				if ((m as { background?: boolean }).background) {
+					// Transcript yes, lens no: the user switched away on purpose,
+					// and a long job finishing is not a reason to interrupt the
+					// conversation they are in. The notice arrives separately, as
+					// `workerNotice`, once the server has read the sentence.
+					this.state.transcript.push({ seq: m.seq, from: m.from, text: m.text, kind: "text", at: Date.now() });
+					return;
+				}
 				this.#say(m.from === "system" ? JARVIS : m.from, m.text, "text", m.seq);
 				return;
 
@@ -185,6 +250,7 @@ export class Store {
 				// Two ways the addressee can change: an event announced it this
 				// turn, or it simply differs from what we had (a reconnect, or
 				// another device switching underneath us).
+				this.#clearNotice(this.state.worker);
 				const changed = this.#pending !== null || (this.state.worker ?? null) !== (before ?? null);
 				if (changed) {
 					// Switching back to somebody shows their conversation again
@@ -234,8 +300,15 @@ export class Store {
 		}
 
 		switch (m.kind) {
+			case "workerNotice":
+				// Somebody the user is not talking to has spoken, and the server
+				// has read it well enough to say whether they are asking.
+				if (d.worker) this.#note(String(d.worker), d.kind === "question" ? "question" : "said");
+				break;
+
 			case "workerSwitched":
 				this.state.worker = d.active ?? null;
+				this.#clearNotice(d.active ?? null);
 				this.state.lastEvent = d.active ? `switched to ${d.active}` : "back to Jarvis";
 				if (d.worker?.name) this.#rememberWorker(d.worker);
 				// Where that conversation left off, sent by the server because it

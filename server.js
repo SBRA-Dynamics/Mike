@@ -33,6 +33,8 @@ import { PROTOCOL_VERSION } from "./src/protocol.js";
 import { WorkerRegistry } from "./src/workers.js";
 import { createStubWorkerEngine, createClaudeWorkerEngine } from "./src/workerEngine.js";
 import { createToolset } from "./src/tools.js";
+import { createClassifier } from "./src/classify.js";
+import { createClaudeRunner } from "./src/claudeCli.js";
 import { createMcpServer } from "./src/mcp.js";
 import { isKnownModel, MODEL_LIST, resolveModel } from "./src/models.js";
 import { createJarvis, DEFAULT_CONTEXT_TURNS, DEFAULT_CONTEXT_BUDGET_TOKENS } from "./src/jarvis.js";
@@ -172,9 +174,14 @@ const jarvis = createJarvis({
 	timeoutMs: config.turnTimeoutMs
 });
 
+// The one-word judgement behind a background notice (handler.js). Its own CLI
+// runner: a worker's turn timeout is ten minutes and this must never sit that
+// long, and it borrows nothing from the engine but the binary.
+const classifier = config.engine === "stub" ? null : createClassifier({ cli: createClaudeRunner({ bin: config.claudeBin, log }), log });
+
 const handler = config.handler === "echo"
 	? createEchoHandler({ log })
-	: createJarvisHandler({ log, jarvis, registry, engine });
+	: createJarvisHandler({ classifier, log, jarvis, registry, engine });
 
 // ----------------------------------------------------------------- TLS certs
 // Re-read on mtime change so a certbot renewal lands without a restart

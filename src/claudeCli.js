@@ -68,7 +68,7 @@ export function createClaudeRunner({
 
 	const run = ({
 		prompt, cwd, model, sessionId, resume,
-		appendSystemPrompt, systemPrompt, mcpConfig, allowedTools = [], permissions = "readonly",
+		appendSystemPrompt, systemPrompt, mcpConfig, allowedTools = [], permissions = "readonly", effort,
 		extraArgs = [], timeoutMs: perCall, onSpawn
 	}) => new Promise((resolve) => {
 		const args = ["-p", "--output-format", "json"];
@@ -110,6 +110,10 @@ export function createClaudeRunner({
 		// behind one bearer token, so with `full` that token is the ability to
 		// run code on this machine. It is a choice the operator makes in the
 		// unit file, which is why it is spelled out there too.
+		// Reasoning effort, for turns whose answer is one word and whose latency
+		// is nearly all process start.
+		if (effort) args.push("--effort", effort);
+
 		if (permissions === "full") args.push("--dangerously-skip-permissions");
 		else if (permissions === "edits") args.push("--permission-mode", "acceptEdits");
 		// The prompt goes last, and something that is not the prompt has to

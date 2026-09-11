@@ -56,6 +56,14 @@ const type = async (c, text, ms = 20_000) => {
 const textsOf = (turn) => turn.filter((m) => m.type === "text");
 const eventOf = (turn, kind) => turn.find((m) => m.type === "event" && m.kind === kind);
 
+/** The client's own switch (PRD 3's `switchWorker` control), which is instant
+ *  because no model is involved. */
+const controlSwitch = async (c, name) => {
+	const since = c.mark();
+	c.send({ type: "control", action: "switchWorker", args: { name } });
+	await c.waitFor((m) => m.type === "event" && m.kind === "workerSwitched", 10_000, `växling till ${name}`, since);
+};
+
 /** Ask the server, over the wire, for a worker's Claude Code session id. Read
  *  back rather than guessed: it is the server that chose it. */
 const whoIs = async (c, name) => {
@@ -493,6 +501,50 @@ try {
 			JSON.stringify(later.map((p) => p.slice(0, 60))));
 
 		c2.close(); c.close(); server.stop();
+	}
+
+	// A worker finishing while the user is with somebody else must not read as
+	// the conversation. The reply is still durable and still in the transcript;
+	// what changes is that it is marked, so the client can keep it off the lens.
+	section("ett svar från någon man inte pratar med märks som bakgrund");
+	{
+		const server = await startJarvis([], { FAKE_CLAUDE_FAIL: "slow", FAKE_CLAUDE_SLOW_MS: "4000" });
+		const c = await connect(server);
+		await say(c, "Jarvis, starta en arbetare som heter Bosse.", 40_000);
+		await say(c, "Jarvis, starta en arbetare som heter Kalle.", 40_000);
+		await say(c, "Jarvis, byt till Bosse.", 40_000);
+
+		// En lång tur hos Bosse startas medan man växlar bort: växlingen är en
+		// egen Jarvis-tur, så den ska inte behöva vänta in arbetaren.
+		const since = c.mark();
+		c.send({ type: "say", text: "Bosse, gör ett långt jobb.", origin: "typed" });
+		await sleep(300);
+		c.send({ type: "say", text: "Jarvis, byt till Kalle.", origin: "typed" });
+		const switched = await c.waitFor((m) => m.type === "event" && m.kind === "workerSwitched", 60_000, "växlingen", since);
+		check("växlingen behöver inte vänta in arbetaren", switched.data.active === "Kalle", JSON.stringify(switched.data));
+		await c.waitFor((m) => m.type === "text" && m.from === "Bosse", 60_000, "Bosses svar", since);
+
+		// Och nu det som saken handlar om. Växlingen sker genom klientens egen
+		// kontroll i stället för genom Jarvis: den är omedelbar, så turen hinner
+		// garanterat vara kvar i luften när den aktiva arbetaren byts. Med en
+		// modelltur i vägen vore det en kapplöpning, och ett test som ibland
+		// mäter rätt sak mäter ingenting.
+		await controlSwitch(c, "Bosse");
+		const bg = c.mark();
+		c.send({ type: "say", text: "gör ett till jobb.", origin: "typed" });
+		await sleep(300);
+		await controlSwitch(c, "Kalle");
+		const late = await c.waitFor((m) => m.type === "text" && m.from === "Bosse", 60_000, "Bosses bakgrundssvar", bg);
+		check("det sena svaret kommer ändå fram", !!late.text, JSON.stringify(late));
+		check("och är märkt som bakgrund", late.background === true, JSON.stringify(late));
+
+		// Ett svar från den man FAKTISKT pratar med är inte bakgrund.
+		const normal = await say(c, "Kalle, säg något.", 40_000);
+		const direct = normal.find((m) => m.type === "text" && m.from === "Kalle");
+		check("ett svar från den aktiva arbetaren är inte bakgrund",
+			!!direct && direct.background === undefined, JSON.stringify(direct));
+
+		c.close(); server.stop();
 	}
 
 	// The lens shows the latest thing said, so switching back to somebody has to

@@ -69,7 +69,7 @@ const GREETING = "Jarvis here.";
  * `jarvis`, `registry` and `engine` are the three things a turn can be about;
  * everything else is plumbing this file borrows from the session.
  */
-export function createJarvisHandler({ log, jarvis, registry, engine }) {
+export function createJarvisHandler({ log, jarvis, registry, engine, classifier }) {
 
 	/** Every state message carries all three fields, always. A client that gets
 	 *  `{busy:false}` with no `worker` cannot tell "nobody" from "unchanged",
@@ -127,9 +127,33 @@ export function createJarvisHandler({ log, jarvis, registry, engine }) {
 		session.emit(state(session, true));
 		try {
 			const r = await engine.send(worker, text);
+
+			// A reply from somebody the user is no longer talking to must not take
+			// over the lens — they switched away on purpose, and a long job
+			// finishing is not a reason to interrupt the conversation they are in.
+			// It goes to the transcript as always, and the lens gets a notice.
+			//
+			// The user may have switched away DURING this turn, so this is read
+			// now rather than when the turn started.
+			const background = session.worker !== worker.name;
+
 			// Tagged with the worker's name, which is what `from` is for: the lens
 			// has no room for a label unless it is short (PRD 1 R1.6).
-			if (r.text) session.emit(msg.text(r.text, worker.name));
+			if (r.text) {
+				// The transcript gets it now; `background` tells the client to keep
+				// it off the lens.
+				session.emit(msg.text(r.text, worker.name, background ? { background: true } : {}));
+
+				if (background && classifier) {
+					// The notice follows a few seconds later, once something has
+					// read the sentence. Deliberately not awaited: the turn is over,
+					// and nothing downstream may wait on a second model call. Late
+					// is fine here — nobody is watching the lens for this.
+					classifier.classify(r.text)
+						.then((kind) => session.emit(msg.event("workerNotice", { worker: worker.name, kind })))
+						.catch(() => { });
+				}
+			}
 		} catch (e) {
 			log?.error(`worker ${worker.name} turn: ${e.stack || e.message}`);
 			session.emit(msg.error(`${worker.name}: ${lens(e)}`));
