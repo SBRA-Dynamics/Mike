@@ -50,11 +50,14 @@ färdiga svaret kommer ändå och ska vara sista ordet.
 för "thinking" så fort den vet ett, och det gäller glasögonen lika mycket som
 telefonen — det är samma statusrad.
 
-**Öppet: en tydligare konfirmation.** Statusraden är det som bekräftar att
-något togs emot, och den är diskret av design. Frågan som står kvar är om det
-behövs något mer påtagligt på linsen i det ögonblick en tur startar — en egen
-rad som blinkar till, snarare än ett ord som byts ut. Inte byggd; noterad
-2026-09-12 för att den kom upp och inte ska behöva komma upp igen.
+**3. Konfirmationen är byggd.** Statusraden var för tyst för att vara
+kvittot: ett ord som byts från "listening" till "thinking" i hörnet är inget
+man ser på glas medan man håller på med annat, och linsen visade under tiden
+kvar det FÖRRA svaret — vilket är det enda som läser som att ingenting hände.
+Nu bär linsen tillbaka vad turen svarar på, `» bygg klart testerna`, från att
+turen startar tills första ordet av svaret finns. Ekot gäller bara yttranden
+från den här turen (ECHO_SLACK_MS), så ett eko av något som sades för en
+minut sedan aldrig kan ljuga om vad som är på gång.
 
 ## Mätpunkt
 

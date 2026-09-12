@@ -200,7 +200,8 @@ let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
 const paint = (): void => {
 	const s = store.state;
-	frame = renderLens({ from: s.lens.from, text: s.lens.text, status: store.lensStatus(), page: s.lens.page });
+	const view = store.lensView();
+	frame = renderLens({ from: view.from, text: view.text, status: store.lensStatus(), page: view.page });
 	companion.render(s, frame, store.listening());
 	glasses.show(frame.content);
 

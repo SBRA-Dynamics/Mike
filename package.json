@@ -1,6 +1,6 @@
 {
   "name": "jarvis-server",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Jarvis \u2014 transport and sessions (PRD 1), MCP tool surface (PRD 2), Jarvis and workers (PRD 3), Even Hub client (PRD 4), voice from the browser (PRD 5a), voice from the glasses (PRD 5b)",

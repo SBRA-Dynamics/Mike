@@ -57,6 +57,10 @@ export type AppState = {
 	 *  moment the turn ends: the finished answer arrives as a `text` message
 	 *  and must be the last word, not a leftover half-sentence. */
 	progress: { from: string; text: string | null; tool: string | null } | null;
+	/** The last thing the user said or typed, whichever came last, so a turn in
+	 *  progress can show what it is answering. Separate from `heard`, which is
+	 *  about the microphone and expires on its own clock. */
+	said: { text: string; at: number } | null;
 };
 
 export type Pending = {
@@ -75,6 +79,11 @@ export const NOTICE_MS = 8000;
  *  enough to read a sentence back, short enough that it is gone before the
  *  answer needs the row. */
 export const HEARD_MS = 3000;
+
+/** How long before a turn started an utterance may have been said and still
+ *  count as the one it is answering. One round trip through the server, not
+ *  one conversation. */
+export const ECHO_SLACK_MS = 5000;
 
 /** What the user is told is happening, in the order that matters when two are
  *  true at once. Thinking outranks heard: once a turn has started, that the
@@ -129,6 +138,7 @@ export class Store {
 		voice: null,
 		busySince: null,
 		progress: null,
+		said: null,
 		heard: null
 	};
 
@@ -239,11 +249,45 @@ export class Store {
 	 *  server does not echo `say` back, so this is the only record of it, and
 	 *  giving it a fake sequence number would corrupt the cursor. */
 	applyLocal(text: string): void {
+		this.state.said = { text, at: Date.now() };
 		this.state.transcript.push({ seq: -(++this.#localSeq), from: "you", text, kind: "said", at: Date.now() });
 		this.notify();
 	}
 
 	// ----------------------------------------------------------------- lens
+
+	/**
+	 * What the lens shows — the one place that decides, so the glasses and the
+	 * companion's preview cannot disagree.
+	 *
+	 * While a turn is running and before a word of the answer exists, the lens
+	 * carries back what the turn is answering: "» bygg klart testerna". The
+	 * status line alone was too quiet to be the confirmation that an utterance
+	 * landed — a word that changes from "listening" to "thinking" in the corner
+	 * is not something you notice on glass while you are doing something else —
+	 * and the alternative is a lens still showing the PREVIOUS answer, which is
+	 * the one thing that reads as "nothing happened".
+	 *
+	 * It is replaced the moment the answer starts arriving, and it is only ever
+	 * shown for an utterance from this turn: an echo of something said a minute
+	 * ago would be a lie about what is being worked on.
+	 */
+	lensView(now = Date.now()): LensItem {
+		const s = this.state;
+		const echo = s.busy && !s.progress?.text ? this.#echo(now) : null;
+		if (echo) return { from: s.worker ?? JARVIS, text: `» ${echo}`, page: 0 };
+		return s.lens;
+	}
+
+	/** The utterance this turn is answering, if it belongs to this turn. The
+	 *  slack is the gap between the server saying what it heard and the turn
+	 *  starting — one round trip, not one conversation. */
+	#echo(now: number): string | null {
+		const said = this.state.said;
+		if (!said) return null;
+		const started = this.state.busySince ?? now;
+		return said.at >= started - ECHO_SLACK_MS ? said.text : null;
+	}
 
 	/** Paging through a long reply (R4.3). Returns true when the page moved, so
 	 *  a gesture that changed nothing can be answered differently from one that
@@ -434,12 +478,12 @@ export class Store {
 
 			case "heard":
 				// What was understood, shown as soon as it exists and before the
-				// answer (R5a.8). It stays out of the lens BODY on purpose — the
-				// lens shows the reply, and the user already knows what they said
-				// — but it drives the status line through listening() above, so
-				// "it heard me and decided I wasn't talking to it" and "it didn't
-				// hear me" look different.
+				// answer (R5a.8). It drives the status line through listening()
+				// above, so "it heard me and decided I wasn't talking to it" and
+				// "it didn't hear me" look different — and, through lensView, it
+				// is what the lens carries back while the turn runs.
 				this.state.heard = { text: m.text, confidence: m.confidence ?? null, at: Date.now() };
+				this.state.said = { text: m.text, at: Date.now() };
 				// A dropped utterance's `heard` arrives with no sequence number:
 				// the server sends it per connection rather than writing every
 				// overheard sentence into the transcript. Give it a local one, or
