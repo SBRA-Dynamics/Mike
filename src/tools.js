@@ -144,7 +144,7 @@ export function createToolset({ registry, engine, log, dirs }) {
 			inputSchema: {
 				type: "object",
 				properties: {
-					name: { type: "string", description: "What the user called it, as spoken." },
+					name: { type: "string", description: "What the user called it, as spoken. Omit when the user gave no name: one from the book is picked, and the reply says which." },
 					systemPrompt: { type: "string", description: "Its system prompt — the worker-specific part, added to the standing instructions every session of this kind already gets. Written addressed to it, saying what it is responsible for: \"You are looking after the BLE firmware in MyLibrary.\" It is present on EVERY turn it ever takes, so it still knows its job an hour from now. Never mention workers, models or this orchestration — write the job, not the assignment." },
 					model: { type: "string", description: `Which model to run: ${MODEL_LIST}. Omit to use the default.` },
 					cwd: { type: "string", description: "Absolute path the worker works in, or one of the known names below. Omit to inherit the default." },
@@ -158,11 +158,13 @@ export function createToolset({ registry, engine, log, dirs }) {
 				// difference is real: `prompt` is said once and scrolls away,
 				// `systemPrompt` is present on every turn the worker ever takes.
 				// Requiring it is what made him fill it in.
-				required: ["name", "systemPrompt"],
+				required: ["systemPrompt"],
 				additionalProperties: false
 			},
 			run: async (args, { session }) => {
-				const name = str(args.name, "name");
+				// No name is not an error: the worker gets one of the book's
+				// names, free at the moment of asking (names.js).
+				const name = optStr(args.name, "name")?.trim() || registry.freeName();
 				const model = optStr(args.model, "model");
 				const cwd = optStr(args.cwd, "cwd");
 				const prompt = optStr(args.prompt, "prompt");

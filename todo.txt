@@ -1,5 +1,7 @@
 # Todo
 
+- Om man inte väljer något namn när man startar en worker så ska den automatiskt välja random namn: Mannie, Wyoh, Prof, Mum, Grandpaw, Milla, Greg, Hans, Sidris
+
 - Mikrofonens läge syns inte medan "thinking <t>s" visas: slår man på eller av
   micken då byter statusraden inte ord, så man vet inte om den är igång. Lägg
   i stället en mikrofon-emoji längst till höger på namnraden, oberoende av

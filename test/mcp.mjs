@@ -10,7 +10,7 @@
 
 import { startServer, connect, grantTools, McpClient, check, failed, section, sleep } from "./harness.mjs";
 import { resolveModel, MODEL_LIST, MODELS } from "../src/models.js";
-import { normalizeName, displayName, checkName } from "../src/names.js";
+import { normalizeName, displayName, checkName, BOOK_NAMES, pickName } from "../src/names.js";
 
 /** Collected for the R2.5 sweep at the end: every refusal the model ever sees
  *  has to fit on a lens. Asserting it once per call site would be easy to
@@ -134,7 +134,26 @@ try {
 		(await (await fetch(`${server.base}/healthz`)).json()).workers === 1);
 
 	refused("reserverat namn", await mcp.call("spawn_worker", { name: "Mike", systemPrompt: "Du sköter en uppgift i testriggen." }));
-	refused("namnlös", await mcp.call("spawn_worker", {}));
+	refused("utan systemprompt", await mcp.call("spawn_worker", {}));
+
+	section("en arbetare utan namn får ett ur boken");
+	{
+		const unnamed = await mcp.call("spawn_worker", { systemPrompt: "Du sköter en uppgift i testriggen." });
+		check("den skapas ändå", unnamed.isError !== true, unnamed.text);
+		const picked = BOOK_NAMES.find((n) => unnamed.text.startsWith(`${n} is running`));
+		check("och heter något ur boken", !!picked, unnamed.text);
+		const again = await mcp.call("spawn_worker", { systemPrompt: "Du sköter en uppgift i testriggen." });
+		const second = BOOK_NAMES.find((n) => again.text.startsWith(`${n} is running`));
+		check("nästa får ett annat", !!second && second !== picked, again.text);
+		if (picked) await mcp.call("end_worker", { name: picked });
+		if (second) await mcp.call("end_worker", { name: second });
+		await mcp.call("switch_worker", { name: "Bosse" });
+
+		const all = new Set(BOOK_NAMES.map(normalizeName));
+		check("när alla är tagna numreras ett", /^[A-Z][a-z]+ 2$/.test(pickName(all)), pickName(all));
+		check("och numret hoppar över det som också är taget", pickName(new Set([...all, ...BOOK_NAMES.map((n) => normalizeName(`${n} 2`))]), () => 0) === "Mannie 3");
+		check("ett tomt namn räknas som inget", (await mcp.call("spawn_worker", { name: "  ", systemPrompt: "x" })).isError !== true);
+	}
 	refused("okänd arbetare", await mcp.call("switch_worker", { name: "finns inte" }));
 	refused("okänt verktyg", await mcp.call("spawn_helicopter", { name: "x" }));
 

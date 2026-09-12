@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { renameSync, readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { checkName, normalizeName } from "./names.js";
+import { checkName, normalizeName, pickName } from "./names.js";
 import { resolveModel } from "./models.js";
 
 /** An error whose message is meant to be read out loud on a 50x10 lens.
@@ -77,6 +77,11 @@ export class WorkerRegistry {
 	 * Create a worker. Throws ToolError on a collision, a reserved name, an
 	 * unknown model or a working directory that is not there.
 	 */
+	/** A name for a worker nobody named: one from the book that is free. */
+	freeName() {
+		return pickName(new Set(this.workers.keys()));
+	}
+
 	create({ name, model, cwd, systemPrompt }) {
 		if (this.workers.size >= MAX_WORKERS) throw new ToolError(`${MAX_WORKERS} workers is the limit; end one first`);
 
