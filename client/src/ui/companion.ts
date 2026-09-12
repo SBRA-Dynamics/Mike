@@ -62,6 +62,8 @@ const LISTENING_TEXT: Record<ListeningState, string> = {
 	idle: "idle",
 	listening: "listening",
 	heard: "heard",
+	holding: "still listening",
+	queued: "queued",
 	thinking: "thinking"
 };
 
@@ -393,7 +395,7 @@ export class Companion {
 			: listening === "thinking"
 				? thinkingText(state.busySince, Date.now(), state.progress?.tool ?? null)
 				: LISTENING_TEXT[listening];
-		n.listening.classList.toggle("live", listening === "listening" || listening === "heard");
+		n.listening.classList.toggle("live", listening === "listening" || listening === "heard" || listening === "holding");
 		n.listening.classList.toggle("speaking", !!v?.speaking);
 
 		const mic = n.mic as HTMLButtonElement;

@@ -188,6 +188,13 @@ try {
 	// here is that audio flows and stops, and silence keeps the client's own
 	// segmenter from filling the server with utterances nobody said while the
 	// simulator feeds frames at eighty times real time.
+	//
+	// DO NOT RUN. We do not open the microphone in the simulator (README,
+	// Testing). On this device, simulator 0.9.5 sometimes keeps streaming after
+	// audioControl(false) and grows by ~700 MB/s until the OOM killer arrives.
+	// From inside jarvis-server's cgroup, that killer took the whole service
+	// down. Reproduced without any Jarvis code. This suite opens it anyway,
+	// and stays unrun until that part is taken out.
 	sim = spawn("evenhub-simulator", ["--automation-port", String(automationPort), "--aid", "alsa:null", url], {
 		env: { ...process.env, DISPLAY },
 		detached: true, stdio: ["ignore", "pipe", "pipe"]
@@ -319,6 +326,37 @@ try {
 		check("inte ett enda segment skickades under två håll i ett tyst rum (krav 5)",
 			sent === 0, JSON.stringify(lines.slice(-3).map((l) => l.raw)));
 		check("och servern körde ingen tur", !/heard \d+ms/.test(server.log()), (server.log().match(/heard [^\n]*/g) ?? []).join(" / "));
+	}
+
+	// ------------------------------------------------------------- tappen
+	//
+	// One finger, one tap: the microphone on and off without reaching for the
+	// phone. The mode has to leave PushToTalk first — there the hold IS the
+	// microphone and the switch has nothing to turn on — so this is the mode
+	// the user is in when they say "listen to everything".
+	section("tappen: en tryckning startar och stoppar mikrofonen");
+	{
+		const sinceMode = driver.mark();
+		driver.send({ type: "control", action: "setMode", args: { mode: MODES.ALWAYS } });
+		let changed = null;
+		try {
+			changed = await driver.waitFor((m) => (m.type === "event" && m.kind === "modeChanged") || m.type === "error", 6000, "modeChanged", sinceMode);
+		} catch { /* the check below says it */ }
+		check("läget hann bli always innan tappen", changed?.data?.mode === MODES.ALWAYS, JSON.stringify(changed ?? driver.messages.slice(sinceMode).slice(0, 3)));
+		await sleep(2000);
+		const opened = await gestureUntil("click", (l) => l.live === "true", "tappen som öppnar");
+		if (!opened) console.log("  --   konsolen:", JSON.stringify((await consoleEntries()).slice(-14).map((e) => e.message)));
+		check("en tapp på pekplattan öppnar mikrofonen", !!opened, "fyra tappar gav ingen öppen mikrofon");
+		check("och det är glasögonens egen, inte telefonens", opened?.device === "glasses", opened?.raw ?? "-");
+
+		const closed = await gestureUntil("click", (l) => l.live === "false", "tappen som stänger");
+		check("en tapp till stänger den igen", !!closed, "mikrofonen stängdes inte av nästa tapp");
+		check("och lämnar inget spår som fortfarande spelar in",
+			closed?.tracks === 0, closed?.raw ?? "-");
+
+		// Back to where the rest of the suite thinks it is.
+		driver.send({ type: "control", action: "setMode", args: { mode: MODES.PUSHTOTALK } });
+		await sleep(2000);
 	}
 
 	// ------------------------------------------------------------- avslutet

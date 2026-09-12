@@ -824,6 +824,72 @@ try {
 		server.stop();
 	}
 
+	section("PRD 6: fönstret är tystnad, inte klocka");
+	{
+		// The window is 1200 ms here and the user keeps talking for 2000 ms in
+		// the middle of it. Measured from transcript to transcript that is a
+		// split sentence, and the log from the glasses said it was the usual
+		// case: three merges in forty turns. The client's detector says when it
+		// has opened a segment (C2S.SPEAKING), and a window with someone talking
+		// into it waits for their fragment instead of counting.
+		const server = track(await startJarvis([], { JARVIS_HOLD_MS: "1200" }));
+		const c = await connect(server);
+		await say(c, "Jarvis, starta en arbetare som heter Bosse.");
+
+		const since = c.mark();
+		c.send({ type: "say", text: "Bosse, starta en ny worker och ta reda på" });
+		await sleep(300);
+		c.send({ type: "speaking", on: true });     // the second half begins
+		await sleep(2000);                            // ...and takes longer than the window
+		c.send({ type: "speaking", on: false });
+		await sleep(300);                             // whisper
+		c.send({ type: "say", text: "vad den här kapningen är, använd opus" });
+		await c.waitFor((m) => m.type === "state" && m.busy === false, 20_000, "turen hinner bli klar", since);
+		const msgs = c.messages.slice(since);
+		const turns = msgs.filter((m) => m.type === "event" && m.kind === "turn");
+		check("två fragment med två sekunders tal emellan blir en tur",
+			new Set(turns.map((m) => m.data.id)).size === 1, JSON.stringify(turns.map((m) => [m.data.id, m.data.phase])));
+		const replies = msgs.filter((m) => m.type === "text" && m.from === "Bosse");
+		check("och arbetaren fick hela meningen",
+			replies.length === 1 && /ta reda på vad den här kapningen är, använd opus/.test(String(replies[0]?.text)),
+			JSON.stringify(replies.map((m) => m.text)));
+
+		// The signal usually arrives BEFORE there is a window: the user starts
+		// the next fragment while the first is still in whisper. It has to be
+		// remembered for the window that is about to open.
+		const early = c.mark();
+		c.send({ type: "speaking", on: true });
+		await sleep(100);
+		c.send({ type: "say", text: "Bosse, och sen" });
+		await sleep(2000);
+		check("ett fönster som öppnas medan användaren pratar väntar",
+			!c.messages.slice(early).some((m) => m.type === "event" && m.kind === "turn" && m.data.phase !== "held"),
+			JSON.stringify(c.messages.slice(early).filter((m) => m.kind === "turn").map((m) => m.data.phase)));
+		c.send({ type: "speaking", on: false });
+		c.send({ type: "say", text: "kör testerna" });
+		await c.waitFor((m) => m.type === "state" && m.busy === false, 20_000, "andra turen blir klar", early);
+		const second = c.messages.slice(early).filter((m) => m.type === "text" && m.from === "Bosse");
+		check("och får båda halvorna", second.length === 1 && /och sen kör testerna/.test(String(second[0]?.text)),
+			JSON.stringify(second.map((m) => m.text)));
+
+		// Speech that ends in nothing — a cough, a segment the detector threw
+		// away — must not hold the words hostage: the clock starts again when
+		// the microphone goes quiet, and the window closes on its own.
+		const quiet = c.mark();
+		c.send({ type: "say", text: "Bosse, en sak till" });
+		await sleep(200);
+		c.send({ type: "speaking", on: true });
+		await sleep(1500);
+		c.send({ type: "speaking", on: false });
+		const closed = await c.waitFor((m) => m.type === "event" && m.kind === "turn" && m.data.phase === "queued", 3000, "fönstret stängs efter tystnad", quiet);
+		check("tystnad utan fragment stänger fönstret ändå", closed.data.parts.length === 1, JSON.stringify(closed.data));
+		await c.waitFor((m) => m.type === "state" && m.busy === false, 20_000, "tredje turen blir klar", quiet);
+
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
 	section("PRD 6: skrivna ord väntar inte");
 	{
 		const server = track(await startJarvis([], { JARVIS_HOLD_MS: "5000" }));

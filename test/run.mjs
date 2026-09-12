@@ -19,6 +19,8 @@ try {
 	check("avvisar say utan text", validateC2S({ type: "say" }).ok === false);
 	check("accepterar giltig say", validateC2S({ type: "say", text: "hej" }).ok === true);
 	check("avvisar orimligt lång text", validateC2S({ type: "say", text: "x".repeat(200_000) }).ok === false);
+	check("accepterar speaking med en boolean", validateC2S({ type: "speaking", on: true }).ok === true);
+	check("avvisar speaking utan boolean", validateC2S({ type: "speaking", on: "ja" }).ok === false);
 
 	// -------------------------------------------------------------------- auth
 	section("auth — R1.7");

@@ -65,7 +65,12 @@ export type VoiceOptions = {
 	 *  the caller says so rather than queueing, for the same reason a typed line
 	 *  is not queued: an utterance that arrives four minutes late lands in a
 	 *  conversation that has moved on. */
-	send: (pcm: Int16Array, info: { durationMs: number; reason: Segment["reason"] }) => boolean;
+	send: (pcm: Int16Array, info: { durationMs: number; reason: Segment["reason"]; floorDb: number; peakDb: number }) => boolean;
+	/** PRD 6: the detector opened or closed a segment. Fired the moment it
+	 *  flips, before any audio is sent, so the server can keep the previous
+	 *  fragment's window open while this one is being spoken. Optional — the
+	 *  browser suite drives Voice without a socket. */
+	onSpeaking?: (on: boolean) => void;
 	onChange: (status: VoiceStatus) => void;
 	/** A sentence for the user — a refused permission, a dropped segment. */
 	onNote: (text: string) => void;
@@ -131,7 +136,12 @@ export class Voice {
 			segmenter: opts.segmenter,
 			onSegment: (s: Segment) => this.#segment(s),
 			onState: () => this.#changed(),
-			onLevel: (_db: number, speaking: boolean) => { if (speaking !== this.#speaking) { this.#speaking = speaking; this.#changed(); } }
+			onLevel: (_db: number, speaking: boolean) => {
+				if (speaking === this.#speaking) return;
+				this.#speaking = speaking;
+				this.#opts.onSpeaking?.(speaking);
+				this.#changed();
+			}
 		};
 		this.mic = opts.mic ?? new Microphone(wiring);
 		this.glasses = opts.glasses
@@ -314,7 +324,7 @@ export class Voice {
 
 	#segment(segment: Segment): void {
 		this.lastSegmentMs = segment.durationMs;
-		const ok = this.#opts.send(segment.pcm, { durationMs: segment.durationMs, reason: segment.reason });
+		const ok = this.#opts.send(segment.pcm, { durationMs: segment.durationMs, reason: segment.reason, floorDb: segment.floorDb, peakDb: segment.peakDb });
 		if (ok) this.sent++;
 		else this.#opts.onNote("Heard you, but there was no connection to send it on.");
 		this.#changed();

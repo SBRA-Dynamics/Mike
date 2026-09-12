@@ -46,6 +46,13 @@ export type Segment = {
 	 *  0.3 seconds of speech is a cough with a hangover attached. */
 	speechMs: number;
 	reason: SegmentReason;
+	/** What the detector believed the room was when it closed, and the loudest
+	 *  frame it kept. Sent with the segment and logged by the server, because
+	 *  the one thing a log of transcripts could not answer was "what did the
+	 *  client think it was hearing" — and the answer turned out to be "a floor
+	 *  of -70 dB and fifteen seconds of room tone". */
+	floorDb: number;
+	peakDb: number;
 };
 
 export type SegmenterOptions = {
@@ -83,6 +90,30 @@ export type SegmenterOptions = {
 	 *  starting should raise the bar over seconds, while a person talking for
 	 *  ten seconds must not raise it at all. */
 	floorRiseRate: number;
+	/** The floor's target is the quietest frame in this window, not the current
+	 *  frame — minimum statistics. Speech has gaps between words, so the
+	 *  quietest frame of any second and a half is the room, whatever is being
+	 *  said in it; and one stray frame cannot move the floor on its own. The
+	 *  first version fell by half the distance to EVERY quieter frame, so one
+	 *  frame of zeros from a BLE gap took the floor to its minimum, room tone
+	 *  became "speech" and the microphone was one continuous utterance, cut
+	 *  into fifteen-second pieces, until something happened to be quieter. */
+	floorWindowMs: number;
+	/** While a segment is open the floor may still rise toward that window
+	 *  minimum, at this rate. A segment that is open on room tone alone — the
+	 *  only way to be open with the window minimum above the floor — then
+	 *  closes itself within a couple of seconds instead of at maxSegmentMs. A
+	 *  sentence does not raise it: its window minimum is the gap between words,
+	 *  which is the room. */
+	floorRiseRateOpen: number;
+	/** A frame at or below this is not room tone, it is nothing — a dropout, a
+	 *  gap the bridge padded with zeros — and the floor ignores it. */
+	gapDb: number;
+	/** A segment that reaches maxSegmentMs is cut at the most recent pause of
+	 *  at least this length rather than at the length itself, and what follows
+	 *  the pause starts the next segment. A cut at an arbitrary sample lands
+	 *  inside a syllable, and whisper turned "flera" into "Spära". */
+	cutGapMs: number;
 	/** Push-to-talk. Silence no longer closes a segment — the hold delimits the
 	 *  utterance and `flush("release")` ends it — but the detector still runs,
 	 *  so the silence at both ends is trimmed before whisper sees it (R5a.3). */
@@ -103,6 +134,10 @@ export const DEFAULTS: SegmenterOptions = {
 	maxFloorDb: -25,
 	floorFallRate: 0.5,
 	floorRiseRate: 0.004,
+	floorWindowMs: 1500,
+	floorRiseRateOpen: 0.02,
+	gapDb: -90,
+	cutGapMs: 200,
 	hold: false
 };
 
@@ -147,6 +182,10 @@ export class Segmenter {
 	#consumed = 0;
 	#floorDb: number;
 	#lastDb = -100;
+	/** Per-frame level, parallel to #frames, for the peak and the cut. */
+	#levels: number[] = [];
+	/** Levels of the last floorWindowMs frames that were not gaps. */
+	#recent: number[] = [];
 
 	constructor(options: Partial<SegmenterOptions> = {}) {
 		this.opts = { ...DEFAULTS, ...options };
@@ -213,29 +252,38 @@ export class Segmenter {
 		this.#consumed++;
 		const db = frameLevelDb(frame);
 		this.#lastDb = db;
-		const isSpeech = db > this.#floorDb + this.opts.marginDb;
 
-		// The floor is tracked between utterances, never during one: a long
-		// sentence would otherwise raise the bar until the speaker fell off it.
-		//
-		// Crucially it is tracked whatever the verdict was, not only on frames
-		// that looked quiet. The first version updated it only when `!isSpeech`,
-		// which cannot recover from a floor that is too low: every frame then
-		// looks like speech, so nothing ever updates the floor, and a room with
-		// a fan in it is one continuous utterance.
-		if (!this.#open) {
-			const rate = db < this.#floorDb ? this.opts.floorFallRate : this.opts.floorRiseRate;
-			this.#floorDb = Math.min(this.opts.maxFloorDb, Math.max(this.opts.minFloorDb, this.#floorDb + rate * (db - this.#floorDb)));
+		// The floor follows the quietest recent frame (floorWindowMs), and it is
+		// tracked whatever the verdict on this frame was, not only on frames
+		// that looked quiet. An earlier version updated it only when
+		// `!isSpeech`, which cannot recover from a floor that is too low: every
+		// frame then looks like speech, so nothing ever updates the floor, and a
+		// room with a fan in it is one continuous utterance. The version after
+		// that froze it while a segment was open, which is the same trap with
+		// an extra step: a floor that one dropout frame had dragged to the
+		// bottom opened a segment on room tone, froze there, and stayed open to
+		// the maximum, over and over.
+		if (db > this.opts.gapDb) {
+			this.#recent.push(db);
+			const span = this.#msToFrames(this.opts.floorWindowMs);
+			while (this.#recent.length > span) this.#recent.shift();
+			let target = Infinity;
+			for (const v of this.#recent) if (v < target) target = v;
+			const rate = target < this.#floorDb ? this.opts.floorFallRate
+				: this.#open ? this.opts.floorRiseRateOpen : this.opts.floorRiseRate;
+			this.#floorDb = Math.min(this.opts.maxFloorDb, Math.max(this.opts.minFloorDb, this.#floorDb + rate * (target - this.#floorDb)));
 		}
+		const isSpeech = db > this.#floorDb + this.opts.marginDb;
 
 		this.#frames.push(frame);
 		this.#speech.push(isSpeech);
+		this.#levels.push(db);
 
 		if (!this.#open) {
 			// Idle: keep only the pre-roll, so a microphone left on all afternoon
 			// costs a fixed 300 ms of memory.
 			const keep = this.#msToFrames(this.opts.preRollMs) + this.#msToFrames(this.opts.startMs);
-			while (this.#frames.length > keep) { this.#frames.shift(); this.#speech.shift(); }
+			while (this.#frames.length > keep) { this.#frames.shift(); this.#speech.shift(); this.#levels.shift(); }
 
 			if (!isSpeech) { this.#pendingSpeechFrames = 0; return null; }
 
@@ -259,7 +307,7 @@ export class Segmenter {
 		// the next frame open a new one — a sentence split in two is a worse
 		// answer than an unbounded buffer only until the buffer is the problem.
 		if (this.#frames.length - this.#startFrame >= this.#msToFrames(this.opts.maxSegmentMs)) {
-			return this.#close("maximum");
+			return this.#close("maximum", this.#cutPoint());
 		}
 
 		// In hold mode silence never ends the utterance: the release does
@@ -290,7 +338,12 @@ export class Segmenter {
 	 *  reopened, because it may be a different microphone in a different room. */
 	reset(): void {
 		this.#reset();
-		this.#floorDb = this.opts.minFloorDb;
+		// The top of the range, as in the constructor, and for the same reason:
+		// falling is the fast direction. Starting at the bottom meant the first
+		// room tone after a reopen was speech until the slow rise caught up —
+		// which, with the segment then open, it never did.
+		this.#floorDb = this.opts.maxFloorDb;
+		this.#recent = [];
 		this.#consumed = 0;
 		this.#lastDb = -100;
 	}
@@ -298,6 +351,7 @@ export class Segmenter {
 	#reset(): void {
 		this.#frames = [];
 		this.#speech = [];
+		this.#levels = [];
 		this.#tail = new Int16Array(0);
 		this.#open = false;
 		this.#startFrame = 0;
@@ -306,42 +360,76 @@ export class Segmenter {
 		this.#pendingSpeechFrames = 0;
 	}
 
-	/** Cut the segment out of the buffered frames, trimmed at both ends. */
-	#close(reason: SegmentReason): Segment | null {
-		const speechMs = this.#framesToMs(this.#speechFrames);
+	/** Where to cut a segment that has reached its maximum: the start of the
+	 *  most recent pause of cutGapMs, if there is one in the second half of the
+	 *  segment; otherwise the end, as before. Frames from the cut onward carry
+	 *  into the next segment. */
+	#cutPoint(): number {
+		const gap = this.#msToFrames(this.opts.cutGapMs);
+		const floor = this.#startFrame + Math.floor((this.#speech.length - this.#startFrame) / 2);
+		let run = 0;
+		for (let i = this.#speech.length - 1; i >= floor; i--) {
+			if (this.#speech[i]) { run = 0; continue; }
+			run++;
+			if (run >= gap) return i;
+		}
+		return this.#speech.length;
+	}
 
+	/** Cut the segment out of the buffered frames, trimmed at both ends.
+	 *  `upto` is where the segment stops; anything after it is the beginning of
+	 *  the next one and stays. */
+	#close(reason: SegmentReason, upto = this.#speech.length): Segment | null {
 		// First and last speech frame inside the segment, so the trim is the same
 		// whether the silence at the front was pre-roll or (in hold mode) a user
 		// who pressed the button and then thought about it.
 		let first = -1;
 		let last = -1;
-		for (let i = this.#startFrame; i < this.#speech.length; i++) {
+		let speechFrames = 0;
+		for (let i = this.#startFrame; i < upto; i++) {
 			if (!this.#speech[i]) continue;
 			if (first < 0) first = i;
 			last = i;
+			speechFrames++;
 		}
+		const speechMs = this.#framesToMs(speechFrames);
 
 		const enough = first >= 0 && speechMs >= this.opts.minSpeechMs;
 		let segment: Segment | null = null;
 
 		if (enough) {
 			const from = Math.max(this.#startFrame, first - this.#msToFrames(this.opts.preRollMs));
-			const to = Math.min(this.#speech.length, last + 1 + this.#msToFrames(this.opts.tailMs));
+			const to = Math.min(upto, last + 1 + this.#msToFrames(this.opts.tailMs));
 			const pcm = concat(this.#frames, from, to);
+			let peakDb = -100;
+			for (let i = from; i < to; i++) if (this.#levels[i] > peakDb) peakDb = this.#levels[i];
 			// The stream clock is "frames consumed"; the segment's own frames are
 			// the last (#frames.length) of them, so its position is that minus the
 			// distance from the end.
 			const endOfStream = this.#consumed;
 			const startMs = this.#framesToMs(endOfStream - (this.#frames.length - from));
 			const endMs = this.#framesToMs(endOfStream - (this.#frames.length - to));
-			segment = { pcm, startMs, endMs, durationMs: endMs - startMs, speechMs, reason };
+			segment = { pcm, startMs, endMs, durationMs: endMs - startMs, speechMs, reason, floorDb: Math.round(this.#floorDb), peakDb: Math.round(peakDb) };
 		}
 
+		// What follows the cut is the next utterance, already in progress: it
+		// reopens at once, with its own frames, rather than waiting out another
+		// startMs of speech — which would have been the first syllable, lost.
+		const carryFrames = this.#frames.slice(upto);
+		const carrySpeech = this.#speech.slice(upto);
+		const carryLevels = this.#levels.slice(upto);
 		this.#reset();
-		// A "maximum" cut means the speaker is still speaking, so the next frame
-		// should be able to open a new segment immediately rather than waiting
-		// out another startMs of silence. Nothing to do but note it: the state
-		// machine already treats the next speech frame as a fresh start.
+		if (carryFrames.length) {
+			this.#frames = carryFrames;
+			this.#speech = carrySpeech;
+			this.#levels = carryLevels;
+			this.#open = true;
+			this.#startFrame = 0;
+			this.#speechFrames = carrySpeech.filter(Boolean).length;
+			let trailing = 0;
+			for (let i = carrySpeech.length - 1; i >= 0 && !carrySpeech[i]; i--) trailing++;
+			this.#silenceFrames = trailing;
+		}
 		return segment;
 	}
 }

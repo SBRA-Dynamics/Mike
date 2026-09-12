@@ -24,7 +24,7 @@ import { startProxy } from "./netcut.mjs";
 
 import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS } from "../client/src/lens/render.ts";
 import { Connection, wsUrlFrom } from "../client/src/connection.ts";
-import { Store, NOTICE_MS, STALE_MS, LENS_IDLE_MS, MARK_WAITING, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
+import { Store, NOTICE_MS, STALE_MS, LENS_IDLE_MS, MARK_WAITING, MARK_QUEUED, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
 import { settingsFromScan, decodeFrame } from "../client/src/qr.ts";
 import { readUrlSettings, SettingsStore } from "../client/src/settings.ts";
 import { Glasses, hasHostChannel, isAudioChatter } from "../client/src/glasses.ts";
@@ -551,13 +551,29 @@ try {
 		check("en mening som hålls står på linsen med en gång",
 			lines()[0] === `${MARK_WAITING} bygg klart testerna`, JSON.stringify(lines()));
 		check("och det räknas som att något pågår, före serverns state", s.working() === true);
+		// But not as thinking. The window is open, the invitation is to keep
+		// talking, and "thinking" is the one word that says the opposite.
+		check("men inte som att någon tänker", s.listening() === "holding" && s.thinking() === false, s.listening());
+		check("namnraden säger att den fortfarande lyssnar", s.lensStatus() === "still listening", String(s.lensStatus()));
 
 		turn("held", ["bygg klart testerna", "och kör dem sen"]);
 		check("båda meningarna syns, inte bara den sista", lines().length === 2, JSON.stringify(lines()));
 
+		// Sent, and nothing has picked it up: a third mark, so that a sentence
+		// waiting behind a running turn cannot be mistaken for one still open.
+		const sentAt = Date.now();
+		turn("queued", ["bygg klart testerna", "och kör dem sen"]);
+		check("skickad men inte upptagen har ett eget märke",
+			lines().every((l) => l.startsWith(MARK_QUEUED)), JSON.stringify(lines()));
+		check("och namnraden säger köad", s.listening() === "queued" && s.lensStatus() === "queued", String(s.lensStatus()));
+		check("märket finns i fonten", getTextWidth(MARK_QUEUED) > 4, String(getTextWidth(MARK_QUEUED)));
+
 		turn("started", ["bygg klart testerna", "och kör dem sen"]);
 		check("när processen har orden byts pilen mot en bock",
 			lines().every((l) => l.startsWith(MARK_TAKEN)), JSON.stringify(lines()));
+		check("och först nu tänker någon", s.listening() === "thinking", s.listening());
+		check("räknaren räknar från att orden skickades, inte från första fragmentet",
+			Math.abs((s.workingSince() ?? 0) - sentAt) < 50, String((s.workingSince() ?? 0) - sentAt));
 		// The tick everybody reaches for first is not in the firmware font, and a
 		// missing glyph is a box on the user's eye. This is the check that keeps
 		// somebody from "fixing" the mark back to it.

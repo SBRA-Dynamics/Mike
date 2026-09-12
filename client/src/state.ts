@@ -49,6 +49,12 @@ export type LiveTurn = {
 	/** What it is doing right now — a tool call, or a later sentence. */
 	doing: string | null;
 	at: number;
+	/** When the window closed and the words left for a model — the moment the
+	 *  wait for an answer begins. Null while still gathering. Not `at`: the
+	 *  window can stay open for as long as the user keeps talking, and a counter
+	 *  that started then would read "thinking 12s" the instant the model got
+	 *  the sentence. */
+	sentAt: number | null;
 	/** When `doing` last changed, and when the process was last known to be
 	 *  producing anything at all. The second is the weaker claim and the one
 	 *  that keeps the blink honest. */
@@ -157,21 +163,38 @@ export const LENS_IDLE_MS = 10_000;
  *  working on any more. */
 export const DONE_LINGER_MS = 2500;
 
-/** The two marks a spoken fragment can carry. `√` rather than `✓` on purpose:
- *  the firmware font has no tick, and @evenrealities/pretext measures the one
- *  everybody reaches for first at the same width as a missing glyph, which on
- *  glass is a box where the confirmation should be. Both of these are in the
- *  font and are within a pixel of each other, so the line does not move when
- *  the mark changes. */
+/** The three marks a spoken fragment can carry, one per thing the user needs
+ *  to be able to tell apart at a glance:
+ *
+ *    »  the sentence is still open — keep talking and it joins this turn
+ *    ›  sent, waiting for a process to take it (usually: behind another turn)
+ *    √  a process has the whole utterance
+ *
+ *  Before the middle one existed, "held" and "queued" shared `»`, and a
+ *  fragment queued behind a running turn looked exactly like one still being
+ *  gathered — the user could not tell "it is waiting for me" from "it is
+ *  waiting for Bosse", which are opposite instructions about what to do next.
+ *
+ *  `√` rather than `✓` on purpose: the firmware font has no tick, and
+ *  @evenrealities/pretext measures the one everybody reaches for first at the
+ *  same width as a missing glyph, which on glass is a box where the
+ *  confirmation should be. All three are measured present in the font. */
 export const MARK_WAITING = "»";
+export const MARK_QUEUED = "›";
 export const MARK_TAKEN = "√";
 /** What a turn says about itself, which is not the user's words. */
 export const MARK_THEIRS = "«";
 
 /** What the user is told is happening, in the order that matters when two are
  *  true at once. Thinking outranks heard: once a turn has started, that the
- *  words were understood is settled. */
-export type ListeningState = "idle" | "listening" | "heard" | "thinking";
+ *  words were understood is settled.
+ *
+ *  `holding` and `queued` are PRD 6's: a sentence the server is still
+ *  gathering, and one it has sent that nothing has picked up yet. Both used to
+ *  read as "thinking", which is the exact word for what is NOT happening while
+ *  the window is open — and the reason a lens that said it felt like a model
+ *  that started before the user had finished. */
+export type ListeningState = "idle" | "listening" | "heard" | "holding" | "queued" | "thinking";
 
 /** "thinking", with the seconds it has been thinking for once there is a
  *  second to show. A turn that takes a while and a turn that has hung look
@@ -283,17 +306,32 @@ export class Store {
 		return this.state.busy || this.liveTurns(now).length > 0;
 	}
 
-	/** When the oldest thing still being worked on started, so the counter
-	 *  measures the wait the user is actually having. */
+	/** Is a model actually at work — as opposed to a sentence still being
+	 *  gathered or sitting in a queue? `working` is the wider question (is
+	 *  there anything on the lens to keep alive); this is the one the word
+	 *  "thinking" is allowed to answer. A finished turn counts for the moment it
+	 *  lingers: its answer is what is being waited for. */
+	thinking(now = Date.now()): boolean {
+		return this.state.busy || this.liveTurns(now).some((t) => t.phase !== "held" && t.phase !== "queued");
+	}
+
+	/** When the oldest thing still being waited on was sent, so the counter
+	 *  measures the wait the user is actually having — from the words leaving
+	 *  for a model, not from the first fragment being heard. */
 	workingSince(now = Date.now()): number | null {
-		const live = this.liveTurns(now);
-		const first = live.length ? live[0].at : null;
+		const sent = this.liveTurns(now).map((t) => t.sentAt).filter((t): t is number => t !== null);
+		const first = sent.length ? Math.min(...sent) : null;
 		if (first === null) return this.state.busySince;
 		return this.state.busySince === null ? first : Math.min(first, this.state.busySince);
 	}
 
 	listening(now = Date.now()): ListeningState {
-		if (this.working(now)) return "thinking";
+		if (this.thinking(now)) return "thinking";
+		const live = this.liveTurns(now);
+		// Held outranks queued: a window still open is an invitation to keep
+		// talking, and that is the more useful thing to say while it is true.
+		if (live.some((t) => t.phase === "held")) return "holding";
+		if (live.length) return "queued";
 		if (this.state.heard && now - this.state.heard.at < HEARD_MS) return "heard";
 		return this.state.voice?.live ? "listening" : "idle";
 	}
@@ -459,7 +497,7 @@ export class Store {
 		// dropped whole rather than by the line.
 		const groups: string[][] = [];
 		for (const t of live) {
-			const mark = t.phase === "held" || t.phase === "queued" ? MARK_WAITING : MARK_TAKEN;
+			const mark = t.phase === "held" ? MARK_WAITING : t.phase === "queued" ? MARK_QUEUED : MARK_TAKEN;
 			for (const part of t.parts) groups.push(wrapText(`${mark} ${part}`));
 		}
 
@@ -609,6 +647,11 @@ export class Store {
 		if (waiting) return waiting;
 		const listening = this.listening(now);
 		if (listening === "thinking") return this.thinkingLabel(now);
+		// The sentence is open. Said in words the user can act on: the thing to
+		// do while this is true is finish the thought, and the thing NOT to do is
+		// wait for an answer — which "thinking" would have told them to.
+		if (listening === "holding") return "still listening";
+		if (listening === "queued") return "queued";
 		if (listening === "heard") return "heard";
 		// Paused is what the user most needs to know, and hold-to-talk explains
 		// why nothing is happening when they speak.
@@ -620,8 +663,14 @@ export class Store {
 		// the switch is off and nothing is being heard at all — and the hold
 		// still works, being unconditional by design, so there is no symptom to
 		// suspect the switch from. Say the actionable half.
+		//
+		// In the default mode too, now that a tap on the touchpad is the switch.
+		// This row used to stay quiet there, on the grounds that the ordinary
+		// case should not spend the line; the moment the user can turn the
+		// microphone off with one finger, a silent row makes a deliberate act
+		// look like a dropped gesture.
 		if (s.mode !== MODES.PUSHTOTALK && s.mode !== MODES.IGNORE && s.voice && !s.voice.enabled) {
-			return s.mode === DEFAULT_MODE ? null : "mic off";
+			return "mic off";
 		}
 
 		if (s.mode !== DEFAULT_MODE) return MODE_LABEL[s.mode] ?? s.mode;
@@ -665,16 +714,20 @@ export class Store {
 		const phase = String(d.phase ?? "held") as LiveTurn["phase"];
 		const parts = Array.isArray(d.parts) ? d.parts.map((v) => String(v)) : [];
 
+		// A reconnect can miss the `queued` event and first hear of a turn as
+		// `started`: anything past gathering has been sent.
+		const sent = phase !== "held";
 		const at = this.state.turns.find((t) => t.id === id);
 		if (!at) {
 			this.state.turns.push({
 				id, to: String(d.to ?? JARVIS), parts, phase,
-				plan: null, doing: null, at: now, doingAt: now, aliveAt: now
+				plan: null, doing: null, at: now, sentAt: sent ? now : null, doingAt: now, aliveAt: now
 			});
 			return;
 		}
 		at.parts = parts;
 		at.phase = phase;
+		if (sent && at.sentAt === null) at.sentAt = now;
 		// A phase change is news: it is what moves the mark from » to √, and the
 		// blink must not start counting from before it.
 		at.doingAt = now;

@@ -814,7 +814,7 @@ try {
 		for (const ev of events(three.pcm.subarray(0, 16_000 * 3), { frameBytes: 3200 })) v.glassesFrame(ev);
 		v.holdEnd();
 		check("ett glasögonsegment lämnar klienten med exakt samma uppgifter som ett webbläsarsegment",
-			seen.length === 1 && seen[0] === "durationMs,reason", JSON.stringify(seen));
+			seen.length === 1 && seen[0] === "durationMs,floorDb,peakDb,reason", JSON.stringify(seen));
 
 		// The behavioural half. Both segments on the same wire, to the same
 		// server, and the answers compared message by message.
@@ -897,7 +897,12 @@ section("linsen ljuger inte om att den lyssnar");
 	check("always med mikrofonen på säger always", st.lensStatus() === "always", String(st.lensStatus()));
 
 	st.state.mode = "byname"; voice({});
-	check("standardläget med mikrofonen av säger ingenting", st.lensStatus() === null, String(st.lensStatus()));
+	// The tap on the touchpad is the switch now, so a closed microphone has to
+	// be visible in the ordinary mode too: otherwise turning it off with one
+	// finger looks exactly like a gesture the glasses dropped.
+	check("standardläget med mikrofonen av säger också att den är av", st.lensStatus() === "mic off", String(st.lensStatus()));
+	voice({ enabled: true });
+	check("och säger ingenting när den är på — det är det vanliga läget", st.lensStatus() === null, String(st.lensStatus()));
 
 	st.state.mode = "pushtotalk"; voice({});
 	check("håll-in-läget nämner inte en stängd mikrofon — det är hela läget",

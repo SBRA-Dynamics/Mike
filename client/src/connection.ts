@@ -144,9 +144,14 @@ export class Connection {
 	 *  stream: whisper is markedly better given a whole utterance (R5a.3), and a
 	 *  segment that cannot be sent is dropped rather than queued, exactly like a
 	 *  typed line. */
-	audio(pcm: string, info: { durationMs?: number } = {}): boolean {
+	audio(pcm: string, info: { durationMs?: number; reason?: string; floorDb?: number; peakDb?: number } = {}): boolean {
 		return this.send({ type: C2S.AUDIO, pcm, final: true, sampleRate: 16_000, ...info });
 	}
+
+	/** PRD 6: the detector opened (true) or closed (false) a segment. Sent
+	 *  before the segment itself, which is the point — the server holds the
+	 *  previous fragment's window open while this one is still being said. */
+	speaking(on: boolean): boolean { return this.send({ type: C2S.SPEAKING, on }); }
 
 	interrupt(): boolean { return this.send({ type: C2S.INTERRUPT }); }
 

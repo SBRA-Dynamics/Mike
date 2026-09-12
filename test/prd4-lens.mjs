@@ -180,14 +180,16 @@ try {
 		`${litPixels(page1)} mot ${litPixels(first)}`);
 
 	// ------------------------------------------------------------- gesterna
+	// Paging is the swipes, all of it: the tap is the microphone's switch now,
+	// and a suite that still pages with it would be testing a client nobody has.
 	section("gesterna: ett långt svar går att läsa till slutet (R4.3, krav 7)");
-	await input("click");
-	const page2 = await shot("03-sida2-efter-tapp");
-	check("en tapp visar nästa sida", differingPixels(page1, page2) > 500, String(differingPixels(page1, page2)));
+	await input("down");
+	const page2 = await shot("03-sida2-efter-svep");
+	check("ett svep nedåt visar nästa sida", differingPixels(page1, page2) > 500, String(differingPixels(page1, page2)));
 
-	await input("click");
-	const page3 = await shot("04-sida3-efter-tapp");
-	check("en tapp till visar sista sidan",
+	await input("down");
+	const page3 = await shot("04-sida3-efter-svep");
+	check("ett svep till visar sista sidan",
 		differingPixels(page3, page2) > 500 && differingPixels(page3, page1) > 500,
 		`${differingPixels(page3, page2)} / ${differingPixels(page3, page1)}`);
 
@@ -205,11 +207,10 @@ try {
 	check("svep nedåt bortom sista sidan står stilla i stället för att tömma linsen",
 		differingPixels(stillLast, page3) === 0, String(differingPixels(stillLast, page3)));
 
-	// Past the last page a tap repeats from the top rather than doing nothing —
-	// the lens must never sit still on a gesture the user made deliberately.
-	await input("click");
-	const wrapped = await shot("08-tapp-bortom-slutet-borjar-om");
-	check("bortom sista sidan börjar en tapp om från början",
+	await input("up");
+	await input("up");
+	const wrapped = await shot("08-svep-upp-tillbaka-till-borjan");
+	check("och svepen tar sig hela vägen tillbaka till första sidan",
 		differingPixels(wrapped, page1) === 0, String(differingPixels(wrapped, page1)));
 
 	// ------------------------------------------------------------- companion
@@ -230,11 +231,18 @@ try {
 	const dark = await shot("11-slackt-efter-tystnad");
 	check("linsen är släckt, rubrikraden med", litPixels(dark) === 0, `${litPixels(dark)} px tända`);
 
+	// The tap is the microphone's switch, but not this one: on a dark lens it
+	// only lights it. A tap that both woke the lens and changed the microphone
+	// would make looking cost a mode the user did not ask for.
 	await input("click");
 	await sleep(1200);
 	const relit = await shot("12-tapp-tander-igen");
 	check("en tapp tänder den igen", litPixels(relit) > 0, `${litPixels(relit)} px tända`);
 	check("och visar svarets första sida", differingPixels(relit, wrapped) === 0, String(differingPixels(relit, wrapped)));
+	const micLines = (await consoleEntries()).filter((e) => e.message.includes("[jarvis] mic "));
+	check("och rör inte mikrofonen på vägen",
+		micLines.every((e) => / live=false/.test(e.message)),
+		JSON.stringify(micLines.slice(-2).map((e) => e.message)));
 
 	// ------------------------------------------------------------------ exit
 	section("dubbeltapp: systemets avslutsdialog (krav 5)");

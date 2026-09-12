@@ -103,6 +103,18 @@ Two conventions worth keeping:
   buys confidence it has not earned.
 - **A suite must leave nothing behind.** Servers, browsers, simulators and
   `claude` children are all tracked and reaped; the suites assert it.
+- **We do not open the microphone in the simulator.** With
+  `--aid alsa:null`, simulator 0.9.5 sends audio at ~170× real time, and
+  `audioControl(false)` does not always stop it. When it doesn't, the
+  simulator grows by ~700 MB/s until the kernel kills it. When a worker
+  starts it, it runs in jarvis-server's cgroup, so the kernel took the
+  whole service down with it, three times on 2026-09-12, turn and all. This
+  was reproduced with a 40-line page that has no Jarvis code, so it is not
+  the client, and nothing on our side fixes it. The glasses microphone is
+  tested on the glasses, and in the unit suites against a stand-in bridge.
+  `test/prd5b-lens.mjs` still opens it and must not be run until that part
+  is taken out.
+
 
 ## Things that were measured, not assumed
 
@@ -118,6 +130,22 @@ Two conventions worth keeping:
   against an 800 ms budget. A fixture that repeats one sentence measures 1.4 s,
   which is the model's repetition collapse rather than the service.
 - **An image on the lens costs ~1.4 s.** Text is the only interactive channel.
+- **A hold window measured from transcript to transcript merges almost
+  nothing.** The second half of a sentence has to be finished, go quiet for
+  the hangover and be transcribed before it can arrive, so its own length
+  counts against the window: 3 merges in 40 spoken turns in the server log,
+  and the one that merged had 25 ms to spare. The client now reports its
+  detector opening and closing a segment (`speaking`), and the window stops
+  counting while somebody is talking into it (PRD 6, item 7).
+- **One frame of zeros took the noise floor to its minimum in a single step,
+  and it stayed there.** The floor fell by half the distance to every quieter
+  frame, so a BLE gap padded with zeros put it at -70 dB; room tone was then
+  9 dB above it, a segment opened, and a floor that did not move while a
+  segment was open never recovered. On the glasses that was every segment
+  exactly 15 000 ms long, words arriving 5–6 s late and syllables cut at the
+  boundary. The floor now follows the quietest frame of the last 1.5 s,
+  ignores dropouts, and keeps following the room while a segment is open
+  (PRD 6, item 8).
 - **Opening the glasses microphone costs ~180 ms**, and the first audio frame
   lands ~3 ms after that — measured through the simulator's own Flutter bridge
   (`openMs=181 leadInMs=184`), against the ~160 ms fixed per-SDK-call cost

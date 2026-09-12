@@ -29,6 +29,7 @@ import { Store } from "./state.ts";
 import { after, cancel, looksNative, natives } from "./timers.ts";
 import type { Timer } from "./timers.ts";
 import { CONTROL } from "./protocol.ts";
+import { MODES } from "../../src/routing.js";
 import { SettingsStore, browserStorage, bridgeStorage, readUrlSettings, scrubUrl } from "./settings.ts";
 import { Companion } from "./ui/companion.ts";
 
@@ -147,7 +148,12 @@ const voice = new Voice({
 	// add a second one. A segment from the glasses and a segment from a laptop
 	// are the same `audio` message on the same socket — acceptance criterion 7,
 	// which is a property of there being nothing here to branch on.
-	send: (pcm, info) => connection?.audio(pcmToBase64(pcm), { durationMs: info.durationMs }) ?? false,
+	send: (pcm, info) => connection?.audio(pcmToBase64(pcm), info) ?? false,
+	// PRD 6: one boolean each way the detector flips, ahead of the segment it
+	// belongs to. Without it the server's window could only measure from one
+	// transcript to the next, and the second half of a sentence — which has to
+	// be finished before it can be transcribed — used up the window by itself.
+	onSpeaking: (on) => { connection?.speaking(on); },
 	onChange: (status) => store.setVoice(status),
 	onNote: (text) => companion.note(text),
 	// PRD 5b. `glasses` is declared below and is only ever CALLED from an open,
@@ -171,12 +177,26 @@ const glasses = new Glasses({
 			case "swipeUp": store.turnPage(-1, frame.pages); return;
 			case "swipeDown": store.turnPage(1, frame.pages); return;
 			case "tap":
-				// R4.3: show more of a truncated reply, else repeat the last —
-				// which here means going back to its first page. When the reply
-				// already fits on one page that is deliberately nothing: the lens
-				// is showing it, and re-sending identical content costs a measured
-				// round trip to change no pixels.
-				if (!store.turnPage(1, frame.pages)) store.setPage(0);
+				// The microphone's switch, on the face rather than on the phone.
+				// Paging keeps the swipes, which is where a one-finger touchpad
+				// wanted it anyway: up and down are the reply, the tap is whether
+				// anyone is listening at all.
+				//
+				// A dark lens takes the tap for itself (LENS_IDLE_MS). Looking is
+				// how you ask what state the microphone is in, and a tap that
+				// answered the question by changing the answer would make the
+				// idle blanking cost the user a mode they did not choose. So the
+				// first tap lights the lens; the next one is the switch.
+				if (store.lensDark()) { store.setPage(store.state.lens.page); return; }
+				// PushToTalk is the one mode where the switch means nothing: the
+				// hold IS the microphone there, by design and unconditionally, so
+				// a tap has nothing to turn on. Say that on the phone rather than
+				// flip a flag with no effect.
+				if (store.state.mode === MODES.PUSHTOTALK) {
+					companion.note("Hold the touchpad to talk — that is what this mode is.");
+					return;
+				}
+				void voice.setEnabled(!voice.enabled);
 				return;
 			case "doubleTap": return;   // the exit dialog is the SDK's, not ours
 			case "holdStart":

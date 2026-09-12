@@ -59,7 +59,11 @@ function createAudioIntake({ transcriber, maxBytes = DEFAULT_MAX_AUDIO_BYTES, lo
 			return null;
 		}
 
-		log?.info(`heard ${seg.durationMs}ms in ${r.ms}ms${r.modelMs !== null ? ` (model ${r.modelMs}ms)` : ""} ${r.language ?? "?"} ${JSON.stringify(r.text.slice(0, 60))}`);
+		// The client's side of the story, when it tells it: why the segment
+		// ended and what the detector took the room to be. "15000ms maximum
+		// floor -70 peak -38" is a diagnosis; "15000ms" was a mystery.
+		const why = [m.reason, m.floorDb !== undefined ? `floor ${m.floorDb}` : "", m.peakDb !== undefined ? `peak ${m.peakDb}` : ""].filter(Boolean).join(" ");
+		log?.info(`heard ${seg.durationMs}ms${why ? ` ${why}` : ""} in ${r.ms}ms${r.modelMs !== null ? ` (model ${r.modelMs}ms)` : ""} ${r.language ?? "?"} ${JSON.stringify(r.text.slice(0, 60))}`);
 		// R5a.5 again, one layer up: an empty transcription produces nothing at
 		// all — no turn, no `heard`, and no "I didn't catch that".
 		if (!r.text) return null;
@@ -115,6 +119,8 @@ export function createEchoHandler({ log, transcriber, audioMaxBytes }) {
 						session.emit(msg.error(`unknown control "${m.action}"`));
 					}
 					break;
+				case C2S.SPEAKING:
+					break;   // a fact about the microphone; the echo has no window to pause
 				case C2S.AUDIO: {
 					if (!receiveAudio) { session.emit(msg.error("this server has no transcription")); break; }
 					const heard = await receiveAudio(session, m);
@@ -155,11 +161,34 @@ const GREETING = "Jarvis here.";
  * moment they are heard rather than when the turn starts. The user watches the
  * sentence assemble instead of watching nothing.
  *
- * Two seconds by default: long enough to cross the rest of a thinking pause
- * plus one short fragment and its transcription, short enough not to feel like
- * a hang. Typed input never waits — pressing Enter is the boundary.
+ * The window is silence, not wall-clock time. The first version measured from
+ * one transcript's arrival to the next, and the next can only arrive once its
+ * fragment has been spoken to the end, gone quiet for the hangover and been
+ * transcribed — so the length of the second half of the sentence counted
+ * against the window, and anything past about a second of continuation missed
+ * it. The log showed it: 3 merges in 40 turns, and the one that merged had 25
+ * ms to spare. So the client now says when its detector opens a segment
+ * (`speaking`, C2S), and a window with somebody talking into it stops counting
+ * until their fragment has arrived. What is measured is the pause between the
+ * user's words, which is the thing the window was always meant to be about.
+ *
+ * Two seconds by default: long enough to cross a thinking pause, short enough
+ * not to feel like a hang. Typed input never waits — pressing Enter is the
+ * boundary.
  */
 export const DEFAULT_HOLD_MS = 2000;
+
+/**
+ * How long a window may stay open past the last words that actually arrived,
+ * whatever the `speaking` signal says. The first version re-armed a 40 s cap
+ * on every flip of the signal, and a detector that flipped every fifteen
+ * seconds — open on room tone to its maximum, closed for a frame, open again —
+ * kept "still listening" on the lens for as long as it liked. Measured from
+ * the last real fragment instead, the cap is a promise: nothing said is held
+ * longer than this. The client's own maximum segment is 15 s, so a genuine
+ * long continuation still fits.
+ */
+export const SPEAKING_CAP_MS = 20_000;
 
 /**
  * The real handler.
@@ -209,6 +238,11 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 
 	let turnSeq = 0;
 	const holds = new Map();   // session.id -> the turn still gathering words
+	/** Sessions whose microphone is hearing speech right now, by the client's
+	 *  own detector (C2S.SPEAKING). Kept outside the turn because the signal
+	 *  usually arrives BEFORE there is a turn to attach it to: the user starts
+	 *  the second half of the sentence while the first is still in whisper. */
+	const talking = new Set();
 
 	/** Say where a turn has got to. `parts` is sent every time rather than just
 	 *  the new one: it makes the message idempotent, a client that missed one
@@ -236,21 +270,41 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 		let turn = holds.get(session.id);
 		if (turn && turn.to !== to) { void flush(session); turn = null; }
 		if (!turn) {
-			turn = { id: `t${++turnSeq}`, to, name, parts: [], at: Date.now(), phase: "held", timer: null };
+			turn = { id: `t${++turnSeq}`, to, name, parts: [], at: Date.now(), phase: "held", timer: null, deadline: 0 };
 			holds.set(session.id, turn);
 		}
 		turn.parts.push(text);
+		turn.deadline = Date.now() + SPEAKING_CAP_MS;
 		// Before the wait, not after it: this is the receipt for having been
 		// heard, and it is the whole reason the wait is bearable.
 		announce(session, turn, "held");
-		clearTimeout(turn.timer);
 
 		// Typing is its own boundary — Enter already said the sentence is over —
 		// and a window of zero turns the whole thing off.
 		if (origin === ORIGIN.TYPED || !(holdMs > 0)) return flush(session);
-		turn.timer = setTimeout(() => { void flush(session); }, holdMs);
-		log?.info(`held ${turn.id} (${turn.parts.length}) for ${to} session=${session.id.slice(0, 8)}`);
+		arm(session, turn);
+		log?.info(`held ${turn.id} (${turn.parts.length}) for ${to}${talking.has(session.id) ? " — still speaking" : ""} session=${session.id.slice(0, 8)}`);
 		return Promise.resolve();
+	};
+
+	/** Start, or restart, the window's clock — unless the user is talking, in
+	 *  which case the clock waits for their fragment (see DEFAULT_HOLD_MS). The
+	 *  cap is the one thing that runs in the meantime. */
+	const arm = (session, turn) => {
+		clearTimeout(turn.timer);
+		const ms = talking.has(session.id) ? Math.max(0, turn.deadline - Date.now()) : holdMs;
+		turn.timer = setTimeout(() => { void flush(session); }, ms);
+	};
+
+	/** The client's detector opened or closed a segment. Recorded whether or
+	 *  not a window is open, because the signal comes first and the fragment it
+	 *  belongs to comes a transcription later. */
+	const speaking = (session, on) => {
+		if (on) talking.add(session.id); else talking.delete(session.id);
+		const turn = holds.get(session.id);
+		if (!turn) return;
+		arm(session, turn);
+		log?.info(`held ${turn.id} ${on ? "paused: speaking" : `resumed: ${holdMs} ms`} session=${session.id.slice(0, 8)}`);
 	};
 
 	/** The window closed: the parts become one utterance and the turn runs.
@@ -540,6 +594,14 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 			session.emit(state(session, false));
 		},
 
+		onClose(session) {
+			// A microphone whose socket went away is not hearing anything we
+			// will ever receive. Held words are kept — the phone reconnects
+			// whenever it changes network — but the window stops waiting for a
+			// fragment that cannot arrive.
+			if (talking.has(session.id)) speaking(session, false);
+		},
+
 		async onMessage(session, m) {
 			switch (m.type) {
 				case C2S.SAY:
@@ -551,12 +613,21 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 					if (!receiveAudio) return session.emit(msg.error("this server has no transcription"));
 					const heard = await receiveAudio(session, m);
 					// null is silence, a refused segment, or a transcription that
-					// came back empty. None of them is a turn (R5a.5).
-					if (!heard) return;
+					// came back empty. None of them is a turn (R5a.5) — but the
+					// segment was the fragment a paused window was waiting for,
+					// so the window's clock starts now, from nothing.
+					if (!heard) {
+						const open = holds.get(session.id);
+						if (open) arm(session, open);
+						return;
+					}
 					// Spoken, always: the microphone is the one input with an
 					// ambient problem, which is the whole reason the gate exists.
 					return await utterance(session, heard.text, ORIGIN.VOICE, heard);
 				}
+
+				case C2S.SPEAKING:
+					return speaking(session, m.on);
 
 				case C2S.INTERRUPT:
 					// The same thing the spoken word does. A button and a word must

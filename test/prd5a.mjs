@@ -176,6 +176,38 @@ try {
 		(DEFAULTS.maxSegmentMs / 1000) * 16_000 * 2 < DEFAULT_MAX_AUDIO_BYTES * 1.1,
 		`${(DEFAULTS.maxSegmentMs / 1000) * 32_000} bytes mot ${DEFAULT_MAX_AUDIO_BYTES}`);
 
+	section("segmenteraren: golvet följer rummet, inte en enstaka ram (PRD 6)");
+	{
+		// One frame of zeros — a BLE gap the bridge padded — used to drag the
+		// floor to its minimum in a single step, after which room tone was
+		// speech and the microphone was one continuous utterance in
+		// fifteen-second pieces. Nine hours on the glasses said so.
+		const gapThenRoom = segmentPcm(cat(roomTone(500), new Int16Array(320), roomTone(3000)));
+		check("en ram av nollor gör inte rumstonet till tal", gapThenRoom.length === 0, shape(gapThenRoom));
+
+		// A room that gets louder and stays there — a fan, or the microphone's
+		// own gain ramping — opens a segment, and used to keep it open to the
+		// maximum because the floor froze while open. Now the floor follows the
+		// quietest recent frame even then, and the segment closes on its own.
+		const louder = segmentPcm(cat(roomTone(1000, 30), roomTone(8000, 400)));
+		check("ett rum som blir högre stänger sitt eget segment inom några sekunder",
+			louder.length === 1 && louder[0].reason === "silence" && louder[0].durationMs < 5000,
+			shape(louder));
+		check("och öppnar inget nytt på det nya rumstonet", louder.length === 1, shape(louder));
+
+		// A maximum-length cut lands at the last pause, not inside a syllable.
+		const twoBreaths = segmentPcm(cat(roomTone(400), tone(9000), roomTone(300), tone(7000)));
+		check("ett maxlångt yttrande klipps vid senaste pausen",
+			twoBreaths[0]?.reason === "maximum" && twoBreaths[0].durationMs >= 9000 && twoBreaths[0].durationMs < 9800,
+			shape(twoBreaths));
+		check("och resten blir nästa segment utan att tappa sin första stavelse",
+			twoBreaths.length === 2 && Math.abs(twoBreaths[1].startMs - 9400) < 400,
+			shape(twoBreaths));
+		check("ett segment bär golv och toppnivå",
+			Number.isFinite(twoBreaths[0]?.floorDb) && Number.isFinite(twoBreaths[0]?.peakDb) && twoBreaths[0].peakDb > twoBreaths[0].floorDb,
+			JSON.stringify([twoBreaths[0]?.floorDb, twoBreaths[0]?.peakDb]));
+	}
+
 	section("segmenteraren: mätningen och omsamplingen");
 	check("en ren ton mäts högre än rumstonet",
 		frameLevelDb(tone(20)) > frameLevelDb(roomTone(20)) + 20,

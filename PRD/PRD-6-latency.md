@@ -95,6 +95,72 @@ vad verktyget pekas på.
 `prompts/worker.md` sa uttryckligen "Do not describe what you are about to do
 and then do it". Den raden är utbytt.
 
+**7. Fönstret är tystnad, inte klocka.** Punkt 4 mätte fel sak. Fönstret gick
+från att transkript ett kom in tills transkript två kom in, och transkript två
+kan inte komma förrän dess fragment är färdigsagt, har legat tyst i 700 ms och
+gått genom whisper — så längden på andra halvan av meningen räknades mot
+fönstret, och allt över ungefär en sekunds fortsättning missade det. Loggen
+från glasögonen: 3 sammanslagningar på 40 turer, och den som slogs ihop hade
+25 ms tillgodo. Det var därför Bosse började tänka mitt i meningen och resten
+kom som en egen tur efteråt; att han gissade rätt ändå gjorde det inte mindre
+obehagligt.
+
+Servern visste inte att användaren börjat prata igen. Klienten visste —
+segmenteraren sätter `speaking` efter 100 ms tal, och det drev redan
+lyssningsindikatorn — men sa det aldrig. Nu går ett `speaking`-meddelande
+(C2S, en boolean) i samma ögonblick detektorn öppnar eller stänger ett
+segment, före själva ljudet. Ett fönster med någon som pratar in i det slutar
+räkna tills fragmentet kommit; sedan börjar de 2000 ms om från transkriptets
+ankomst, tomt eller inte. Signalen kommer oftast INNAN fönstret finns —
+användaren börjar andra halvan medan första ligger i whisper — så den minns
+per session, inte per tur. Ett tak (`SPEAKING_CAP_MS`, 40 s) skickar det som
+hålls om fragmentet aldrig kommer, och en stängd socket släpper flaggan.
+
+Linsen sa dessutom "thinking" från första fragmentet, för en hållen tur
+räknades som arbete — precis det ord som beskriver vad som INTE händer medan
+fönstret är öppet. Nu finns tre märken och två ord till: `»` och "still
+listening" medan meningen är öppen, `›` och "queued" när den är skickad men
+ingen process tagit den (i praktiken: bakom en tur som redan kör), `√` och
+"thinking" när någon har hela yttrandet. Räknaren i "thinking 7s" räknar från
+att orden skickades, inte från första fragmentet — annars hade den stått på
+tolv sekunder i samma ögonblick modellen fick meningen.
+
+**8. Golvet.** Första kvällen med 7 på huvudet: början av meningen saknades,
+"Nu har det gått flera minuter" blev "Spära minuter", orden dök upp på linsen
+5–6 sekunder efter att de sagts, och "still listening" stod kvar efter tjugo
+sekunders tystnad. Loggen visade samma sak fyra gånger om: segment på exakt
+15000 ms, ett efter ett, de flesta transkriberade till ingenting, och
+`speaking` som slog om var femtonde sekund — detektorn var öppen hela tiden.
+
+Orsaken satt i segmenterarens brusgolv. Det föll med halva avståndet till
+VARJE tystare ram, så en enda ram av nollor — ett BLE-glapp som bryggan
+fyllt ut — tog golvet till sitt minimum på -70 dB i ett steg. Rumstonet låg
+över golvet plus marginalen, alltså var det tal, alltså öppnades ett segment,
+och medan ett segment var öppet fick golvet inte röra sig alls. Så det låg
+kvar där tills något råkade bli tystare, och segmenten gick till maxlängden
+och klipptes på ett godtyckligt prov: mitt i "flera". Fördröjningen var
+väntan på de 15 sekunderna, och fönstret fick aldrig tystnad eftersom nästa
+segment öppnade på nästa ram.
+
+Nu följer golvet den tystaste ramen i de senaste 1,5 sekunderna
+(`floorWindowMs`) i stället för den senaste ramen: tal har luckor mellan
+orden, så minimum av en och en halv sekund är rummet vad som än sägs i det,
+och en ensam ram kan inte flytta golvet. Ramar under -90 dB (`gapDb`) är inte
+rumston utan ingenting och ignoreras. Golvet får stiga även medan ett segment
+är öppet (`floorRiseRateOpen`), vilket bara händer när segmentet är öppet på
+rumston — en mening höjer det inte, dess minimum är luckan mellan orden — så
+ett sådant segment stänger sig självt inom några sekunder. Ett maxlångt
+segment klipps vid senaste paus på 200 ms (`cutGapMs`) i stället för vid
+längden, och det som följer pausen är nästa segment från början, med sin
+första stavelse. `reset()` börjar från toppen av intervallet som konstruktorn,
+inte från botten.
+
+Serverns tak omarmade sig på varje omslag av `speaking`, så en detektor som
+slog om var femtonde sekund höll fönstret öppet hur länge som helst. Taket
+räknas nu från de senaste orden som faktiskt kom (20 s), oavsett signalen.
+Och varje segment bär med sig orsak, golv och toppnivå till serverloggen —
+`15000ms maximum floor -70 peak -38` är en diagnos, `15000ms` var en gåta.
+
 ## Kraschen i klienten: den var svarta lådan
 
 Klienten dog när ett svar landade, ofta men inte alltid, och startade man om

@@ -11,6 +11,7 @@ export const C2S = {
 	HELLO: "hello",         // { protocol, token, sessionId?, resumeFrom? }
 	SAY: "say",             // { text, origin? }
 	AUDIO: "audio",         // { pcm, final, sampleRate?, durationMs? }  (PRD 5a)
+	SPEAKING: "speaking",   // { on }  — the microphone hears speech / stopped hearing it (PRD 6)
 	INTERRUPT: "interrupt", // {}
 	CONTROL: "control"      // { action, args }
 };
@@ -125,6 +126,20 @@ export function validateC2S(raw) {
 				return { ok: false, error: `audio must be ${AUDIO_SAMPLE_RATE} Hz` };
 			}
 			if (raw.final !== undefined && typeof raw.final !== "boolean") return { ok: false, error: "final must be a boolean" };
+			// Diagnostics from the segmenter (PRD 6). Optional, and only ever
+			// logged — but a log line is read by a person, so they are bounded.
+			if (raw.reason !== undefined && !["silence", "maximum", "release", "close"].includes(raw.reason)) return { ok: false, error: "reason must be a segment reason" };
+			for (const k of ["floorDb", "peakDb"]) {
+				if (raw[k] !== undefined && !(Number.isFinite(raw[k]) && raw[k] >= -100 && raw[k] <= 0)) return { ok: false, error: `${k} must be a level in dBFS` };
+			}
+			return { ok: true, msg: raw };
+
+		case C2S.SPEAKING:
+			// PRD 6: the client's own speech detector, reported the moment it
+			// flips, so the server can tell "the sentence went quiet" from "the
+			// sentence is still being said" while it holds a fragment. Nothing
+			// but a boolean: the audio itself still arrives as a segment.
+			if (typeof raw.on !== "boolean") return { ok: false, error: "speaking needs on: boolean" };
 			return { ok: true, msg: raw };
 
 		case C2S.INTERRUPT:
