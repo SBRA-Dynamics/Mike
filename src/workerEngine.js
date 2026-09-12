@@ -341,8 +341,10 @@ export function createClaudeWorkerEngine({
 				} catch (e) {
 					// The failure goes in the transcript too. A worker whose turn
 					// died and left no trace reads, next time Jarvis quotes it, as
-					// a worker that was never asked.
-					append(worker, "assistant", `(no answer: ${e.message})`);
+					// a worker that was never asked. An interrupt is recorded as
+					// what it was: Jarvis reading "(no answer: stopped)" back would
+					// have him apologising for something the user chose.
+					append(worker, "assistant", e.kind === "interrupted" ? "(stopped by the user)" : `(no answer: ${e.message})`);
 					throw e;
 				}
 			});
@@ -361,6 +363,10 @@ export function createClaudeWorkerEngine({
 		interrupt(worker) {
 			const child = inflight.get(worker.id);
 			if (!child) return false;
+			// Flagged before the kill, so claudeCli reports "stopped" rather than
+			// a crashed process: an interrupt is a thing the user did, not a
+			// failure they have to read an error about.
+			child.interrupted = true;
 			try { child.kill("SIGKILL"); } catch { }
 			inflight.delete(worker.id);
 			log?.info(`worker ${worker.name} interrupted`);

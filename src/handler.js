@@ -170,6 +170,28 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 		log?.info(`mode ${before} -> ${session.mode} session=${session.id.slice(0, 8)}`);
 	};
 
+	/** Kill whatever is running, whether the user pressed the button or said the
+	 *  word. Both, because they do not know which of the two is mid-turn and
+	 *  should not have to: the worker they are talking to, and Jarvis.
+	 *
+	 *  Everything here is transient. Nothing happened in the conversation — a
+	 *  turn stopped — and replaying "Stopped." on a reconnect hours later would
+	 *  be a lie about something that is no longer running. */
+	const stopTurns = (session) => {
+		const w = activeWorker(session);
+		const stoppedWorker = w ? engine.interrupt(w) : false;
+		const stoppedJarvis = jarvis.interrupt();
+		const stopped = stoppedWorker || stoppedJarvis;
+		session.transient(msg.event("interrupted", { stopped }));
+		// Said out loud as well as raised as an event: the lens is showing
+		// progress text from the turn that just died, and without a word it goes
+		// quiet in a way that looks like a hang rather than an obedience.
+		session.transient(msg.text(stopped ? "Stopped." : "Nothing running.", "system"));
+		session.transient(state(session, false));
+		log?.info(`stopped worker=${stoppedWorker} jarvis=${stoppedJarvis} session=${session.id.slice(0, 8)}`);
+		return stopped;
+	};
+
 	/** A worker named on the session but gone from the registry — ended from
 	 *  another device between one utterance and the next. Routing must not send
 	 *  words to it, and the session must stop claiming it. */
@@ -204,8 +226,13 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 			// reported as they are now.
 			if (r.text) session.emit(msg.text(r.text, "jarvis"));
 		} catch (e) {
-			log?.error(`jarvis turn: ${e.stack || e.message}`);
-			session.emit(msg.error(lens(e)));
+			// An interrupted turn is not a failure to report: the user asked for
+			// it and has already been told "Stopped."
+			if (e.kind === "interrupted") log?.info("jarvis turn stopped");
+			else {
+				log?.error(`jarvis turn: ${e.stack || e.message}`);
+				session.emit(msg.error(lens(e)));
+			}
 		} finally {
 			session.emit(state(session, false));
 		}
@@ -244,8 +271,12 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 				}
 			}
 		} catch (e) {
-			log?.error(`worker ${worker.name} turn: ${e.stack || e.message}`);
-			session.emit(msg.error(`${worker.name}: ${lens(e)}`));
+			// Interrupted is the user's own doing, same as for Jarvis above.
+			if (e.kind === "interrupted") log?.info(`worker ${worker.name} turn stopped`);
+			else {
+				log?.error(`worker ${worker.name} turn: ${e.stack || e.message}`);
+				session.emit(msg.error(`${worker.name}: ${lens(e)}`));
+			}
 		} finally {
 			registry.touch(worker, { busy: false });
 			session.emit(state(session, false));
@@ -286,6 +317,9 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 
 			case "mode":
 				return setMode(session, decision.to);
+
+			case "stop":
+				return stopTurns(session);
 
 			case "mic":
 				// The switch lives in the client — the server has no microphone
@@ -368,16 +402,11 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 					return await utterance(session, heard.text, ORIGIN.VOICE, heard);
 				}
 
-				case C2S.INTERRUPT: {
-					// Both, because the user does not know which of the two is
-					// mid-turn and should not have to.
-					const w = activeWorker(session);
-					const stoppedWorker = w ? engine.interrupt(w) : false;
-					const stoppedJarvis = jarvis.interrupt();
-					session.emit(msg.event("interrupted", { stopped: stoppedWorker || stoppedJarvis }));
-					session.emit(state(session, false));
+				case C2S.INTERRUPT:
+					// The same thing the spoken word does. A button and a word must
+					// not be able to stop different amounts of work.
+					stopTurns(session);
 					return;
-				}
 
 				case C2S.CONTROL:
 					return handleControl(session, m);

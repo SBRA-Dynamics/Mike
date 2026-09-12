@@ -214,6 +214,14 @@ export function createClaudeRunner({
 
 		child.on("close", (code) => {
 			const durationMs = Date.now() - started;
+			// Somebody asked for this. A killed child exits with no code and
+			// nothing on stderr, so without the flag the turn comes back as
+			// "claude exited null" — an error bubble for the one thing the user
+			// did on purpose.
+			if (child.interrupted) {
+				log?.info(`claude interrupted after ${durationMs}ms`);
+				return finish({ ok: false, kind: "interrupted", error: "stopped", durationMs });
+			}
 			if (code !== 0) {
 				log?.warn(`claude exited ${code} in ${durationMs}ms: ${errTail(err) || errTail(out)}`);
 				return finish({ ok: false, kind: "exit", code, error: errTail(err) || errTail(out) || `claude exited ${code}`, durationMs });

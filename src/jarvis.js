@@ -247,6 +247,9 @@ export function createJarvis({
 
 		interrupt() {
 			if (!child) return false;
+			// See workerEngine.interrupt: the flag is what turns a killed process
+			// into "stopped" instead of an error about exit code null.
+			child.interrupted = true;
 			try { child.kill("SIGKILL"); } catch { }
 			child = null;
 			log?.info("jarvis interrupted");

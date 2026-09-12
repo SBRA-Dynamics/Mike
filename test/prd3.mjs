@@ -692,6 +692,48 @@ try {
 		server.stop();
 	}
 
+	section("PRD 6: ett ord avbryter en tur som redan tänker");
+	{
+		// The slow stand-in holds the turn open, which is the only state this
+		// feature exists for: the model has decided to think for a while and
+		// everything the user says otherwise queues up behind it.
+		const server = track(await startJarvis([], { FAKE_CLAUDE_FAIL: "slow", FAKE_CLAUDE_SLOW_MS: "8000" }));
+		const c = await connect(server);
+
+		const since = c.mark();
+		c.send({ type: "say", text: "Jarvis, tänk på något långsamt" });
+		await c.waitFor((m) => m.type === "state" && m.busy === true, 5000, "turen har börjat", since);
+
+		const said = c.mark();
+		const t0 = Date.now();
+		// Spoken, unaddressed, in ByName — a stop is matched before the gate, the
+		// same safety property the mode commands have.
+		c.send({ type: "say", text: "stopp" });
+		const stopped = await c.waitFor((m) => m.type === "event" && m.kind === "interrupted", 5000, "turen avbryts", said);
+		const took = Date.now() - t0;
+
+		check("ordet stoppar turen", stopped.data?.stopped === true, JSON.stringify(stopped));
+		check("och det går fort, inte efter turens slut", took < 3000, `${took}ms`);
+		const after = c.messages.slice(said);
+		check("linsen får veta det med ord", after.some((m) => m.type === "text" && /Stopped/.test(m.text)), JSON.stringify(after.map((m) => m.type + (m.kind ? `:${m.kind}` : ""))));
+		check("turen stängs", after.some((m) => m.type === "state" && m.busy === false));
+		// The kill is the user's own doing; an error bubble about exit code null
+		// would be the machine blaming them for it.
+		await sleep(400);
+		check("ingen felruta om en dödad process", !c.messages.slice(said).some((m) => m.type === "error"),
+			JSON.stringify(c.messages.slice(said).filter((m) => m.type === "error")));
+
+		// Nothing running is a different answer, and it is still an answer.
+		const idle = c.mark();
+		c.send({ type: "say", text: "avbryt" });
+		const nothing = await c.waitFor((m) => m.type === "event" && m.kind === "interrupted", 5000, "svar även när inget går", idle);
+		check("och när inget pågår sägs det", nothing.data?.stopped === false, JSON.stringify(nothing));
+
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
 	section("PRD 3:s manusstyrda körning, steg 1–9");
 	{
 		const server = track(await startJarvis());

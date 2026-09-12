@@ -215,6 +215,50 @@ const MIC_COMMANDS = [
 	{ on: false, re: new RegExp(`^(?:turn |sla |stang |stanga )?(?:the |min )?(?:mic|mick|micken|micken|mikken|microphone|mikrofon|mikrofonen) (?:off|av)$`) }
 ];
 
+/** Stopping a turn that is already running.
+ *
+ * The same footing as the mode and microphone commands, and for the sharpest
+ * version of the same reason: a model that has decided to think for two minutes
+ * is a state the user cannot leave by talking, because everything they say goes
+ * into the queue behind it. So these are matched before the gate, before the
+ * address, in every mode — one word and the process dies.
+ *
+ * Nothing is queued here. The kill happens on the connection's own turn (the
+ * server handles messages as they arrive, it does not serialise them), which is
+ * why a word can reach past a turn that is holding the model.
+ *
+ * Deliberately a short list of whole utterances. These are the words a user
+ * says when they are already annoyed, so they have to fire on the first try —
+ * but a stop that fired inside a sentence would kill the turn whenever somebody
+ * said "sluta" to a worker about its own work. Anchored end to end, like every
+ * command here. "avsluta" is included and "avsluta Bosse" is not, which is the
+ * anchoring earning its keep. */
+const STOP_COMMANDS = [
+	// Swedish, spoken: "stopp", "sluta", "avbryt", "avsluta", "lägg av",
+	// "glöm det", "strunt i det".
+	/^(?:stopp|stoppa|sluta|slut|avbryt|avbryt det|avbryta|avsluta|lagg av|glom det|strunta i det|strunt i det)$/,
+	// English and the two words that get typed rather than said.
+	/^(?:stop|stop it|halt|cancel|abort|exit|quit|never mind|nevermind|forget it|null)$/
+];
+
+/** Match a stop command. Returns true or false; there is nothing to carry.
+ *
+ *  Addressed forms count too ("Jarvis, stopp"), for the same reason the other
+ *  commands accept them: the user who is interrupting has no idea whether the
+ *  thing that will not shut up is Jarvis or the worker, and should not have to. */
+export function matchStopCommand(text) {
+	const candidates = [text];
+	const bare = stripAddress(text, JARVIS_NAME);
+	if (bare !== null) candidates.push(bare);
+
+	for (const c of candidates) {
+		const { folded } = foldWithIndex(c);
+		if (!folded) continue;
+		for (const re of STOP_COMMANDS) if (re.test(folded)) return true;
+	}
+	return false;
+}
+
 /** Same shape as matchModeCommand, and matched at the same point. Returns
  *  { on } or null. */
 export function matchMicCommand(text) {
@@ -262,6 +306,7 @@ export function matchModeCommand(text) {
  *   { kind: "empty" }
  *   { kind: "mode", to }                     — a mode command, always first
  *   { kind: "mic", on }                      — the microphone switch, likewise
+ *   { kind: "stop" }                         — kill whatever turn is running
  *   { kind: "jarvis", text }                 — address stripped
  *   { kind: "worker", name, text }           — address stripped if there was one
  *   { kind: "dropped", reason: "paused" | "unaddressed" }
@@ -281,6 +326,12 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 	// state it can put the user in is one they must be able to speak out of.
 	const mic = matchMicCommand(raw);
 	if (mic) return { kind: "mic", on: mic.on };
+
+	// Stop, likewise before the gate. The worker's own name is accepted as an
+	// address here and nowhere else in this block: "Bosse, stopp" is the most
+	// natural way to say it while Bosse is the one thinking.
+	const toStopped = worker ? stripAddress(raw, worker) : null;
+	if (matchStopCommand(raw) || (toStopped !== null && matchStopCommand(toStopped))) return { kind: "stop" };
 
 	// 2. The gate — for speech only. See ORIGIN above for why typing skips it.
 	const gated = origin !== ORIGIN.TYPED;
