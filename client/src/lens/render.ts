@@ -47,6 +47,10 @@ export type LensView = {
 	status?: string | null;
 	/** Which page of an overflowing reply to show. Clamped, never trusted. */
 	page?: number;
+	/** Nothing at all — the idle lens (LENS_IDLE_MS). A frame rather than a
+	 *  caller-side special case, so the companion preview shows the dark lens
+	 *  too and the two faces cannot disagree about what is on the glass. */
+	blank?: boolean;
 };
 
 export type LensFrame = {
@@ -162,6 +166,11 @@ export const buildHeader = (from: string, status: string | null | undefined, pag
 /** The whole frame. `page` is clamped, so a stale page index from a previous,
  *  longer reply cannot show an empty lens. */
 export const renderLens = (view: LensView): LensFrame => {
+	// One page of nothing. `content` is the empty string, which is what the
+	// firmware is asked to draw: a container with no text is a dark lens.
+	if (view.blank) {
+		return { header: "", lines: Array(LENS.rows).fill(""), content: "", page: 0, pages: 1, overflow: false };
+	}
 	const body = wrapText(view.text ?? "");
 	const pages = paginate(body);
 	const page = Math.max(0, Math.min(view.page ?? 0, pages.length - 1));

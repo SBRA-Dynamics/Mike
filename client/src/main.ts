@@ -300,7 +300,7 @@ const paint = (): void => {
 	const s = store.state;
 	mark("render");
 	const view = store.lensView();
-	frame = renderLens({ from: view.from, text: view.text, status: store.lensStatus(), page: view.page });
+	frame = renderLens({ from: view.from, text: view.text, status: store.lensStatus(), page: view.page, blank: store.lensDark() });
 	mark("companion");
 	companion.render(s, frame, store.listening());
 	mark(`glasses ${frame.content.length}c`);

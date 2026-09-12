@@ -140,10 +140,10 @@ export const STALE_MS = 10_000;
  * becomes something in the way. Ten seconds of nobody saying anything — no
  * utterance heard, no reply drawn — and the body is cleared.
  *
- * Only the body. The header keeps saying who is there and whether a microphone
- * is open, because "is it listening" is the one question a voice interface must
- * always answer (R5a.8), and blanking that would make a live microphone look
- * like a dead app.
+ * The whole frame, header included. A name and a status row left burning in
+ * the eye is the same problem one row smaller, and the question the header
+ * answers — is it listening (R5a.8) — is asked by looking, which is a gesture,
+ * which lights the lens again.
  *
  * Nothing is lost: the transcript keeps it, and a tap repaints (setPage), which
  * is also what makes this safe to be aggressive about.
@@ -389,11 +389,16 @@ export class Store {
 	 */
 	lensView(now = Date.now()): LensItem {
 		const work = this.workingView(now);
-		if (work) return work;
-		// Work outranks the idle clock: a turn that says nothing for a minute is
-		// still a turn, and the blink in #doingLine is what carries that.
-		if (this.idleFor(now) >= LENS_IDLE_MS) return { from: this.state.lens.from, text: "", page: 0 };
-		return this.state.lens;
+		return work ?? this.state.lens;
+	}
+
+	/** Is the lens dark? Glass, not pixels: the whole frame goes, header and
+	 *  status with it, so there is nothing left in the eye at all. Work outranks
+	 *  the idle clock — a turn that says nothing for a minute is still a turn,
+	 *  and the blink in #doingLine is what carries that. */
+	lensDark(now = Date.now()): boolean {
+		if (this.workingView(now)) return false;
+		return this.idleFor(now) >= LENS_IDLE_MS;
 	}
 
 	/** How long nothing has been said, in either direction — the last reply
@@ -520,7 +525,12 @@ export class Store {
 	 *  and workingView compares against it to decide whether an answer is newer
 	 *  than the work. Paging through a reply must not make the running turn look
 	 *  stale. */
-	#wake(): void { this.#wokeAt = Date.now(); }
+	#wake(): void {
+		this.#wokeAt = Date.now();
+		// Always a notify, even when the page did not move: on a dark lens the
+		// gesture that changes nothing is exactly the one that has to light it.
+		this.notify();
+	}
 
 	// -------------------------------------------------------------- reducer
 

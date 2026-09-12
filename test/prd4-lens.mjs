@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { startServer, connect, check, failed, section, sleep, ROOT } from "./harness.mjs";
 import { decodePng, textBands, litPixels, differingPixels, countNear } from "./png.mjs";
 import { renderLens } from "../client/src/lens/render.ts";
+import { LENS_IDLE_MS } from "../client/src/state.ts";
 
 const args = process.argv.slice(2);
 const SHOTS = join(ROOT, "test", "out", "prd4-lens");
@@ -218,6 +219,22 @@ try {
 	// so finding those pixels is finding a rendered preview.
 	const green = countNear(web, [0x6e, 0xf0, 0x8a], 40);
 	check("telefonens förhandsvisning ritar linsrutan", green > 200, `${green} px`);
+
+	// -------------------------------------------------------------- tomgång
+	//
+	// The one thing the unit suite cannot answer: the firmware is asked to draw
+	// an empty container, and whether that is a dark lens or a rejected call is
+	// a question only the renderer can settle. Measured in lit pixels.
+	section("tomgång: linsen släcks av sig själv efter tio sekunder");
+	await sleep(LENS_IDLE_MS + 2500);
+	const dark = await shot("11-slackt-efter-tystnad");
+	check("linsen är släckt, rubrikraden med", litPixels(dark) === 0, `${litPixels(dark)} px tända`);
+
+	await input("click");
+	await sleep(1200);
+	const relit = await shot("12-tapp-tander-igen");
+	check("en tapp tänder den igen", litPixels(relit) > 0, `${litPixels(relit)} px tända`);
+	check("och visar svarets första sida", differingPixels(relit, wrapped) === 0, String(differingPixels(relit, wrapped)));
 
 	// ------------------------------------------------------------------ exit
 	section("dubbeltapp: systemets avslutsdialog (krav 5)");

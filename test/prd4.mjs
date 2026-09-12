@@ -606,26 +606,41 @@ try {
 		const dark = said + LENS_IDLE_MS + 1;
 		check("svaret står på linsen medan det är nytt", s.lensView(said).text === "Alla 41 checkar gröna.", s.lensView(said).text);
 		check("och släckningen är bokad, inte pollad", Math.abs(s.nextIdleExpiry(said) - LENS_IDLE_MS) <= 50, String(s.nextIdleExpiry(said)));
-		check("tystnaden släcker texten", s.lensView(dark).text === "", JSON.stringify(s.lensView(dark).text));
-		check("men inte vem som är där", s.lensView(dark).from === "Bosse", s.lensView(dark).from);
+		check("tystnaden släcker linsen", s.lensDark(dark) === true);
+		check("och en släckt lins är tom, namnraden med", renderLens({ ...s.lensView(dark), status: s.lensStatus(dark), blank: s.lensDark(dark) }).content === "");
+		check("inga rader alls skickas till glasen", renderLens({ from: "Bosse", text: "x", status: "listening", blank: true }).lines.every((l) => l === ""));
 		check("en släckt lins armerar ingen ny timer", s.nextIdleExpiry(dark) === null, String(s.nextIdleExpiry(dark)));
 
 		// A tap is the user asking to see it again (R4.3).
 		s.setPage(0);
-		check("en tryckning tänder den igen", s.lensView().text === "Alla 41 checkar gröna.", s.lensView().text);
+		check("en tryckning tänder den igen", s.lensDark() === false && s.lensView().text === "Alla 41 checkar gröna.", s.lensView().text);
+
+		// A swipe that cannot move (one page) must light the lens too, and it
+		// only can if it repaints — hence the notify inside the wake.
+		const later = new Store();
+		later.state.connection = "online";
+		later.apply({ type: "text", text: "Svar.", from: "Bosse", seq: 1 });
+		later.state.lensAt -= LENS_IDLE_MS + 1;
+		check("linsen är släckt före svepet", later.lensDark() === true);
+		let repaints = 0;
+		later.subscribe(() => repaints++);
+		check("ett svep som inte kan bläddra säger ändå nej", later.turnPage(1, 1) === false);
+		check("men tänder linsen", later.lensDark() === false);
+		check("och begär en ommålning", repaints === 1, String(repaints));
 
 		// Something heard counts as having said something, even before a reply.
 		const t = new Store();
 		t.state.connection = "online";
 		t.apply({ type: "text", text: "Svar.", from: "Bosse", seq: 1 });
 		t.apply({ type: "heard", text: "vad är klockan", confidence: 0.9, seq: 2 });
-		check("ett hört yttrande räknas som att något sagts", t.lensView(Date.now() + LENS_IDLE_MS - 1000).text !== "");
+		check("ett hört yttrande räknas som att något sagts", t.lensDark(Date.now() + LENS_IDLE_MS - 1000) === false);
 
 		// A turn that is running owns the lens: the blink says it is alive.
 		const w = new Store();
 		w.state.connection = "online";
 		w.apply({ type: "event", kind: "turn", data: { id: "t1", to: "Bosse", parts: ["kör sviten"], phase: "started" } });
-		check("men något som pågår släcks aldrig", w.lensView(Date.now() + LENS_IDLE_MS * 3).text.includes("kör sviten"), w.lensView().text);
+		const long = Date.now() + LENS_IDLE_MS * 3;
+		check("men något som pågår släcks aldrig", w.lensDark(long) === false && w.lensView(long).text.includes("kör sviten"), w.lensView().text);
 	}
 
 	section("modellen: många meningar får plats, de äldsta viker undan");
