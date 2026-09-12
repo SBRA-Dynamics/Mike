@@ -167,7 +167,7 @@ say yes, installs and starts them with sudo. They run as your user, read
 `~/.config/mike/env`, restart on failure and log to `~/mike-server.log` and
 `~/mike-whisper.log`. `mike-server.service` and
 `services/whisper/mike-whisper.service` in the repository are the reference
-deployment on kontoret, with TLS from certbot and `--worker-perms full`.
+deployment, with TLS from certbot and `--worker-perms full`.
 
 The server reads its bearer token from the env file, never from the command
 line where `ps` would show it, and serves the client from `./public`. The client

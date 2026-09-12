@@ -5,3 +5,5 @@ test/out/
 mike.ehpk
 dirs.json
 *.swp
+__pycache__/
+*.pyc

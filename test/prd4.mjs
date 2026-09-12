@@ -1170,12 +1170,12 @@ section("QR i stället för att skriva in server och token");
 {
 	// Typing a host and a 64-character token on a phone is the worst input this
 	// app asks for. The link already exists; the camera is the honest way in.
-	const url = "https://kontoret.onvo.se:3456/?token=" + "a1b2c3d4".repeat(8);
+	const url = "https://mike.example.com:3456/?token=" + "a1b2c3d4".repeat(8);
 	const read = settingsFromScan(url);
 	check("en skannad länk ger både adress och token", read.ok && !!read.settings.token, JSON.stringify(read));
 	check("adressen blir en ws-adress mot samma värd",
-		read.ok && read.settings.server === "wss://kontoret.onvo.se:3456/ws", JSON.stringify(read.settings));
-	check("och värdnamnet kan visas för användaren", read.ok && read.host === "kontoret.onvo.se:3456", JSON.stringify(read));
+		read.ok && read.settings.server === "wss://mike.example.com:3456/ws", JSON.stringify(read.settings));
+	check("och värdnamnet kan visas för användaren", read.ok && read.host === "mike.example.com:3456", JSON.stringify(read));
 
 	// A packaged app is served from somewhere else entirely, so an explicit
 	// server has to win over the origin the code was read from.
