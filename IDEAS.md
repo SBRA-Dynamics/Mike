@@ -30,7 +30,7 @@ new project can be added without a restart:
 ```json
 { "MyProject": "/home/user/projects/MyProject",
   "MyLibrary": "/home/user/projects/MyLibrary",
-  "Mike": "/home/robin/jarvis" }
+  "Mike": "/home/robin/mike" }
 ```
 
 Resolved in `workers.js` `#checkCwd`, so it applies to every path argument

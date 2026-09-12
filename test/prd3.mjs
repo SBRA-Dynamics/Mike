@@ -740,8 +740,8 @@ try {
 		// Pure, so it is asserted here rather than through a model. The shapes
 		// are the inputs Claude Code's own tools take.
 		check("en fil läses vid namn, utan katalogen",
-			describeTool("Read", { file_path: "/home/robin/jarvis/src/workerEngine.js" }) === "Reading workerEngine.js",
-			describeTool("Read", { file_path: "/home/robin/jarvis/src/workerEngine.js" }));
+			describeTool("Read", { file_path: "/home/robin/mike/src/workerEngine.js" }) === "Reading workerEngine.js",
+			describeTool("Read", { file_path: "/home/robin/mike/src/workerEngine.js" }));
 		check("ett kommando visas med sin egen beskrivning",
 			describeTool("Bash", { description: "Run the PRD 3 suite", command: "node test/prd3.mjs" }) === "Running Run the PRD 3 suite");
 		check("och utan beskrivning med kommandot",

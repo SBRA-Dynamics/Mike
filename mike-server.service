@@ -10,7 +10,7 @@ Wants=network-online.target
 Type=simple
 User=robin
 Group=robin
-WorkingDirectory=/home/robin/jarvis
+WorkingDirectory=/home/robin/mike
 # systemd starts with a bare PATH. node lives under nvm, and later phases spawn
 # claude from ~/.local/bin; both have to be spelled out.
 Environment=PATH=/home/robin/.nvm/versions/node/v24.16.0/bin:/home/robin/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -37,7 +37,7 @@ EnvironmentFile=/etc/jarvis.env
 # reachable from the internet behind one bearer token. That token IS the ability
 # to run code on this machine. Narrow it to `edits` or `readonly` the moment
 # that stops being what is wanted.
-ExecStart=/home/robin/.nvm/versions/node/v24.16.0/bin/node /home/robin/jarvis/server.js \
+ExecStart=/home/robin/.nvm/versions/node/v24.16.0/bin/node /home/robin/mike/server.js \
   --port 3455 --host 0.0.0.0 \
   --cert /etc/letsencrypt/live/kontoret.onvo.se/fullchain.pem \
   --key /etc/letsencrypt/live/kontoret.onvo.se/privkey.pem \
@@ -53,8 +53,8 @@ RestartSec=5
 # A real file, never an inherited tty. A previous server wrote 69 GB of one
 # stacktrace after its terminal closed, because every console.log then threw
 # EIO into an uncaught handler and requests silently stopped completing.
-StandardOutput=append:/home/robin/jarvis-server.log
-StandardError=append:/home/robin/jarvis-server.log
+StandardOutput=append:/home/robin/mike-server.log
+StandardError=append:/home/robin/mike-server.log
 
 [Install]
 WantedBy=multi-user.target

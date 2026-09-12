@@ -1,6 +1,6 @@
 // Regression for the seq-reuse bug QA found: a crash between the log append and
 // the meta rewrite must not let the server hand out a sequence number twice.
-import { startServer, connect, check, failed, section, sleep } from "/home/robin/jarvis/test/harness.mjs";
+import { startServer, connect, check, failed, section, sleep } from "/home/robin/mike/test/harness.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 

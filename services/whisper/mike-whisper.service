@@ -15,20 +15,20 @@ Wants=network-online.target
 Type=simple
 User=robin
 Group=robin
-WorkingDirectory=/home/robin/jarvis
+WorkingDirectory=/home/robin/mike
 Environment=HOME=/home/robin
 # The venv built the way services/whisper/serve.py documents. cuBLAS and cuDNN
 # come from pip inside it and are loaded by the service itself, so there is no
 # LD_LIBRARY_PATH to keep in sync here.
-ExecStart=/home/robin/.local/share/jarvis/venv/bin/python /home/robin/jarvis/services/whisper/serve.py \
+ExecStart=/home/robin/.local/share/jarvis/venv/bin/python /home/robin/mike/services/whisper/serve.py \
   --port 3461 --host 127.0.0.1
 Restart=always
 RestartSec=5
 # Loading a model and touching the GPU takes a few seconds; stopping is instant.
 TimeoutStartSec=120
 TimeoutStopSec=15
-StandardOutput=append:/home/robin/jarvis-whisper.log
-StandardError=append:/home/robin/jarvis-whisper.log
+StandardOutput=append:/home/robin/mike-whisper.log
+StandardError=append:/home/robin/mike-whisper.log
 
 [Install]
 WantedBy=multi-user.target
