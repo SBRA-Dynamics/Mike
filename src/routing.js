@@ -236,12 +236,18 @@ const MIC_COMMANDS = [
 const STOP_COMMANDS = [
 	// Swedish, spoken: "stopp", "sluta", "avbryt", "avsluta", "lägg av",
 	// "glöm det", "strunt i det".
-	/^(?:stopp|stoppa|sluta|slut|avbryt|avbryt det|avbryta|avsluta|lagg av|glom det|strunta i det|strunt i det)$/,
+	{ re: /^(?:stopp|stoppa|sluta|slut|avbryt|avbryt det|avbryta|avsluta|lagg av|glom det|strunta i det|strunt i det)$/ },
 	// English and the two words that get typed rather than said.
-	/^(?:stop|stop it|halt|cancel|abort|exit|quit|never mind|nevermind|forget it|null)$/
+	{ re: /^(?:stop|stop it|halt|cancel|abort|exit|quit|never mind|nevermind|forget it|null)$/ },
+	// "Null program" — what Man tells Mike in The Moon Is a Harsh Mistress
+	// when the current job is to be forgotten and nothing done until he says
+	// otherwise. The same kill as the words above, plus everything waiting
+	// behind the turn that dies, and answered in Mike's own words. Dictation
+	// hears it as one word or two, and a Swede says "noll".
+	{ re: /^(?:null|noll) ?program(?:me|met)?$/, nullProgram: true }
 ];
 
-/** Match a stop command. Returns true or false; there is nothing to carry.
+/** Match a stop command. Returns { nullProgram } or null.
  *
  *  Addressed forms count too ("Mike, stopp"), for the same reason the other
  *  commands accept them: the user who is interrupting has no idea whether the
@@ -254,9 +260,9 @@ export function matchStopCommand(text) {
 	for (const c of candidates) {
 		const { folded } = foldWithIndex(c);
 		if (!folded) continue;
-		for (const re of STOP_COMMANDS) if (re.test(folded)) return true;
+		for (const cmd of STOP_COMMANDS) if (cmd.re.test(folded)) return { nullProgram: !!cmd.nullProgram };
 	}
-	return false;
+	return null;
 }
 
 /** Same shape as matchModeCommand, and matched at the same point. Returns
@@ -306,7 +312,8 @@ export function matchModeCommand(text) {
  *   { kind: "empty" }
  *   { kind: "mode", to }                     — a mode command, always first
  *   { kind: "mic", on }                      — the microphone switch, likewise
- *   { kind: "stop" }                         — kill whatever turn is running
+ *   { kind: "stop", nullProgram }            — kill whatever turn is running;
+ *                                               nullProgram when said that way
  *   { kind: "mike", text }                 — address stripped
  *   { kind: "worker", name, text }           — address stripped if there was one
  *   { kind: "dropped", reason: "paused" | "unaddressed" }
@@ -331,7 +338,8 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 	// address here and nowhere else in this block: "Bosse, stopp" is the most
 	// natural way to say it while Bosse is the one thinking.
 	const toStopped = worker ? stripAddress(raw, worker) : null;
-	if (matchStopCommand(raw) || (toStopped !== null && matchStopCommand(toStopped))) return { kind: "stop" };
+	const stop = matchStopCommand(raw) ?? (toStopped !== null ? matchStopCommand(toStopped) : null);
+	if (stop) return { kind: "stop", nullProgram: stop.nullProgram };
 
 	// 2. The gate — for speech only. See ORIGIN above for why typing skips it.
 	const gated = origin !== ORIGIN.TYPED;

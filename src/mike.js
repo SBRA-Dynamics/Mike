@@ -170,6 +170,13 @@ export function createMike({
 
 	let queue = Promise.resolve();
 	let child = null;
+	// A stop is a stop for everything said before it, not only for the turn
+	// that happened to be running: the turns queued behind that one were also
+	// "what he was about to do". They are dropped by generation — an interrupt
+	// bumps it, and a queued turn from an older generation fails as interrupted
+	// the moment its go comes, before any process is spawned.
+	let epoch = 0;
+	let waiting = 0;
 
 	/** The context block for the worker this session is talking to. Read through
 	 *  the registry so a stale name on the session — a worker ended from another
@@ -239,20 +246,35 @@ export function createMike({
 
 		/** One turn, queued behind whatever he is already answering. */
 		say(session, text, { onProgress } = {}) {
-			const run = () => runTurn(session, text, onProgress);
+			const at = epoch;
+			waiting++;
+			const run = () => {
+				waiting--;
+				if (at !== epoch) {
+					const e = new Error("stopped");
+					e.kind = "interrupted";
+					throw e;
+				}
+				return runTurn(session, text, onProgress);
+			};
 			const next = queue.then(run, run);
 			queue = next.then(() => { }, () => { });
 			return next;
 		},
 
 		interrupt() {
-			if (!child) return false;
+			const dropped = waiting;
+			epoch++;
+			if (!child) {
+				if (dropped) log?.info(`mike interrupted: ${dropped} queued turn(s) dropped`);
+				return dropped > 0;
+			}
 			// See workerEngine.interrupt: the flag is what turns a killed process
 			// into "stopped" instead of an error about exit code null.
 			child.interrupted = true;
 			try { child.kill("SIGKILL"); } catch { }
 			child = null;
-			log?.info("mike interrupted");
+			log?.info(`mike interrupted${dropped ? `, ${dropped} queued turn(s) dropped` : ""}`);
 			return true;
 		},
 

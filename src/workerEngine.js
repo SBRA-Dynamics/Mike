@@ -194,6 +194,10 @@ export function createClaudeWorkerEngine({
 	const threads = new Map();    // worker.id -> [{ role, text, at }]
 	const queues = new Map();     // worker.id -> promise chain (one turn at a time)
 	const inflight = new Map();   // worker.id -> child process, for interrupt
+	// See mike.js: an interrupt bumps the worker's generation, and a queued
+	// turn from an older generation fails as interrupted instead of running.
+	const epochs = new Map();     // worker.id -> generation
+	const waiting = new Map();    // worker.id -> turns queued but not started
 
 	// A worker id is a server-generated uuid (workers.js), and this is the one
 	// place it becomes a path. Checked anyway: the cost is a regex and the bug
@@ -332,7 +336,18 @@ export function createClaudeWorkerEngine({
 				worker.engineSessionId = randomUUID();
 				log?.info(`worker ${worker.name} had no session id; minted ${worker.engineSessionId.slice(0, 8)}`);
 			}
+			const at = epochs.get(worker.id) ?? 0;
+			waiting.set(worker.id, (waiting.get(worker.id) ?? 0) + 1);
 			return enqueue(worker, async () => {
+				waiting.set(worker.id, waiting.get(worker.id) - 1);
+				if (at !== (epochs.get(worker.id) ?? 0)) {
+					// Never delivered, so not in the transcript either: a worker
+					// quoted these words later would be answering an instruction
+					// the user withdrew.
+					const e = new Error("stopped");
+					e.kind = "interrupted";
+					throw e;
+				}
 				append(worker, "user", text);
 				try {
 					const r = await turn(worker, text, onProgress);
@@ -361,8 +376,13 @@ export function createClaudeWorkerEngine({
 		/** Stop a turn in flight. Nothing else to stop: there is no resident
 		 *  process between turns. */
 		interrupt(worker) {
+			const dropped = waiting.get(worker.id) ?? 0;
+			epochs.set(worker.id, (epochs.get(worker.id) ?? 0) + 1);
 			const child = inflight.get(worker.id);
-			if (!child) return false;
+			if (!child) {
+				if (dropped) log?.info(`worker ${worker.name} interrupted: ${dropped} queued turn(s) dropped`);
+				return dropped > 0;
+			}
 			// Flagged before the kill, so claudeCli reports "stopped" rather than
 			// a crashed process: an interrupt is a thing the user did, not a
 			// failure they have to read an error about.

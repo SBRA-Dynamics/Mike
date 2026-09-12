@@ -5,3 +5,12 @@
   i stället en mikrofon-emoji längst till höger på namnraden, oberoende av
   statusordet. Kolla först att glyfen finns i firmwarefonten (pretext
   getTextWidth > 0), annars ett annat tecken — ✓ saknas till exempel.
+
+
+- Rita en ram runt texten och låt header texten vara som toppen på ett fönster.
+
+- Fixa så att linsen slocknar efter 10sekunder av tystnad, antingen från användaren eller från servern. Tänd den så fort det kommer in ett meddelande från servern eller användaren börjar prata.
+
+- Lägg in "display on/off" som släcker/tänder linsen. Linsen ska inte tändas igen förrän man säger display on. Alltså den ska inte tändas för att man börjar prata eller det kommer in ett meddelande från servern.
+
+

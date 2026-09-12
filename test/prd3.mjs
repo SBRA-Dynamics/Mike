@@ -199,6 +199,15 @@ try {
 	check("stripAddress säger nej när det inte är ett tilltal", stripAddress("hej Bosse", "Mike") === null);
 	check("matchModeCommand säger nej till vanlig text", matchModeCommand("lista filerna") === null);
 
+	section("null program: Mannies ord för glöm det och vänta");
+	for (const v of ["null program", "Null program.", "nullprogram", "Mike, null program", "noll program", "null programme", "Null-program"]) {
+		const r = route(v, { worker: "Bosse", mode: MODES.IGNORE });
+		check(`"${v}" är ett stopp med namn, även i ignore`, r.kind === "stop" && r.nullProgram === true, JSON.stringify(r));
+	}
+	check("ett vanligt stopp är inget null program", route("stopp", { worker: null }).nullProgram === false);
+	check("null program inuti en mening är en mening", route("Mike, vad betyder null program", { worker: null }).kind === "mike");
+	check("Bosse, null program stoppar också", route("Bosse, null program", { worker: "Bosse" }).kind === "stop");
+
 	// ================================================= context injection
 	section("arbetarkontext (R3.4)");
 	const worker = { name: "Bosse", model: "opus", cwd: "/home/user/projects/MyProject" };
@@ -729,6 +738,51 @@ try {
 		c.send({ type: "say", text: "avbryt" });
 		const nothing = await c.waitFor((m) => m.type === "event" && m.kind === "interrupted", 5000, "svar även när inget går", idle);
 		check("och när inget pågår sägs det", nothing.data?.stopped === false, JSON.stringify(nothing));
+
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
+	section("null program: turen dör, kön töms, och Mike svarar som sig själv");
+	{
+		// Two instructions in a row while the model is slow: the first is
+		// running, the second is queued behind it. "Null program" is meant to
+		// take both — "whatever you were about to do, do not" — where a plain
+		// stop used to kill the first and let the second run into the silence.
+		const server = track(await startMike([], { FAKE_CLAUDE_FAIL: "slow", FAKE_CLAUDE_SLOW_MS: "8000" }));
+		const c = await connect(server);
+
+		const since = c.mark();
+		c.send({ type: "say", text: "Mike, tänk på något långsamt", origin: "typed" });
+		await c.waitFor((m) => m.type === "state" && m.busy === true, 5000, "första turen har börjat", since);
+		c.send({ type: "say", text: "Mike, och sedan detta", origin: "typed" });
+		await sleep(200);
+
+		const said = c.mark();
+		c.send({ type: "say", text: "Null program." });
+		const stopped = await c.waitFor((m) => m.type === "event" && m.kind === "interrupted", 5000, "null program avbryter", said);
+		check("null program stoppar turen", stopped.data?.stopped === true, JSON.stringify(stopped));
+		await c.waitFor((m) => m.type === "state" && m.busy === false, 5000, "turen stängs", said);
+		const after = c.messages.slice(said);
+		check("svaret är Mikes", after.some((m) => m.type === "text" && /Null program\. Standing by, Man\./.test(m.text)),
+			JSON.stringify(after.filter((m) => m.type === "text").map((m) => m.text)));
+
+		// The queued turn would have taken 8 s to answer; if it was dropped,
+		// nothing arrives from Mike and busy stays false.
+		await sleep(1500);
+		const later = c.messages.slice(said);
+		check("den köade turen körs inte", !later.some((m) => m.type === "text" && m.from === "mike"),
+			JSON.stringify(later.filter((m) => m.type === "text").map((m) => m.text)));
+		check("och ingen felruta för den heller", !later.some((m) => m.type === "error"),
+			JSON.stringify(later.filter((m) => m.type === "error")));
+		check("upptagen är falskt efteråt", !later.slice(later.findIndex((m) => m.type === "state" && m.busy === false) + 1).some((m) => m.type === "state" && m.busy === true));
+
+		// And the next thing said runs as normal: a null program is a reset,
+		// not a lock.
+		const again = c.mark();
+		c.send({ type: "say", text: "Mike, hej igen", origin: "typed" });
+		await c.waitFor((m) => m.type === "state" && m.busy === true, 5000, "nästa tur startar", again);
 
 		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
 		c.close();

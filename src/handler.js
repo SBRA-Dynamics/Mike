@@ -358,7 +358,7 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 	 *  Everything here is transient. Nothing happened in the conversation — a
 	 *  turn stopped — and replaying "Stopped." on a reconnect hours later would
 	 *  be a lie about something that is no longer running. */
-	const stopTurns = (session) => {
+	const stopTurns = (session, { nullProgram = false } = {}) => {
 		// Words still being gathered count as something to stop. Saying "stopp"
 		// two seconds after a sentence you did not mean is the commonest case
 		// there is, and it would be a strange machine that answered "nothing
@@ -372,7 +372,9 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 		// Said out loud as well as raised as an event: the lens is showing
 		// progress text from the turn that just died, and without a word it goes
 		// quiet in a way that looks like a hang rather than an obedience.
-		session.transient(msg.text(stopped ? "Stopped." : "Nothing running.", "system"));
+		// A null program is answered the way the book's Mike would: what was
+		// dropped is not worth a word, and "standing by" is the whole state.
+		session.transient(msg.text(nullProgram ? "Null program. Standing by, Man." : stopped ? "Stopped." : "Nothing running.", "system"));
 		session.transient(state(session, false));
 		log?.info(`stopped worker=${stoppedWorker} mike=${stoppedMike} held=${held?.parts.length ?? 0} session=${session.id.slice(0, 8)}`);
 		return stopped;
@@ -524,7 +526,7 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 				return setMode(session, decision.to);
 
 			case "stop":
-				return stopTurns(session);
+				return stopTurns(session, { nullProgram: decision.nullProgram });
 
 			case "mic":
 				// The switch lives in the client — the server has no microphone
