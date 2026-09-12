@@ -117,48 +117,131 @@ rather than refusing to run. Flags worth knowing:
 - `--worker-perms readonly|edits|full` — what a worker may do
 - `--whisper off` — no voice
 
-## Using it
+## How to use
 
-**Say his name.** In the default mode, *by name*, only sentences that start with
-"Mike" or the active worker's name are sent on; everything else in the room is
-dropped, and the lens says so. "Mike" on its own is a call: he answers at once,
-without a model turn — "Hello, Man." — and the next thing you say is his even
-without the name. The other modes are *always* (everything reaches a model),
-*hold to talk* (the microphone is open only while the touchpad is held) and
-*paused*.
+### Talking to Mike
 
-**Workers.** "Mike, start a worker on the firmware" spawns one and switches you
-to it; you are talking to the worker from then on, and "Mike, …" still reaches
-Mike. A worker you do not name gets one from the book — Wyoh, Prof, Mannie, Mum,
-Grandpaw, Milla, Greg, Hans or Sidris, whichever is free. Switch, leave, end,
-rename and read workers by asking Mike.
+Mike listens through the glasses (or the phone, or a browser tab). Which of
+your words reach him is decided by the **addressing mode**, and the default is
+*by name*: a sentence that starts with "Mike" or the active worker's name is
+sent on, everything else said in the room is dropped, and the lens says
+"Not heard" so you know it was a decision and not a fault.
 
-**Spoken commands**, matched before anything else, in every mode, in Swedish or
-English — so there is no state you cannot talk your way out of:
+```
+Mike, what time is it?
+Mike, is the build server up?
+Wyoh, run the tests again.
+```
 
-| say | does |
+**Calling him.** "Mike" on its own, after a silence, is a call. He answers at
+once and without a model turn — "Hello, Man." — and for the next fifteen
+seconds whatever you say is his, name or no name:
+
+```
+Mike.
+        Hello, Man.
+start a worker on the firmware.
+        Wyoh is running sonnet in /home/you/code/firmware. You are now talking to Wyoh.
+```
+
+The name only has to be said once per sentence. A sentence spoken in pieces —
+"Mike, look through the docs … and tell me what is missing" — is held for two
+seconds after each piece and sent as one.
+
+**What Mike does himself** is the small stuff: a quick fact, a one-command
+answer about the machine (he has Bash, Read, Glob and Grep), and anything
+about the workers. Everything else he hands to a worker. He is Mycroft
+Holmes IV as far as this machine allows: dry, loyal, interested in a good
+joke, and he calls you Man.
+
+### Working with workers
+
+A worker is a Claude Code session with a spoken name, a model, a working
+directory and its own transcript. Mike starts them, and from the moment one
+starts you are talking to *it* — its name is in the lens's title bar, and
+sentences go to it by default.
+
+| you say | what happens |
 |---|---|
-| "pause input", "stop listening" / "continue input" | pause and resume |
-| "change input to always / by name / push to talk" | the addressing mode |
-| "mic on", "mic off" | the microphone switch |
-| "display on", "display off" | the lens; off stays off until you say on |
-| "stop", "cancel", "avbryt" … | kill the running turn and drop what was queued |
-| "null program" | the same, in Mike's words: forget the job, stand by |
+| "Mike, start a worker on the BLE firmware" | a worker is spawned in the default directory and you switch to it; it gets a name from the book if you gave none |
+| "Mike, start a worker called Ada, on opus, in the web app" | name, model and directory can all be said; directories by the spoken names in `dirs.json` |
+| "Mike, switch to Prof" / "Mike, byt till Prof" | back to a worker you left, transcript continued |
+| "Mike, leave" / "Mike, I want to talk to you" | back with Mike; the worker keeps running |
+| "Mike, end Wyoh" | the worker is stopped; its name is free again |
+| "Mike, what is Prof doing?" | Mike reads Prof's last turns and tells you |
+| "Mike, rename Wyoh to Firmware" | a new spoken name |
 
-**The touchpad.** A tap is the microphone switch (or, on a dark lens, just
-lights it); swipes page through a long reply; a hold is push-to-talk in every
-mode; a double tap is the system's exit dialog.
+Names from the book, when you do not pick one: Mannie, Wyoh, Prof, Mum,
+Grandpaw, Milla, Greg, Hans, Sidris.
 
-**The lens** is a window: a title bar with who you are talking to, the status
-("thinking 12s", "still listening", "Wyoh asks"), the page counter, and at the
-right end a mark for the microphone — ● hearing, ○ not. Thirty seconds after the
-last thing said or heard it goes dark; a reply, your voice, or a tap lights it
-again. Mike's asides while you are talking to a worker appear under the worker's
-name as "Mike: …", so the title bar always says who your next sentence goes to.
+**Asides.** While you are talking to a worker, "Mike, …" still reaches Mike,
+and he knows which worker you are with: "Mike, list the files in the folder
+we are talking about" means the worker's directory. His answer appears under
+the worker's name as "Mike: …", so the title bar keeps saying who your next
+sentence goes to.
 
-**The phone** shows the same frame the glasses get, the transcript, a text box
-for typing to Mike, and the microphone controls. Typed lines skip the addressing
-gate — typing is already aimed at the machine.
+**Workers you are not talking to** do not take the lens. When one of them
+finishes or asks something, the title bar says "Prof asks" or "2 spoke" until
+you switch to them; a question stays until it is answered.
+
+**Long jobs.** A worker's turn can run for minutes. The lens shows what you
+said (√ once the process has it), what the worker said it would do (« …), and
+what it is doing right now — the tool it is running, with a blink when nothing
+new has been said for ten seconds so you can tell a slow turn from a hung one.
+"Stop" kills it.
+
+### Spoken commands
+
+These are matched before anything else, in every mode including *paused*, in
+Swedish or English, addressed to Mike or not — so there is no state you cannot
+talk your way out of. Each is a whole utterance, never a phrase inside a
+sentence, so *talking about* a command does not trigger it.
+
+| command | examples | does |
+|---|---|---|
+| pause | "pause input", "stop listening", "pausa input", "sluta lyssna" | nothing but these commands gets through |
+| resume | "continue input", "start listening", "fortsätt input" | back to the mode you were in |
+| mode | "change input to always", "switch to by name", "byt läge till håll in", "always mode" | *always*: everything reaches a model. *by name*: the default. *hold to talk*: the microphone is open only while the touchpad is held |
+| microphone | "mic on", "turn the microphone off", "stäng av micken" | the switch; a hold still works with it off |
+| display | "display on", "display off", "tänd skärmen", "släck linsen" | the lens; off stays off until you say on — no reply, no speech, no turn lights it |
+| stop | "stop", "cancel", "abort", "never mind", "stopp", "avbryt", "glöm det" | kills the running turn, drops words being gathered and anything queued behind it |
+| null program | "null program", "nollprogram" | the same, answered in Mike's words: "Null program. Standing by, Man." |
+
+### The touchpad
+
+| gesture | does |
+|---|---|
+| tap | the microphone switch — on a dark lens the first tap only lights it |
+| swipe up / down | previous / next page of a long reply |
+| hold | push-to-talk, in every mode: the microphone is open exactly while held |
+| double tap | the system's exit dialog |
+
+### The lens
+
+```
+╭─ Wyoh · thinking 12s ──────────────────── ● ╮
+√ Wyoh, run the test suite and fix whatever fails
+« I'll run the suite first and read the failures.
+« Running npm test
+
+╰──────────────────────────────────────────────╯
+```
+
+The title bar says who you are talking to, then the status — "thinking 12s",
+"still listening" (a sentence is being gathered), "queued", "heard", "paused",
+"Prof asks" — then the page counter with arrows, and at the right end the
+microphone: ● hearing, ○ not. Eight rows of reply; a longer one is paged, never
+cut. Thirty seconds after the last thing said or heard the lens goes dark; a
+reply, your voice, a tap or a swipe lights it again, and "display off" keeps
+it dark on purpose.
+
+### The phone
+
+The companion view shows the same frame the glasses get, the transcript, a box
+for typing to Mike (typed lines skip the addressing gate — typing is already
+aimed at the machine), the microphone switch and a hold-to-talk button. There
+are no settings: with no server it shows one button, Scan QR, and that is the
+whole configuration.
 
 ## Deployment
 
