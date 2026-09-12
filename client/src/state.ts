@@ -233,6 +233,10 @@ const TRANSCRIPT_LIMIT = 400;
 
 const MIKE = "Mike";
 
+/** The server names Mike "mike" on the wire and "system" for its own lines;
+ *  the lens names him once, capitalised, whichever it was. */
+const speaker = (from: string): string => (from === "system" || from.toLowerCase() === "mike" ? MIKE : from);
+
 export class Store {
 	/**
 	 * The server asking for the microphone to be turned on or off, because the
@@ -487,8 +491,8 @@ export class Store {
 	 */
 	#addressed(item: LensItem): LensItem {
 		const who = this.addressee();
-		if (item.from === who) return item;
-		return { ...item, from: who, text: item.text ? `${item.from}: ${item.text}` : item.text };
+		if (speaker(item.from) === who) return item;
+		return { ...item, from: who, text: item.text ? `${speaker(item.from)}: ${item.text}` : item.text };
 	}
 
 	/** Is the lens dark? Glass, not pixels: the whole frame goes, header and
@@ -831,7 +835,7 @@ export class Store {
 					this.state.transcript.push({ seq: m.seq, from: m.from, text: m.text, kind: "text", at: Date.now() });
 					return;
 				}
-				this.#say(m.from === "system" ? MIKE : m.from, m.text, "text", m.seq);
+				this.#say(speaker(m.from), m.text, "text", m.seq);
 				return;
 
 			case "error":

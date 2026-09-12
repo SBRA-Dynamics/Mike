@@ -331,7 +331,7 @@ try {
 	{
 		const s = new Store();
 		s.apply({ type: "text", text: "Hej, jag är här.", from: "mike", seq: 1 });
-		check("text hamnar på linsen med avsändare", s.state.lens.from === "mike" && s.state.lens.text === "Hej, jag är här.");
+		check("text hamnar på linsen med avsändare — Mike, med stort M", s.state.lens.from === "Mike" && s.state.lens.text === "Hej, jag är här.");
 		check("och i transkriptet", s.state.transcript.at(-1).text === "Hej, jag är här.");
 
 		s.setPage(2);
@@ -734,6 +734,18 @@ try {
 		s.state.turns = [];
 		s.state.lensAt -= LENS_IDLE_MS + 1;
 		check("tänd av display on räknas som nyss sedd, så tomgången börjar om", s.lensDark() === false);
+	}
+
+	section("modellen: Mike heter Mike på linsen, hur tråden än stavar honom");
+	{
+		const s = new Store();
+		s.state.connection = "online";
+		s.apply({ type: "text", text: "Hello, Man.", from: "mike", seq: 1 });
+		check("ett svar från \"mike\" står under Mike utan prefix", s.lensView().from === "Mike" && s.lensView().text === "Hello, Man.", JSON.stringify(s.lensView()));
+		s.state.worker = "Bosse";
+		check("och hos Bosse heter inpasset Mike, med stort M", s.lensView().text === "Mike: Hello, Man.", s.lensView().text);
+		s.apply({ type: "text", text: "Input: paused.", from: "system", seq: 2 });
+		check("systemets rader är också Mikes", s.lensView().text === "Mike: Input: paused.", s.lensView().text);
 	}
 
 	section("modellen: mikrofonen som titelraden visar den");
