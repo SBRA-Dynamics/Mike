@@ -282,6 +282,51 @@ store.subscribe((s) => {
 		+ (g ? ` frames=${g.frames} bytes=${g.bytes} openMs=${g.openMs} leadInMs=${g.leadInMs} roles=${g.self}/${g.other}/${g.unknown} dropped=${g.dropped}` : ""));
 });
 
+/**
+ * A pulse while the microphone is open, and the only thing it really measures
+ * is its own lateness.
+ *
+ * The suspicion is starvation rather than a thrown error: every EvenHub event
+ * is narrated to the console by the SDK with the whole PCM array serialised
+ * into the string (see glasses.ts), ten of them a second for as long as
+ * somebody is listening, and the building of those strings happens before
+ * anything a plugin can patch. A page dying of that does not throw — it stops
+ * keeping up, and then it stops.
+ *
+ * So this is a timer that says how far behind schedule it woke up. A healthy
+ * page answers "late=3ms" every fifteen seconds; a starving one drifts and then
+ * goes quiet, and the last line before the silence says how much audio had gone
+ * through and how big the heap had got. It writes to the server's log, which is
+ * the only surface that survives the page.
+ *
+ * Only while the microphone is live: that is the condition under discussion,
+ * and a heartbeat the rest of the time would be noise in a log somebody has to
+ * read.
+ */
+const HEARTBEAT_MS = 15_000;
+let beatAt = Date.now();
+
+const beat = (): void => {
+	const now = Date.now();
+	const late = now - beatAt - HEARTBEAT_MS;
+	beatAt = now;
+	const v = store.state.voice;
+	if (v?.live) {
+		const g = (voice.glasses as { stats?: Record<string, number> } | null)?.stats;
+		const heap = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize;
+		try {
+			connection?.control(CONTROL.CLIENT_LOG, {
+				text: `beat ${VERSION} late=${late}ms mic=${v.mic}/${v.device} sent=${v.sent}`
+					+ ` frames=${g?.frames ?? 0} bytes=${g?.bytes ?? 0} dropped=${g?.dropped ?? 0}`
+					+ (heap ? ` heap=${Math.round(heap / 1e6)}MB` : "")
+					+ ` step="${step}"`
+			});
+		} catch { }
+	}
+	setTimeout(beat, HEARTBEAT_MS);
+};
+setTimeout(beat, HEARTBEAT_MS);
+
 // The mode is the server's to decide — it can be changed by speaking, from
 // another device, or by the picker here — and the microphone has to follow it:
 // switching into PushToTalk closes the microphone, and out of it opens one.
