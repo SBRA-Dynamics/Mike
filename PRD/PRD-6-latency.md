@@ -57,7 +57,55 @@ kvar det FÖRRA svaret — vilket är det enda som läser som att ingenting hän
 Nu bär linsen tillbaka vad turen svarar på, `» bygg klart testerna`, från att
 turen startar tills första ordet av svaret finns. Ekot gäller bara yttranden
 från den här turen (ECHO_SLACK_MS), så ett eko av något som sades för en
-minut sedan aldrig kan ljuga om vad som är på gång.
+minut sedan aldrig kan ljuga om vad som är på gång. Ekot är sedan 4 och 5
+ersatt av turens egna delar, som svarar på samma fråga och dessutom på
+"fick den med allt jag sa".
+
+**4. Uppdelade meningar blir en tur** (bd43390). Segmenteraren stänger ett
+segment efter 700 ms tystnad — rätt för "har personen slutat prata", fel för
+"har personen tänkt färdigt". Ett yttrande hålls nu `--hold` millisekunder
+(2000 som förval, 0 stänger av) och allt till samma mottagare inom fönstret
+blir ett. Skrivna ord väntar aldrig. Ett oadresserat fragment får gå in i ett
+öppet fönster: i ByName sa användaren namnet en gång, som folk gör.
+
+Fönstret lägger till latens på varje talad tur, alltså precis det den här
+skrivelsen finns för att ta bort. Det är uthärdligt bara för att fragmenten
+syns när de hörs, inte när turen startar — och det är därför det är en
+inställning och inte ett tal i koden.
+
+**5. Turen är något med namn** (bd43390). `held`, `queued`, `started`, `done`,
+`dropped` som transienta händelser, med användarens egna ord som separata
+delar. Linsen visar `»` medan ord hålls och `√` när en process har hela
+yttrandet — `started`, inte `queued`, för kön är ett faktum om servern och
+inte om användarens instruktion. (`✓` finns inte i firmwarefonten; pretext
+mäter den som en saknad glyf.)
+
+Buggen som föll ut: två yttranden i luften gav `busy:true, busy:true,
+busy:false, busy:false`, så linsen tystnade när det första blev klart medan
+det andra kördes. Klienten härleder nu "något pågår" ur turerna.
+
+**6. Vad den gör, inte bara att den gör något** (bd43390). `describeTool`
+läser strömmens verktygsargument: "Reading workerEngine.js" i stället för
+"Read". Första textblocket är planen och pinnas, allt därefter är vad den gör
+nu, och ett `alive`-tecken per fem sekunder när processen skriver något låter
+en asterisk blinka på raden efter tio sekunders tystnad — inget ord om saken.
+Verktygsnamnet flyttade från statusraden ner i kroppen, där det har plats för
+vad verktyget pekas på.
+
+`prompts/worker.md` sa uttryckligen "Do not describe what you are about to do
+and then do it". Den raden är utbytt.
+
+## Öppet: kraschen i klienten
+
+Klienten dör när ett svar landar, ofta men inte alltid, och startar man om
+ligger svaret redan på linsen. Simulatorn reproducerar det inte (sju turer,
+långa svar, noll konsolfel), vilket är ett svar om värden och inte om koden.
+a34f517 lägger in en svart låda — global felfälla plus `clientLog` genom
+transporten — så nästa krasch säger var den sker.
+
+Misstanke värd att mäta när det finns data: räknaren i rubriken byter text
+varje sekund, och varje ändrad ram är ett BLE-hopp. En tur på tre minuter är
+~180 hopp. Ingen av dem är dyr mätt en och en.
 
 ## Mätpunkt
 
