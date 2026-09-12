@@ -1,7 +1,7 @@
 {
   "name": "mike-client",
   "private": true,
-  "version": "0.3.10",
+  "version": "0.3.11",
   "type": "module",
   "description": "Mike client \u2014 Even Hub plugin: lens view + companion view (PRD 4)",
   "scripts": {
