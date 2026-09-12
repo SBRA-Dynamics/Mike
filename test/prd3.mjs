@@ -108,7 +108,7 @@ try {
 	check("bara namnet är inte tomt utan ett tilltal",
 		route("Mike.", { worker: null }).text === "Mike");
 	check("arbetarens eget namn tilltalar arbetaren, utan prefixet",
-		JSON.stringify(route("Bosse, lista filerna", { worker: "Bosse" })) === JSON.stringify({ kind: "worker", name: "Bosse", text: "lista filerna" }));
+		JSON.stringify(route("Bosse, lista filerna", { worker: "Bosse" })) === JSON.stringify({ kind: "worker", name: "Bosse", text: "lista filerna", addressed: true }));
 	check("diakriter i ett arbetarnamn viks ihop som överallt annars",
 		route("Mans, hej", { worker: "Måns" }).kind === "worker");
 	check("tomt yttrande är inget yttrande", route("   ", { worker: "Bosse" }).kind === "empty");
@@ -117,7 +117,7 @@ try {
 	check("byname utan tilltal släpps inte fram",
 		route("vad är klockan", { worker: "Bosse", mode: MODES.BYNAME }).kind === "dropped");
 	check("always släpper fram allt till den aktiva arbetaren — ordagrant",
-		JSON.stringify(route("vad är klockan", { worker: "Bosse", mode: MODES.ALWAYS })) === JSON.stringify({ kind: "worker", name: "Bosse", text: "vad är klockan" }));
+		JSON.stringify(route("vad är klockan", { worker: "Bosse", mode: MODES.ALWAYS })) === JSON.stringify({ kind: "worker", name: "Bosse", text: "vad är klockan", addressed: false }));
 	check("always utan arbetare går till Mike",
 		route("vad är klockan", { worker: null, mode: MODES.ALWAYS }).kind === "mike");
 	check("ignore släpper inte fram något",
@@ -131,7 +131,9 @@ try {
 	const typed = { origin: ORIGIN.TYPED };
 	check("skrivet utan tilltal når arbetaren i byname",
 		JSON.stringify(route("lista filerna", { worker: "Bosse", mode: MODES.BYNAME, ...typed })) ===
-		JSON.stringify({ kind: "worker", name: "Bosse", text: "lista filerna" }));
+		JSON.stringify({ kind: "worker", name: "Bosse", text: "lista filerna", addressed: false }));
+	check("ett ensamt Mike är ett anrop", route("Mike.", { worker: "Bosse" }).bare === true && route("Mike.", { worker: "Bosse" }).text === "Mike");
+	check("Mike med något efter är inget anrop", route("Mike, hej", { worker: "Bosse" }).bare === undefined);
 	check("skrivet utan tilltal och utan arbetare går till Mike",
 		route("lista filerna", { worker: null, mode: MODES.BYNAME, ...typed }).kind === "mike");
 	check("talat utan tilltal släpps fortfarande i byname",
@@ -578,9 +580,13 @@ try {
 		check("det sena svaret kommer ändå fram", !!late.text, JSON.stringify(late));
 		check("och är märkt som bakgrund", late.background === true, JSON.stringify(late));
 
-		// Ett svar från den man FAKTISKT pratar med är inte bakgrund.
-		const normal = await say(c, "Kalle, säg något.", 40_000);
-		const direct = normal.find((m) => m.type === "text" && m.from === "Kalle");
+		// Ett svar från den man FAKTISKT pratar med är inte bakgrund. Väntat
+		// på Kalles ord, inte på nästa busy:false — Bosses bakgrundstur slutar
+		// med ett eget state strax efter sitt svar, och ett `say` som nöjde sig
+		// med det kom tillbaka innan Kalle hade sagt något (var tredje körning).
+		const direct2 = c.mark();
+		c.send({ type: "say", text: "Kalle, säg något." });
+		const direct = await c.waitFor((m) => m.type === "text" && m.from === "Kalle", 40_000, "Kalles direkta svar", direct2);
 		check("ett svar från den aktiva arbetaren är inte bakgrund",
 			!!direct && direct.background === undefined, JSON.stringify(direct));
 
@@ -738,6 +744,52 @@ try {
 		c.send({ type: "say", text: "avbryt" });
 		const nothing = await c.waitFor((m) => m.type === "event" && m.kind === "interrupted", 5000, "svar även när inget går", idle);
 		check("och när inget pågår sägs det", nothing.data?.stopped === false, JSON.stringify(nothing));
+
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
+	section("ett ensamt Mike får svar på en gång, och nästa mening är hans");
+	{
+		// With a hold window, because the last check needs one to be open: the
+		// suite otherwise runs with the window off so that every fragment is a
+		// turn of its own.
+		const server = track(await startMike(["--hold", "2000"], { FAKE_CLAUDE_FAIL: "slow", FAKE_CLAUDE_SLOW_MS: "3000" }));
+		const c = await connect(server);
+
+		const since = c.mark();
+		const t0 = Date.now();
+		c.send({ type: "say", text: "Mike." });
+		const hello = await c.waitFor((m) => m.type === "text" && m.from === "mike", 3000, "hälsningen", since);
+		check("svaret kommer utan modell, på under en sekund", Date.now() - t0 < 1000 && /^Hello, Man/.test(hello.text), `${Date.now() - t0}ms ${hello.text}`);
+		check("och Man är den han hälsar på", hello.text === "Hello, Man." || hello.text === "Hello, Man, my only friend.", hello.text);
+		await sleep(300);
+		check("ingen tur startade", !c.messages.slice(since).some((m) => m.type === "state" && m.busy === true));
+
+		// The sentence after the call, said without his name, in ByName.
+		const then = c.mark();
+		c.send({ type: "say", text: "vad är klockan" });
+		await c.waitFor((m) => m.type === "state" && m.busy === true, 5000, "meningen efter anropet startar en tur", then);
+		check("och den tas emot, inte tappad", !c.messages.slice(then).some((m) => m.type === "event" && m.kind === "notHeard"));
+		const reply = await c.waitFor((m) => m.type === "text" && m.from === "mike", 15000, "Mikes svar", then);
+		check("den gick till Mike", /vad är klockan/.test(reply.text), reply.text);
+
+		// The call is spent: the next unaddressed sentence is dropped as usual.
+		const later = c.mark();
+		c.send({ type: "say", text: "och nu då" });
+		await c.waitFor((m) => m.type === "event" && m.kind === "notHeard", 5000, "en mening utan tilltal tappas igen", later);
+		check("ett anrop gäller en mening", true);
+
+		// A call is not made from inside a sentence: "Mike" as the first
+		// fragment of "Mike, do this" said with a pause still joins the window.
+		const open = c.mark();
+		c.send({ type: "say", text: "Mike, gör" });
+		await sleep(200);
+		c.send({ type: "say", text: "Mike." });
+		await sleep(400);
+		check("ett Mike i ett öppet fönster hälsar inte", !c.messages.slice(open).some((m) => m.type === "text" && /^Hello, Man/.test(m.text)),
+			JSON.stringify(c.messages.slice(open).map((m) => `${m.type}${m.kind ? ":" + m.kind : ""}${m.text ? " " + m.text : ""}${m.data?.phase ? " " + m.data.phase : ""}`)));
 
 		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
 		c.close();

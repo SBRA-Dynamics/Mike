@@ -143,6 +143,21 @@ export function createEchoHandler({ log, transcriber, audioMaxBytes }) {
 const GREETING = "Mike here.";
 
 /**
+ * What Mike says when called by name and nothing else — "Mike", after a
+ * silence. Answered here, at once, without a model: the model's "yes?" took as
+ * long as any other turn to arrive, which is far too long for a word whose
+ * whole purpose is to check that he is there. The book's Mike, to Man; the
+ * second line now and then, because it was his.
+ */
+const CALLED = ["Hello, Man.", "Hello, Man.", "Hello, Man.", "Hello, Man, my only friend."];
+const called = () => CALLED[Math.floor(Math.random() * CALLED.length)];
+
+/** How long after being called Mike keeps listening for the sentence. Long
+ *  enough to think of what to say; short enough that a call left hanging does
+ *  not catch a remark to somebody else a minute later. */
+export const SUMMON_MS = 15_000;
+
+/**
  * How long an utterance waits for the rest of the sentence.
  *
  * The segmenter closes a segment after 700 ms of silence (client/src/audio/
@@ -238,6 +253,9 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 
 	let turnSeq = 0;
 	const holds = new Map();   // session.id -> the turn still gathering words
+	/** Sessions where "Mike" was just said on its own, and until when the next
+	 *  sentence is his. See utterance(). */
+	const summons = new Map(); // session.id -> expiry (ms)
 	/** Sessions whose microphone is hearing speech right now, by the client's
 	 *  own detector (C2S.SPEAKING). Kept outside the turn because the signal
 	 *  usually arrives BEFORE there is a turn to attach it to: the user starts
@@ -504,7 +522,35 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 	 */
 	const utterance = async (session, text, origin, heard = null) => {
 		const worker = activeWorker(session);
-		const decision = route(text, { mode: session.mode, worker: worker?.name ?? null, origin });
+		let decision = route(text, { mode: session.mode, worker: worker?.name ?? null, origin });
+
+		// "Mike", alone, with no sentence open: a call. He answers at once and
+		// the next thing said is his, whether or not it starts with his name —
+		// so "Mike" … "start a worker on the docs" works as two sentences, the
+		// way it is said, and not only as the one sentence the hold window can
+		// join. A bare "Mike" INSIDE an open window is not a call; it joins the
+		// sentence like any other fragment, as before.
+		if (decision.kind === "mike" && decision.bare && !holds.has(session.id)) {
+			if (heard) session.emit(msg.heard(heard.text, heard.confidence));
+			summons.set(session.id, Date.now() + SUMMON_MS);
+			session.emit(msg.text(called(), "mike"));
+			// The client may have gone busy the moment the user spoke; nothing is
+			// running, and the lens must not sit on "thinking".
+			session.transient(state(session, false));
+			log?.info(`called by name session=${session.id.slice(0, 8)}`);
+			return;
+		}
+		const summonedUntil = summons.get(session.id) ?? 0;
+		if (summonedUntil) {
+			// One sentence, then the call is spent — whatever the sentence was.
+			summons.delete(session.id);
+			const unaddressed = (decision.kind === "dropped" && decision.reason === "unaddressed")
+				|| (decision.kind === "worker" && !decision.addressed);
+			if (Date.now() < summonedUntil && unaddressed) {
+				decision = { kind: "mike", text: String(text ?? "").trim() };
+				log?.info(`summoned: sentence goes to Mike session=${session.id.slice(0, 8)}`);
+			}
+		}
 
 		// An unaddressed fragment with a window open is the rest of a sentence
 		// that WAS addressed, and it is about to reach a model. That decides
@@ -545,6 +591,18 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 				// for a different reason.
 				session.transient(msg.text(decision.on ? "Mic on." : "Mic off. Hold to talk.", "system"));
 				log?.info(`mic ${decision.on ? "on" : "off"} by voice session=${session.id.slice(0, 8)}`);
+				return;
+
+			case "display":
+				// The lens is the client's, like the microphone. Transient for the
+				// same reason: a device state, not the conversation, and a
+				// replayed "display off" would darken somebody's glasses on a
+				// reconnect a day later.
+				session.transient(msg.event("displayRequested", { on: decision.on }));
+				// The confirmation of "off" is read on the phone, not the lens —
+				// the lens is dark, which is the confirmation.
+				session.transient(msg.text(decision.on ? "Display on." : "Display off. Say display on to light it.", "system"));
+				log?.info(`display ${decision.on ? "on" : "off"} by voice session=${session.id.slice(0, 8)}`);
 				return;
 
 			case "dropped":

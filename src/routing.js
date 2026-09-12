@@ -215,6 +215,40 @@ const MIC_COMMANDS = [
 	{ on: false, re: new RegExp(`^(?:turn |sla |stang |stanga )?(?:the |min )?(?:mic|mick|micken|micken|mikken|microphone|mikrofon|mikrofonen) (?:off|av)$`) }
 ];
 
+/** Switching the lens off and on by voice — "display off", "display on".
+ *
+ * Off means dark until on is said: not a reply, not the user speaking, not a
+ * turn starting lights it, which is what separates this from the idle blanking
+ * (the client's LENS_IDLE_MS) that any of those wakes. The nouns are the ways
+ * the lens gets named out loud in both languages; "screen" and "skärmen" are
+ * in because that is what people say, and "display" is what the command is
+ * called. Matched before the gate like the microphone switch, and for the
+ * same reason: a user who has turned the lens off must be able to turn it
+ * back on from every mode. */
+const SCREEN = "(?:display|displayen|screen|skarmen|skarm|lens|linsen|glaset|glasen)";
+const DISPLAY_COMMANDS = [
+	{ on: true, re: new RegExp(`^(?:${VERB} |turn |sla |satt |slag |tand )?(?:on|pa) (?:the |min )?${SCREEN}$`) },
+	{ on: true, re: new RegExp(`^(?:turn |sla |satt |slag |tand )?(?:the |min )?${SCREEN} (?:on|pa)$`) },
+	{ on: true, re: new RegExp(`^(?:tand|tand upp|light|light up|wake|wake up) (?:the |min )?${SCREEN}$`) },
+	{ on: false, re: new RegExp(`^(?:${VERB} |turn |sla |stang |slack )?(?:off|av) (?:the |min )?${SCREEN}$`) },
+	{ on: false, re: new RegExp(`^(?:turn |sla |stang |stanga |slack |slacka )?(?:the |min )?${SCREEN} (?:off|av)$`) },
+	{ on: false, re: new RegExp(`^(?:slack|slack ner|slack ned|darken|dim|kill) (?:the |min )?${SCREEN}$`) }
+];
+
+/** Same shape as matchMicCommand. Returns { on } or null. */
+export function matchDisplayCommand(text) {
+	const candidates = [text];
+	const bare = stripAddress(text, MIKE_NAME);
+	if (bare !== null) candidates.push(bare);
+
+	for (const c of candidates) {
+		const { folded } = foldWithIndex(c);
+		if (!folded) continue;
+		for (const cmd of DISPLAY_COMMANDS) if (cmd.re.test(folded)) return { on: cmd.on };
+	}
+	return null;
+}
+
 /** Stopping a turn that is already running.
  *
  * The same footing as the mode and microphone commands, and for the sharpest
@@ -312,10 +346,13 @@ export function matchModeCommand(text) {
  *   { kind: "empty" }
  *   { kind: "mode", to }                     — a mode command, always first
  *   { kind: "mic", on }                      — the microphone switch, likewise
+ *   { kind: "display", on }                  — the lens switch, likewise
  *   { kind: "stop", nullProgram }            — kill whatever turn is running;
  *                                               nullProgram when said that way
- *   { kind: "mike", text }                 — address stripped
- *   { kind: "worker", name, text }           — address stripped if there was one
+ *   { kind: "mike", text, bare? }          — address stripped; bare when
+ *                                               there was nothing after it
+ *   { kind: "worker", name, text, addressed } — address stripped if there
+ *                                               was one, and addressed says so
  *   { kind: "dropped", reason: "paused" | "unaddressed" }
  *
  * Nothing here mutates anything: the caller owns the session, and a classifier
@@ -334,6 +371,11 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 	const mic = matchMicCommand(raw);
 	if (mic) return { kind: "mic", on: mic.on };
 
+	// The lens switch, on the same footing: "display off" is a state the
+	// user must be able to say their way out of.
+	const display = matchDisplayCommand(raw);
+	if (display) return { kind: "display", on: display.on };
+
 	// Stop, likewise before the gate. The worker's own name is accepted as an
 	// address here and nowhere else in this block: "Bosse, stopp" is the most
 	// natural way to say it while Bosse is the one thinking.
@@ -347,10 +389,11 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 
 	const toMike = stripAddress(raw, MIKE_NAME);
 	if (toMike !== null) {
-		// "Mike" on its own is an address with nothing after it. Sending the
-		// empty string to a model asks it to invent what was wanted; sending his
-		// own name back gets "yes?", which is the right answer to being called.
-		return { kind: "mike", text: toMike || MIKE_NAME };
+		// "Mike" on its own is an address with nothing after it — a call. It is
+		// marked as such (`bare`) so the handler can answer it at once instead
+		// of spending a model turn on "yes?", and the name goes as the text so
+		// that a caller which does not know about calls still gets an answer.
+		return toMike ? { kind: "mike", text: toMike } : { kind: "mike", text: MIKE_NAME, bare: true };
 	}
 
 	const toWorker = worker ? stripAddress(raw, worker) : null;
@@ -358,15 +401,16 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 		// The address is stripped from a worker's text too. Workers are not told
 		// they are workers (PRD 3), so a worker that is handed "Bosse, list the
 		// files" spends its first sentence on not being called Bosse.
-		return { kind: "worker", name: worker, text: toWorker || worker };
+		return { kind: "worker", name: worker, text: toWorker || worker, addressed: true };
 	}
 
 	if (gated && mode === MODES.BYNAME) return { kind: "dropped", reason: "unaddressed" };
 
 	// 3. Always: unaddressed goes to the active worker verbatim, or to Mike
 	//    when there is none — which is also what "starting a session means
-	//    talking to Mike" means (R3.1).
-	return worker ? { kind: "worker", name: worker, text: raw } : { kind: "mike", text: raw };
+	//    talking to Mike" means (R3.1). `addressed: false` is what lets a call
+	//    to Mike a moment earlier claim the sentence instead.
+	return worker ? { kind: "worker", name: worker, text: raw, addressed: false } : { kind: "mike", text: raw };
 }
 
 /** Apply a mode command to a session's mode. Returns { mode, previous }.

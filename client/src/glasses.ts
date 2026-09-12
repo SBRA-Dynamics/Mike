@@ -27,6 +27,9 @@ const CONTAINER = { id: 1, name: "mike" } as const;
  *  this we give up on that update and let the next one try. */
 const CALL_TIMEOUT_MS = 5000;
 
+/** What createStartUpPageContainer accepts as a container's text. */
+const STARTUP_MAX_BYTES = 1000;
+
 export type GlassesOptions = {
 	callTimeoutMs?: number;
 	/** How the SDK bridge is obtained. The default dynamic-imports the SDK,
@@ -165,6 +168,19 @@ export class Glasses {
 			this.error = "no Even App host";
 			return false;
 		}
+		// The startup page takes at most 1000 bytes of text; an upgrade takes
+		// 2000. A framed lens with empty rows is padded to its right edge with
+		// spaces and lands just over the first limit — the simulator answered
+		// "page rejected (1)" and the client ran without glasses. So a first
+		// frame that is too big starts with its padding collapsed — the same
+		// ten rows, every glyph, a quarter of the bytes — and the real one
+		// follows on the upgrade path one hop later.
+		//
+		// Not a blank page: the simulator sizes the text to what it was
+		// created with, and a page created from one space never showed a
+		// later frame at all. Ten rows of real text is what it has to see.
+		const bytes = (t: string) => new TextEncoder().encode(t).length;
+		const startWith = bytes(initialContent) > STARTUP_MAX_BYTES ? initialContent.replace(/ {2,}/g, " ") : initialContent;
 		try {
 			if (this.opts.bridgeFactory) {
 				this.bridge = await this.opts.bridgeFactory();
@@ -181,17 +197,18 @@ export class Glasses {
 					// height of the lens, and any inset costs one of them.
 					borderWidth: 0, borderColor: 0, borderRadius: 0, paddingLength: 0,
 					containerID: CONTAINER.id, containerName: CONTAINER.name,
-					content: initialContent,
+					content: startWith,
 					isEventCapture: 1
 				}]
 			}));
 			// 0 is success; 1 invalid, 2 oversize, 3 out of memory.
 			if (result !== 0) { this.error = `page rejected (${result})`; return false; }
 
-			this.#shown = initialContent;
+			this.#shown = startWith;
 			this.#listen();
 			this.attached = true;
 			this.error = null;
+			if (startWith !== initialContent) this.show(initialContent);
 			return true;
 		} catch (e) {
 			this.error = (e as Error)?.message ?? String(e);
@@ -209,7 +226,13 @@ export class Glasses {
 	 */
 	show(content: string): void {
 		if (!this.attached) return;
-		this.#pending = content;
+		// A dark lens is asked for with one space, never with nothing. The
+		// upgrade call replaces "contentLength" characters, and 0 means "all of
+		// the new content" — which for an empty string is a replacement of
+		// nothing with nothing, and the simulator clears the container where
+		// the firmware may well leave it as it was. One space draws no pixel
+		// and is unambiguously a new content.
+		this.#pending = content === "" ? " " : content;
 		void this.#drain();
 	}
 
@@ -235,7 +258,11 @@ export class Glasses {
 				} catch (e) {
 					// A dropped frame is survivable — the next state change
 					// repaints — but it must not take the queue down with it.
+					// Said in the console, with the size of what was refused:
+					// the host's limits on a frame are in bytes and not
+					// documented as such, and this is how one was found.
 					this.error = (e as Error)?.message ?? String(e);
+					console.error(`[mike] glasses update failed (${content.length} chars, ${new TextEncoder().encode(content).length} bytes): ${this.error}`);
 					break;
 				}
 			}

@@ -296,7 +296,7 @@ try {
 	check("det har ett namn att läsa på en lins", (MODE_LABEL[MODES.PUSHTOTALK] ?? "").length > 0 && MODE_LABEL[MODES.PUSHTOTALK].length <= 14, MODE_LABEL[MODES.PUSHTOTALK]);
 	check("under ett håll släpps orden fram ordagrant, som i always",
 		JSON.stringify(route("vad är klockan", { mode: MODES.PUSHTOTALK, worker: "Bosse" })) ===
-		JSON.stringify({ kind: "worker", name: "Bosse", text: "vad är klockan" }));
+		JSON.stringify({ kind: "worker", name: "Bosse", text: "vad är klockan", addressed: false }));
 	check("men ett tilltal slår fortfarande igenom till Mike",
 		route("Mike, vad är klockan", { mode: MODES.PUSHTOTALK, worker: "Bosse" }).kind === "mike");
 	check("utan arbetare går hållet till Mike",
@@ -538,6 +538,24 @@ section("mikrofonen går att slå på och av med rösten");
 		const r = said("stäng av mikrofonen", mode);
 		check(`och gäller i läge ${mode}`, r.kind === "mic" && r.on === false, JSON.stringify(r));
 	}
+}
+
+section("linsen går att släcka och tända med rösten: display off, display on");
+{
+	const said = (text, mode = MODES.BYNAME) => route(text, { mode, worker: "Bosse" });
+	for (const [text, on] of [["display off", false], ["Display off.", false], ["Mike, display off", false],
+		["turn the display off", false], ["släck skärmen", false], ["stäng av displayen", false], ["släck linsen", false],
+		["display on", true], ["Display on.", true], ["turn on the display", true], ["tänd skärmen", true],
+		["slå på displayen", true], ["tänd linsen", true], ["screen on", true]]) {
+		const r = said(text);
+		check(`"${text}" styr linsen`, r.kind === "display" && r.on === on, JSON.stringify(r));
+	}
+	for (const mode of Object.values(MODES)) {
+		const r = said("display on", mode);
+		check(`och tillbaka går det i läge ${mode}`, r.kind === "display" && r.on === true, JSON.stringify(r));
+	}
+	check("en mening om displayen är en mening", said("Mike, what does display off do", MODES.ALWAYS).kind === "mike");
+	check("ett skrivet display off räknas också", route("display off", { mode: MODES.BYNAME, worker: null, origin: ORIGIN.TYPED }).kind === "display");
 	check("men kapar inte vanligt tal",
 		route("kan du slå på micken i mötesrummet sen", { worker: "Bosse", origin: ORIGIN.TYPED }).kind === "worker");
 	check("och inte heller ett ord som bara liknar",

@@ -20,6 +20,7 @@ import { startServer, connect, check, failed, section, sleep, ROOT } from "./har
 import { decodePng, textBands, litPixels, differingPixels, countNear } from "./png.mjs";
 import { renderLens } from "../client/src/lens/render.ts";
 import { LENS_IDLE_MS } from "../client/src/state.ts";
+import { LENS } from "../client/src/lens/render.ts";
 
 const args = process.argv.slice(2);
 const SHOTS = join(ROOT, "test", "out", "prd4-lens");
@@ -28,6 +29,18 @@ const DISPLAY = ":99";
 let sim = null;
 let automationPort = 0;
 const api = (path) => `http://127.0.0.1:${automationPort}${path}`;
+
+/** The columns of the lens between the frame's two edges. The edge glyph is
+ *  20 px and sits at each end of a 560 px frame. */
+const cropX = (img, x0, x1) => {
+	const width = x1 - x0;
+	const data = new Uint8Array(width * img.height * 4);
+	for (let y = 0; y < img.height; y++) {
+		data.set(img.data.subarray((y * img.width + x0) * 4, (y * img.width + x1) * 4), y * width * 4);
+	}
+	return { width, height: img.height, data };
+};
+const inner = (img) => cropX(img, 30, 530);
 
 const shot = async (name, path = "/api/screenshot/glasses") => {
 	const res = await fetch(api(path));
@@ -136,9 +149,11 @@ try {
 	const errors = (await consoleEntries()).filter((e) => e.level === "error" || e.message.startsWith("[uncaught]"));
 	check("inga fel i webbvyns konsol under uppstarten", errors.length === 0, JSON.stringify(errors.slice(0, 2)));
 
-	const first = await shot("01-start");
+	// The startup page is created blank and the first frame follows on the
+	// upgrade path (glasses.ts), so "at once" is one hop rather than zero.
+	const first = await waitUntil(async () => { const img = await shot("01-start"); return litPixels(img) > 0 ? img : null; }, 8000, "den första ramen");
 	check("linsen är 576×288", first.width === 576 && first.height === 288, `${first.width}×${first.height}`);
-	check("något är tänt på linsen direkt", litPixels(first) > 0, String(litPixels(first)));
+	check("något är tänt på linsen inom ett hopp", litPixels(first) > 0, String(litPixels(first)));
 
 	// --------------------------------------------------------------- ett svar
 	section("linsen: ett riktigt svar renderas rad för rad (R4.2, krav 2)");
@@ -169,10 +184,19 @@ try {
 	await sleep(1200);      // one BLE-shaped round trip in the simulator
 
 	const page1 = await shot("02-sida1");
-	const bands1 = textBands(page1);
-	const expectedRows = expected.content.split("\n").filter((l) => l.trim() !== "").length;
-	check(`linsen visar ${expectedRows} rader — precis de klienten radbröt`,
+	// Measured inside the frame: its two vertical edges run the full height and
+	// would read as one band. What is left is the title bar, the bottom edge,
+	// and one band per body row that has words on it.
+	const bands1 = textBands(inner(page1));
+	const expectedRows = expected.lines.filter((l, i) => i === 0 || i === LENS.rows - 1 || l.replace(/[│ ]/g, "") !== "").length;
+	check(`linsen visar ${expectedRows} rader — ramens två plus de klienten radbröt`,
 		bands1.length === expectedRows, `${bands1.length} band: ${JSON.stringify(bands1)}`);
+	// The edge glyph is 20 px tall on a 27 px row, so the vertical edges are
+	// ten segments with a gap between each — the font's doing, and visible in
+	// the shot. Ten of them, from the title row to the bottom one.
+	const edges = textBands(cropX(page1, 0, 24));
+	check("ramens vänsterkant löper från titelraden till underkanten, ett segment per rad",
+		edges.length === LENS.rows && edges[0].top < 27 && edges.at(-1).bottom > 240, JSON.stringify(edges));
 	check("och aldrig fler än tio", bands1.length <= 10, String(bands1.length));
 	check("ingenting ritas utanför linsens 288 px", bands1.at(-1).bottom < 288, JSON.stringify(bands1.at(-1)));
 	check("rubrikraden ligger överst", bands1[0].top < 27, JSON.stringify(bands1[0]));
@@ -226,7 +250,7 @@ try {
 	// The one thing the unit suite cannot answer: the firmware is asked to draw
 	// an empty container, and whether that is a dark lens or a rejected call is
 	// a question only the renderer can settle. Measured in lit pixels.
-	section("tomgång: linsen släcks av sig själv efter tio sekunder");
+	section("tomgång: linsen släcks av sig själv efter trettio sekunder");
 	await sleep(LENS_IDLE_MS + 2500);
 	const dark = await shot("11-slackt-efter-tystnad");
 	check("linsen är släckt, rubrikraden med", litPixels(dark) === 0, `${litPixels(dark)} px tända`);
@@ -265,6 +289,14 @@ try {
 } catch (err) {
 	console.error("\ntestriggen kraschade:", err.stack || err.message);
 	check("testriggen överlevde", false, err.message);
+	// What the client said last, because the crash is usually its doing and
+	// the webview's console is the only place it can say so.
+	if (automationPort) {
+		try {
+			const tail = (await consoleEntries()).slice(-12).map((e) => `${e.level}: ${e.message.slice(0, 160)}`);
+			console.error("webbvyns konsol, sist:\n  " + tail.join("\n  "));
+		} catch { /* the simulator is gone too */ }
+	}
 } finally {
 	if (sim && !args.includes("--keep")) {
 		// The whole group: the packaged binary spawns a webview child, and

@@ -891,16 +891,16 @@ section("linsen ljuger inte om att den lyssnar");
 	st.state.connection = "online";
 	const voice = (over) => { st.state.voice = { enabled: false, live: false, held: false, speaking: false, mic: "closed", detail: "", sent: 0, lastSegmentMs: 0, device: "glasses", ...over }; };
 
+	// Whether the microphone is open is the title bar's mark now (lensMic),
+	// not this row's word: the word vanished behind "thinking 12s", which is
+	// exactly when the user was looking for it.
 	st.state.mode = "always"; voice({});
-	check("always med mikrofonen av säger att den är av", st.lensStatus() === "mic off", String(st.lensStatus()));
+	check("always med mikrofonen av säger always — märket säger av", st.lensStatus() === "always" && st.lensMic() === "off", `${st.lensStatus()} ${st.lensMic()}`);
 	voice({ enabled: true });
 	check("always med mikrofonen på säger always", st.lensStatus() === "always", String(st.lensStatus()));
 
 	st.state.mode = "byname"; voice({});
-	// The tap on the touchpad is the switch now, so a closed microphone has to
-	// be visible in the ordinary mode too: otherwise turning it off with one
-	// finger looks exactly like a gesture the glasses dropped.
-	check("standardläget med mikrofonen av säger också att den är av", st.lensStatus() === "mic off", String(st.lensStatus()));
+	check("standardläget med mikrofonen av säger ingenting — märket räcker", st.lensStatus() === null && st.lensMic() === "off", String(st.lensStatus()));
 	voice({ enabled: true });
 	check("och säger ingenting när den är på — det är det vanliga läget", st.lensStatus() === null, String(st.lensStatus()));
 

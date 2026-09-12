@@ -5,12 +5,19 @@
   i stället en mikrofon-emoji längst till höger på namnraden, oberoende av
   statusordet. Kolla först att glyfen finns i firmwarefonten (pretext
   getTextWidth > 0), annars ett annat tecken — ✓ saknas till exempel.
-
-
+  [done, not tested]
 - Rita en ram runt texten och låt header texten vara som toppen på ett gui-fönster.
-
+  [done, not tested]
 - Linsen ska slocka efter 30sekunder av tystnad, antingen från användaren eller från servern. Tänd den så fort det kommer in ett meddelande från servern eller användaren börjar prata. Detta fungerar inte idag.
-
+  [done, not tested]
 - Lägg in "display on/off" som släcker/tänder linsen. Linsen ska inte tändas igen förrän man säger display on. Alltså den ska inte tändas för att man börjar prata eller det kommer in ett meddelande från servern.
-
-
+  [done, not tested]
+- Ta bort alla inställningar (hela Settings menyn) och låt istället en QR knapp komma upp i mitten innan allt visas OM ingen anslutning till servern finns.
+  Endast QR skanning ska fungera.
+  [done, not tested]
+- När man pratar med en worker och säger "Mike, gör detta" så stannar status raden kvar på Mike, fast man pratar med workern.
+  [done, not tested]
+- Lägg till att om man säger "Mike" efter att man har varit tyst i några sekunder så ska Mike svara direkt
+  "Hello, Man" och ibland "Hello, Man my only friend"
+  Och agera på den man säger efter, så att man inte MÅSTE säga "Mika, gör detta" i en mening.
+  [done, not tested]

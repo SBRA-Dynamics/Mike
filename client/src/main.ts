@@ -153,7 +153,13 @@ const voice = new Voice({
 	// belongs to. Without it the server's window could only measure from one
 	// transcript to the next, and the second half of a sentence — which has to
 	// be finished before it can be transcribed — used up the window by itself.
-	onSpeaking: (on) => { connection?.speaking(on); },
+	onSpeaking: (on) => {
+		connection?.speaking(on);
+		// The user starting to talk lights the lens (unless it was switched
+		// off), before a word has come back: the detector is the earliest sign
+		// there is, and the words arrive a second or two later.
+		if (on) store.wake();
+	},
 	onChange: (status) => store.setVoice(status),
 	onNote: (text) => companion.note(text),
 	// PRD 5b. `glasses` is declared below and is only ever CALLED from an open,
@@ -187,7 +193,10 @@ const glasses = new Glasses({
 				// answered the question by changing the answer would make the
 				// idle blanking cost the user a mode they did not choose. So the
 				// first tap lights the lens; the next one is the switch.
-				if (store.lensDark()) { store.setPage(store.state.lens.page); return; }
+				//
+				// Not when the lens was switched off on purpose ("display off"):
+				// nothing lights it then, so the tap goes straight to the switch.
+				if (store.lensDark() && !store.state.displayOff) { store.setPage(store.state.lens.page); return; }
 				// PushToTalk is the one mode where the switch means nothing: the
 				// hold IS the microphone there, by design and unconditionally, so
 				// a tap has nothing to turn on. Say that on the phone rather than
@@ -249,9 +258,11 @@ const companion = new Companion(root, {
 		return sent;
 	},
 	interrupt: () => { connection?.interrupt(); },
-	setMode: (mode) => { connection?.control(CONTROL.SET_MODE, { mode }); },
 
 	scanQr: (ui) => {
+		// Pressed again while a browser scan is running: stop it.
+		const running: Scanner | null = scanner;
+		if (running) { running.stop(); scanner = null; ui.show(false); return; }
 		// In the Even app, page script has no camera: the microphone reaches us
 		// through the SDK and getUserMedia is not granted at all. The host has
 		// its own picker, so there the code is photographed and decoded; only a
@@ -271,22 +282,17 @@ const companion = new Companion(root, {
 		scanner = new Scanner({
 			video: ui.video,
 			canvas: ui.canvas,
-			onError: (message) => { ui.show(false); companion.note(message); },
+			onError: (message) => { ui.show(false); scanner = null; companion.note(message); },
 			onResult: (text) => {
 				scanner?.stop();
+				scanner = null;
 				ui.show(false);
 				applyScan(text);
 			}
 		});
 		ui.show(true);
-		void scanner.start().then((ok) => { if (!ok) ui.show(false); });
+		void scanner.start().then((ok) => { if (!ok) { ui.show(false); scanner = null; } });
 	},
-	cancelScan: () => { scanner?.stop(); scanner = null; },
-	switchWorker: (name) => { connection?.control(CONTROL.SWITCH_WORKER, { name: name || null }); },
-	whoIs: () => { connection?.control(CONTROL.WHO_IS, {}); },
-	reconnect: () => { connection?.poke("manual"); },
-	newSession: () => { void newSession(); },
-	saveSettings: (patch) => { void applySettings(patch); },
 	// R5a.1: the microphone is asked for when the user turns it on, never at
 	// page load. This is the only path to getUserMedia in the client.
 	setMic: (on) => { void voice.setEnabled(on); },
@@ -315,17 +321,29 @@ const repaint = (immediate = false): void => {
  *  the moment it expires rather than polled for. Identical frames are not
  *  re-sent to the glasses, so an extra repaint costs nothing over BLE. */
 let expiryTimer: Timer | null = null;
+let lensWasDark = false;
 
 const paint = (): void => {
 	const s = store.state;
 	mark("render");
 	const view = store.lensView();
-	frame = renderLens({ from: view.from, text: view.text, status: store.lensStatus(), page: view.page, blank: store.lensDark() });
+	const dark = store.lensDark();
+	frame = renderLens({ from: view.from, text: view.text, status: store.lensStatus(), mic: store.lensMic(), page: view.page, blank: dark });
 	mark("companion");
-	companion.render(s, frame, store.listening());
+	companion.render(s, frame, store.listening(), store.needsPairing());
 	mark(`glasses ${frame.content.length}c`);
 	glasses.show(frame.content);
 	mark("painted");
+	// The lens going dark and lighting again, written where it can be read
+	// after the fact: the server's log. This is the one behaviour of the lens
+	// that cannot be seen in a screenshot of the phone, and the one Robin
+	// reported as not happening — so every transition says why.
+	if (dark !== lensWasDark) {
+		lensWasDark = dark;
+		const why = dark ? (s.displayOff ? "display off" : `idle ${Math.round(store.idleFor() / 1000)}s`) : "lit";
+		console.log(`[mike] lens ${dark ? "dark" : "lit"} (${why})`);
+		try { connection?.control(CONTROL.CLIENT_LOG, { text: `lens ${dark ? "dark" : "lit"} (${why})` }); } catch { }
+	}
 
 	cancel(expiryTimer);
 	expiryTimer = null;
@@ -338,10 +356,12 @@ const paint = (): void => {
 	// timers that shape is a loop that never returns (timers.ts); on the
 	// host's own it is a timer.
 	//
-	// The third is the lens going dark after ten quiet seconds (LENS_IDLE_MS).
-	// It arms once per utterance and does not re-arm from its own callback: once
-	// the lens is blank nextIdleExpiry is null, so this is not a chain.
-	const due = [store.nextNoticeExpiry(), store.nextListeningExpiry(), store.nextIdleExpiry()]
+	// The third is the lens going dark after thirty quiet seconds
+	// (LENS_IDLE_MS). It arms once per utterance and does not re-arm from its
+	// own callback: once the lens is blank nextIdleExpiry is null, so this is
+	// not a chain. The fourth is the pairing screen's grace period, likewise
+	// armed once per outage.
+	const due = [store.nextNoticeExpiry(), store.nextListeningExpiry(), store.nextIdleExpiry(), store.nextPairingExpiry()]
 		.filter((v): v is number => v !== null);
 	if (due.length) expiryTimer = after(() => { expiryTimer = null; paint(); }, Math.min(...due) + 50);
 };
@@ -464,8 +484,9 @@ const openConnection = (): void => {
 	connection?.stop("reconnecting with new settings");
 	const { token, server, sessionId } = settingsStore.value;
 	if (!token) {
+		// The pairing screen takes it from here: it is the only thing shown
+		// while the connection is fatal, and the QR button on it is the fix.
 		store.setConnection("fatal", "no token");
-		companion.note("No token yet. Open the server's link with ?token=… once, or paste one in Settings.");
 		return;
 	}
 	connection = new Connection({
@@ -505,11 +526,6 @@ const applySettings = async (patch: { token?: string; server?: string }): Promis
 	openConnection();
 };
 
-const newSession = async (): Promise<void> => {
-	await settingsStore.save({ sessionId: "" });
-	openConnection();
-};
-
 // --------------------------------------------------------------------- start
 
 const start = async (): Promise<void> => {
@@ -526,7 +542,7 @@ const start = async (): Promise<void> => {
 	// "native" is the claim timers.ts makes; on a phone this line is the only
 	// place it can be checked. (Node's timers are JavaScript and print as not
 	// native there, which is expected and meaningless.)
-	console.log(`[mike] client up ${VERSION} — glasses ${attached ? "attached" : "absent"}, timers ${looksNative(natives.setTimeout) ? "native" : "not native"}`);
+	console.log(`[mike] client up ${VERSION} — glasses ${attached ? "attached" : `absent (${glasses.error ?? "no host"})`}, timers ${looksNative(natives.setTimeout) ? "native" : "not native"}`);
 
 	// R4.7: the SDK's storage is the only one that survives an app restart on
 	// the phone; the browser copy is the development fallback and the desktop's
@@ -540,7 +556,6 @@ const start = async (): Promise<void> => {
 	if (Object.keys(fromUrl).length) await settingsStore.save(fromUrl);
 	scrubUrl();
 
-	companion.fillSettings(settingsStore.value.server, settingsStore.value.token);
 	openConnection();
 	companion.focusInput();
 };

@@ -137,36 +137,26 @@ button.primary { background: #2f5d3c; border-color: #3d7a4f; }
 
 /* ----------------------------------------------------------------- settings */
 
-details.settings { border-top: 1px solid var(--line); background: var(--surface); }
-details.settings > summary {
-	padding: 10px 14px; cursor: pointer; font-size: 13px; color: var(--muted);
-	list-style: none;
+/* --------------------------------------------------------------- pairing */
+/* Over everything, when there is no server: one button, in the middle. */
+.pairing {
+	position: fixed; inset: 0; z-index: 10;
+	display: flex; align-items: center; justify-content: center;
+	background: var(--bg);
+	padding: 24px;
 }
-details.settings > summary::-webkit-details-marker { display: none; }
-details.settings > summary::before { content: "⚙ "; }
-/* The drawer scrolls on its own. It is the tallest thing in the app and it
-   opens at the bottom, so without this its last row — Reconnect, New
-   conversation — is simply unreachable on a phone. */
-.settings .body {
-	padding: 4px 14px 14px;
-	display: flex; flex-direction: column; gap: 10px;
-	max-height: 60dvh;
-	overflow-y: auto;
-	-webkit-overflow-scrolling: touch;
-}
-.settings .row > input { min-width: 0; }
-.scanrow > button { flex: none; }
-.scanner { display: flex; flex-direction: column; gap: 8px; }
-.scanner video {
-	width: 100%; max-height: 40dvh; border-radius: 8px;
+/* A class rule beats the browser's own [hidden] { display: none }, so the
+   attribute has to be said again here — this is exactly how the old scanner
+   box stayed on screen as a black rectangle under "Scan QR". */
+.pairing[hidden] { display: none; }
+.pairing .card { display: flex; flex-direction: column; align-items: center; gap: 14px; width: 100%; max-width: 360px; text-align: center; }
+.pairing h2 { margin: 0; font-size: 22px; }
+.pairing .why, .pairing .hint { margin: 0; font-size: 13px; color: var(--muted); }
+.pairing button.scan { font-size: 18px; padding: 14px 28px; }
+.pairing .scanvideo {
+	width: 100%; max-height: 50dvh; border-radius: 8px;
 	background: #000; object-fit: cover;
 }
-.settings label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
-.settings .row { display: flex; gap: 8px; align-items: center; }
-.settings .row > * { flex: 1; }
-.settings .row > button { flex: none; }
-.settings .note { font-size: 12px; color: var(--muted); }
-.settings code { font: 12px ui-monospace, Menlo, monospace; color: #cfe0ff; overflow-wrap: anywhere; }
 
 /* A standing notice: no glasses, no token. One line, quiet, always visible —
    never in the transcript, which a history read replaces wholesale. */

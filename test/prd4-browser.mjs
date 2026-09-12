@@ -56,8 +56,8 @@ try {
 	await waitFor(`document.querySelector(".dot").className.includes("online")`, 15_000, "anslutning");
 	const status = await evaluate(`document.querySelector("header .chip:last-child").textContent`);
 	check("klienten kopplar upp sig av sig själv, utan konfiguration (krav 1)", status === "online", status);
-	const session = await evaluate(`document.querySelector(".settings .info").textContent`);
-	check("och har fått en session av servern", /^session [0-9a-f]{8}/.test(session), session);
+	const session = await evaluate(`mike.state().sessionId ?? ""`);
+	check("och har fått en session av servern", /^[0-9a-f]{8}/.test(session), session);
 	check("token ligger inte kvar i adressfältet efteråt",
 		!(await evaluate(`location.search`)).includes("token"), await evaluate(`location.search`));
 
@@ -87,39 +87,37 @@ try {
 	// preview.
 	await waitFor(`mike.listening() !== "thinking"`, 5_000, "turen är över");
 	const rows = await evaluate(`[...document.querySelectorAll(".lens .row")].map(r => r.textContent.replace(/\\u00a0/g, ""))`);
-	const expected = renderLens({ from: "echo", text: `echo: ${SAID}`, status: null, page: 0 }).lines;
+	// The title bar names who the next sentence goes to — Mike, there being
+	// no worker — and words from anybody else say whose they are. The echo
+	// handler is "anybody else". The microphone mark is whatever the browser's
+	// microphone is, which is a switch that is off.
+	const mic = (await evaluate(`mike.state().voice ? (mike.state().voice.live ? "live" : "off") : null`));
+	const expected = renderLens({ from: "Mike", text: `echo: echo: ${SAID}`, status: null, mic, page: 0 }).lines;
 	check("förhandsvisningen är exakt den ram glasögonen skulle få (krav 3)",
 		JSON.stringify(rows) === JSON.stringify(expected),
 		`${JSON.stringify(rows.slice(0, 2))} mot ${JSON.stringify(expected.slice(0, 2))}`);
-	check("rubriken säger vem som talade (krav 6)", rows[0].startsWith("echo"), rows[0]);
+	check("rubriken säger vem man talar med, och texten vem som talade (krav 6)", rows[0].includes("Mike") && rows[1].includes("echo:"), rows[0] + rows[1]);
 	check("ingen rad är bredare än femtio kolumner (krav 2)",
 		rows.every((r) => r.length <= 50), JSON.stringify(rows.filter((r) => r.length > 50)));
 
-	// The settings drawer, on a phone-sized viewport. Robin could not reach
-	// Reconnect or New conversation: the drawer is the tallest thing in the app,
-	// it opens at the bottom, and nothing scrolled.
-	section("inställningspanelen går att nå på en telefon");
-	const drawer = await evaluate(`(() => {
-		const d = document.querySelector("details.settings");
-		d.open = true;
-		const body = d.querySelector(".body");
-		const cs = getComputedStyle(body);
-		const buttons = [...d.querySelectorAll("button")].map((b) => b.textContent);
-		const last = [...d.querySelectorAll("button")].pop();
-		last.scrollIntoView({ block: "center" });
-		const r = last.getBoundingClientRect();
+	// No settings. The only configuration is the QR code, and the only time it
+	// is offered is when there is no server: the pairing screen covers the app
+	// then and is gone the rest of the time.
+	section("inga inställningar — bara QR-skanning, och bara utan server");
+	const pairing = await evaluate(`(() => {
+		const p = document.querySelector(".pairing");
 		return {
-			overflow: cs.overflowY,
-			scrolls: body.scrollHeight > body.clientHeight,
-			reachable: r.top >= 0 && r.bottom <= innerHeight,
-			appTaller: document.getElementById("app").getBoundingClientRect().height <= innerHeight + 1,
-			buttons
+			exists: !!p,
+			hidden: p?.hidden ?? null,
+			buttons: [...(p?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
+			drawer: !!document.querySelector("details.settings"),
+			inputs: [...document.querySelectorAll("input")].map((i) => i.placeholder)
 		};
 	})()`);
-	check("lådan rullar av sig själv", drawer.overflow === "auto", drawer.overflow);
-	check("den sista knappen går att få fram", drawer.reachable === true, JSON.stringify(drawer));
-	check("och appen är inte högre än fönstret", drawer.appTaller === true, JSON.stringify(drawer));
-	check("skanningsknappen finns", drawer.buttons.includes("Scan QR"), JSON.stringify(drawer.buttons));
+	check("parkopplingsskärmen finns men är dold när servern svarar", pairing.exists && pairing.hidden === true, JSON.stringify(pairing));
+	check("dess enda knapp är QR-skanning", JSON.stringify(pairing.buttons) === JSON.stringify(["Scan QR"]), JSON.stringify(pairing.buttons));
+	check("inställningslådan är borta", pairing.drawer === false);
+	check("och inget fält för server eller token finns kvar", !pairing.inputs.some((p) => /token|wss/.test(p)), JSON.stringify(pairing.inputs));
 
 	check("inga fel i konsolen under hela varvet", consoleErrors.length === 0, JSON.stringify(consoleErrors.slice(0, 3)));
 	check("inga ouppfångade undantag i servern", !server.log().includes("UNCAUGHT"), server.log().slice(-300));

@@ -126,8 +126,9 @@ try {
 	await talker.waitFor(`mike.state().mode === ${JSON.stringify(MODES.IGNORE)}`, 30_000, "att input pausas av ett talat kommando");
 	check("ett talat \"pausa input\" pausar allt som når samtalet (krav 3)",
 		(await talker.evaluate(`mike.state().mode`)) === MODES.IGNORE);
-	check("och lägesväljaren följer med utan att någon rört den",
-		(await talker.evaluate(`document.querySelector(".settings select.modeselect").value`)) === MODES.IGNORE);
+	check("och telefonen visar det som det senaste som hände",
+		/paused/.test(await talker.evaluate(`document.querySelector(".lastevent").textContent`)),
+		await talker.evaluate(`document.querySelector(".lastevent").textContent`));
 	check("mikrofonen är fortfarande öppen i pausat läge — annars går det inte att prata sig ur",
 		(await talker.evaluate(`mike.tracks()`)) === 1);
 
@@ -152,10 +153,13 @@ try {
 	// En fil som talar oavbrutet: om mikrofonen vore öppen skulle det synas
 	// omedelbart, vilket är hela poängen med kontrollen nedan.
 	const holder = await openClient(server, join(VOICE_DIR, "talk-sv.wav"));
+	// There is no mode picker on the phone any more: the mode is changed by
+	// saying or typing it, and typed is what a test can do.
+	await holder.waitFor(`document.querySelector(".dot")?.className.includes("online")`, 20_000, "anslutning");
 	await holder.evaluate(`(() => {
-		const s = document.querySelector(".settings select.modeselect");
-		s.value = ${JSON.stringify(MODES.PUSHTOTALK)};
-		s.dispatchEvent(new Event("change"));
+		const i = document.querySelector(".composer input");
+		i.value = "switch to push to talk";
+		document.querySelector(".composer").dispatchEvent(new Event("submit", { cancelable: true }));
 		return true;
 	})()`);
 	await holder.waitFor(`mike.state().mode === ${JSON.stringify(MODES.PUSHTOTALK)}`, 10_000, "läget håll in");
@@ -216,7 +220,7 @@ try {
 	section("servern");
 	check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-400));
 	check("serverns logg visar att den hörde och hur lång tid det tog",
-		/heard \d+ms in \d+ms/.test(server.log()), (server.log().match(/heard [^\n]*/g) ?? []).slice(0, 3).join(" / "));
+		/heard \d+ms[^\n]* in \d+ms/.test(server.log()), (server.log().match(/heard [^\n]*/g) ?? []).slice(0, 3).join(" / "));
 
 } catch (err) {
 	console.error("\ntestriggen kraschade:", err.stack || err.message);

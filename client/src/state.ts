@@ -8,6 +8,7 @@
 
 import { DEFAULT_MODE, MODE_LABEL, MODES } from "../../src/routing.js";
 import { BODY_ROWS, wrapText } from "./lens/render.ts";
+import type { LensMic } from "./lens/render.ts";
 import type { VoiceStatus } from "./audio/voice.ts";
 import type { ConnectionStatus } from "./connection.ts";
 import type { EventMsg, ReadyMsg, SeqMsg, WorkerInfo } from "./protocol.ts";
@@ -105,6 +106,15 @@ export type AppState = {
 	/** When the lens last got something worth reading. Compared against the
 	 *  turns so an answer is not covered up by the next question. */
 	lensAt: number;
+	/** "Display off", said out loud: the lens stays dark whatever happens
+	 *  until "display on". Nothing lights it — not a reply, not speech, not a
+	 *  turn — because the user asked for a dark lens and every one of those is
+	 *  exactly the thing they asked not to be shown. */
+	displayOff: boolean;
+	/** When the socket was last seen going away, or null while it is up. The
+	 *  pairing screen waits on this: a blip while the phone was in a pocket is
+	 *  not a reason to put a QR button over the conversation. */
+	offlineSince: number | null;
 };
 
 export type Pending = {
@@ -153,8 +163,17 @@ export const STALE_MS = 10_000;
  *
  * Nothing is lost: the transcript keeps it, and a tap repaints (setPage), which
  * is also what makes this safe to be aggressive about.
+ *
+ * Thirty seconds. Ten was the first guess and it was too short in use: an
+ * answer worth reading twice was gone before the second read.
  */
-export const LENS_IDLE_MS = 10_000;
+export const LENS_IDLE_MS = 30_000;
+
+/** How long the socket may be down before the companion stops showing the
+ *  conversation and shows the QR button instead. Long enough to ride out the
+ *  reconnect after the phone comes out of a pocket; short enough that a moved
+ *  server is noticed. A refused token skips the wait — see needsPairing. */
+export const PAIRING_GRACE_MS = 10_000;
 
 /** How long a finished turn stays on the lens when nothing arrived to replace
  *  it. Normally the answer does that within a message or two; this is for the
@@ -247,7 +266,9 @@ export class Store {
 		said: null,
 		heard: null,
 		turns: [],
-		lensAt: 0
+		lensAt: 0,
+		displayOff: false,
+		offlineSince: null
 	};
 
 	/** When the user last asked to see the lens — see #wake. */
@@ -273,7 +294,28 @@ export class Store {
 	setConnection(status: ConnectionStatus, detail: string): void {
 		this.state.connection = status;
 		this.state.connectionDetail = detail;
+		if (status === "online") this.state.offlineSince = null;
+		else if (this.state.offlineSince === null) this.state.offlineSince = Date.now();
 		this.notify();
+	}
+
+	/** Should the companion be showing the QR button instead of the
+	 *  conversation? Yes when the connection is dead for good — no token, or
+	 *  one the server refused — and yes when it has been down for longer than a
+	 *  reconnect takes. Scanning the code is the one thing that fixes either. */
+	needsPairing(now = Date.now()): boolean {
+		const s = this.state;
+		if (s.connection === "fatal") return true;
+		if (s.connection === "online" || s.offlineSince === null) return false;
+		return now - s.offlineSince >= PAIRING_GRACE_MS;
+	}
+
+	/** When the grace period runs out, so the caller can repaint exactly then. */
+	nextPairingExpiry(now = Date.now()): number | null {
+		const s = this.state;
+		if (s.connection === "online" || s.connection === "fatal" || s.offlineSince === null) return null;
+		const left = s.offlineSince + PAIRING_GRACE_MS - now;
+		return left > 0 ? left : null;
 	}
 
 	setGlasses(glasses: AppState["glasses"]): void {
@@ -427,7 +469,26 @@ export class Store {
 	 */
 	lensView(now = Date.now()): LensItem {
 		const work = this.workingView(now);
-		return work ?? this.state.lens;
+		return work ?? this.#addressed(this.state.lens);
+	}
+
+	/** Who the next sentence goes to — the name the title bar carries (R3.5). */
+	addressee(): string {
+		return this.state.worker ?? MIKE;
+	}
+
+	/**
+	 * The title bar names who is being talked TO, which is not always who said
+	 * the last thing. Mike answering an aside while the user is talking to
+	 * Bosse used to put "Mike" on the name row and leave it there until Bosse
+	 * spoke again — so the row said the next sentence would go to Mike while it
+	 * was going to Bosse. Now the row keeps Bosse's name and the words say whose
+	 * they are, so nothing is misattributed and the row stays true.
+	 */
+	#addressed(item: LensItem): LensItem {
+		const who = this.addressee();
+		if (item.from === who) return item;
+		return { ...item, from: who, text: item.text ? `${item.from}: ${item.text}` : item.text };
 	}
 
 	/** Is the lens dark? Glass, not pixels: the whole frame goes, header and
@@ -435,8 +496,29 @@ export class Store {
 	 *  the idle clock — a turn that says nothing for a minute is still a turn,
 	 *  and the blink in #doingLine is what carries that. */
 	lensDark(now = Date.now()): boolean {
+		if (this.state.displayOff) return true;
 		if (this.workingView(now)) return false;
 		return this.idleFor(now) >= LENS_IDLE_MS;
+	}
+
+	/** The microphone as the title bar shows it: hearing, not hearing, or
+	 *  there is no microphone to speak of yet. Live rather than enabled, so
+	 *  that a hold shows as hearing and a switch left on with nothing open —
+	 *  paused, or backgrounded — does not. */
+	lensMic(): LensMic {
+		const v = this.state.voice;
+		if (!v) return null;
+		return v.live ? "live" : "off";
+	}
+
+	/** The lens, switched off or on by voice. Switching it on counts as asking
+	 *  to see it, so the last thing said comes back at once rather than after
+	 *  the next reply. */
+	setDisplay(on: boolean): void {
+		this.state.displayOff = !on;
+		this.state.lastEvent = on ? "display on" : "display off";
+		if (on) this.#wokeAt = Date.now();
+		this.notify();
 	}
 
 	/** How long nothing has been said, in either direction — the last reply
@@ -453,7 +535,7 @@ export class Store {
 	 *  than polling. Null once it already has — this arms once per utterance and
 	 *  does not re-arm itself. */
 	nextIdleExpiry(now = Date.now()): number | null {
-		if (this.workingView(now)) return null;
+		if (this.state.displayOff || this.workingView(now)) return null;
 		const left = LENS_IDLE_MS - this.idleFor(now);
 		return left > 0 ? left : null;
 	}
@@ -494,11 +576,17 @@ export class Store {
 		const budget = BODY_ROWS - (doing ? 1 : 0) - plan.length;
 
 		// One group per fragment, so a fragment that is dropped for space is
-		// dropped whole rather than by the line.
+		// dropped whole rather than by the line. A turn addressed to somebody
+		// other than the one the title bar names says so on its first line —
+		// an aside to Mike while talking to Bosse — because the name row does
+		// not change for it (see #addressed).
+		const who = this.addressee();
 		const groups: string[][] = [];
 		for (const t of live) {
 			const mark = t.phase === "held" ? MARK_WAITING : t.phase === "queued" ? MARK_QUEUED : MARK_TAKEN;
-			for (const part of t.parts) groups.push(wrapText(`${mark} ${part}`));
+			const to = t.to === "mike" ? MIKE : t.to;
+			const aside = to !== who ? `(to ${to}) ` : "";
+			t.parts.forEach((part, i) => groups.push(wrapText(`${mark} ${i === 0 ? aside : ""}${part}`)));
 		}
 
 		const said: string[] = [];
@@ -518,7 +606,7 @@ export class Store {
 		if (hidden) said.unshift(`+${hidden} earlier`);
 
 		return {
-			from: newest.to === "mike" ? MIKE : newest.to,
+			from: who,
 			text: [...said, ...plan, ...(doing ? [doing] : [])].join("\n"),
 			page: 0
 		};
@@ -562,7 +650,15 @@ export class Store {
 	 *  kept apart from `lensAt` on purpose: `lensAt` is when something was SAID,
 	 *  and workingView compares against it to decide whether an answer is newer
 	 *  than the work. Paging through a reply must not make the running turn look
-	 *  stale. */
+	 *  stale.
+	 *
+	 *  Public, because the user starting to speak is the same request: the
+	 *  detector flips before a word has been transcribed, and the lens should be
+	 *  lit by the time the words come back. */
+	wake(): void {
+		this.#wake();
+	}
+
 	#wake(): void {
 		this.#wokeAt = Date.now();
 		// Always a notify, even when the page did not move: on a dark lens the
@@ -658,21 +754,11 @@ export class Store {
 		if (s.mode === MODES.IGNORE) return MODE_LABEL[MODES.IGNORE];
 		if (listening === "listening") return "listening";
 
-		// A mode that wants an open microphone, without one, is the one state
-		// that actively lies. "always" reads as "I am hearing everything" while
-		// the switch is off and nothing is being heard at all — and the hold
-		// still works, being unconditional by design, so there is no symptom to
-		// suspect the switch from. Say the actionable half.
-		//
-		// In the default mode too, now that a tap on the touchpad is the switch.
-		// This row used to stay quiet there, on the grounds that the ordinary
-		// case should not spend the line; the moment the user can turn the
-		// microphone off with one finger, a silent row makes a deliberate act
-		// look like a dropped gesture.
-		if (s.mode !== MODES.PUSHTOTALK && s.mode !== MODES.IGNORE && s.voice && !s.voice.enabled) {
-			return "mic off";
-		}
-
+		// Whether the microphone is open is no longer this row's to say: the
+		// title bar carries it as a mark of its own (lensMic), which is there
+		// whatever word this row is spending itself on. "mic off" used to live
+		// here and vanished behind "thinking 12s" — exactly when the user was
+		// looking to see whether they had been heard.
 		if (s.mode !== DEFAULT_MODE) return MODE_LABEL[s.mode] ?? s.mode;
 		return null;
 	}
@@ -937,6 +1023,12 @@ export class Store {
 				// agrees about whether anything is listening.
 				this.state.lastEvent = d.on ? "mic on" : "mic off";
 				this.onMicRequest?.(d.on === true);
+				break;
+
+			case "displayRequested":
+				// The same shape: the lens is the client's, the words were the
+				// server's to hear. Off stays off until on is said.
+				this.setDisplay(d.on === true);
 				break;
 
 			case "modeChanged":

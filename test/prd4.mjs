@@ -22,9 +22,9 @@ import { validateC2S, S2C } from "../src/protocol.js";
 import { MODES } from "../src/routing.js";
 import { startProxy } from "./netcut.mjs";
 
-import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS } from "../client/src/lens/render.ts";
+import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS, BODY_COLS, FRAME_PX, MIC_LIVE, MIC_OFF } from "../client/src/lens/render.ts";
 import { Connection, wsUrlFrom } from "../client/src/connection.ts";
-import { Store, NOTICE_MS, STALE_MS, LENS_IDLE_MS, MARK_WAITING, MARK_QUEUED, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
+import { Store, NOTICE_MS, STALE_MS, LENS_IDLE_MS, PAIRING_GRACE_MS, MARK_WAITING, MARK_QUEUED, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
 import { settingsFromScan, decodeFrame } from "../client/src/qr.ts";
 import { readUrlSettings, SettingsStore } from "../client/src/settings.ts";
 import { Glasses, hasHostChannel, isAudioChatter } from "../client/src/glasses.ts";
@@ -35,14 +35,21 @@ const QUICK = process.argv.includes("--quick");
 const servers = [];
 const track = (s) => { servers.push(s); return s; };
 
-/** Every line of a frame, against both budgets. Returns the offender, or null. */
-const budgetBreak = (lines) => {
-	for (const line of lines) {
+/** Every row of a frame, against both budgets: the preview's rows by columns,
+ *  the glasses' rows by pixels — they are padded differently for the two
+ *  faces, and each face has only the one budget. Returns the offender, or null. */
+const budgetBreak = (f) => {
+	for (const line of f.lines) {
 		if (line.length > LENS.cols) return `${line.length} tecken: ${JSON.stringify(line)}`;
+	}
+	for (const line of f.content.split("\n")) {
 		if (getTextWidth(line) > LENS.width) return `${getTextWidth(line)} px: ${JSON.stringify(line)}`;
 	}
 	return null;
 };
+
+/** A body row without the frame round it. */
+const inner = (line) => line.replace(/^│ /, "").replace(/ *│$/, "");
 
 /** A client connection wired to a store, the way main.ts wires it — plus the
  *  bookkeeping a test needs: what was applied, what was sent on the wire, and
@@ -103,11 +110,41 @@ try {
 	for (const [name, text] of Object.entries(cases)) {
 		const f = renderLens({ from: "Mike", text, page: 0 });
 		check(`${name}: exakt ${LENS.rows} rader`, f.lines.length === LENS.rows, `${f.lines.length}`);
-		check(`${name}: ingen rad spränger 50 kolumner eller 576 px`, budgetBreak(f.lines) === null, budgetBreak(f.lines) ?? "");
+		check(`${name}: ingen rad spränger 50 kolumner eller 576 px`, budgetBreak(f) === null, budgetBreak(f) ?? "");
 	}
 
 	check("rubriken är rad noll och resten är kroppen",
-		renderLens({ from: "Bosse", text: LONG, page: 0 }).lines[0].startsWith("Bosse"));
+		renderLens({ from: "Bosse", text: LONG, page: 0 }).lines[0].includes("Bosse"));
+
+	section("linsen: en ram runt texten, med rubriken som fönstrets titelrad");
+	{
+		const f = renderLens({ from: "Bosse", text: LONG, status: "thinking 3s", mic: "live", page: 0 });
+		const glass = f.content.split("\n");
+		check("ramen är tio rader på glaset också — ingen tom rad kapas", glass.length === LENS.rows, String(glass.length));
+		check("titelraden börjar med ett hörn och slutar med ett", /^╭─ .* ╮$/.test(f.lines[0]), f.lines[0]);
+		check("namnet och statusen står i titelraden", f.lines[0].includes("Bosse · thinking 3s"), f.lines[0]);
+		check("kroppens rader har en kant på var sida", f.lines.slice(1, -1).every((l) => l.startsWith("│ ") && l.endsWith(" │")), JSON.stringify(f.lines.slice(1, -1)));
+		check("nedersta raden är ramens underkant", /^╰─+╯$/.test(f.lines.at(-1)), f.lines.at(-1));
+		check("förhandsvisningen är exakt femtio kolumner bred på varje rad", f.lines.every((l) => l.length === LENS.cols), JSON.stringify(f.lines.map((l) => l.length)));
+		// The glasses get the same rows padded by pixels: every row ends where
+		// the frame's right edge is, give or take the width of half a space.
+		const widths = glass.map((l) => getTextWidth(l));
+		check("på glaset slutar varje rad inom en halv mellanslagsbredd från kanten",
+			widths.every((w) => w <= FRAME_PX && FRAME_PX - w < 5), JSON.stringify(widths));
+		check("och ramen är smalare än linsen", FRAME_PX <= LENS.width);
+		check("ramens glyfer finns i fonten", ["╭", "╮", "╰", "╯", "─", "│"].every((g) => getTextWidth(g) > 8));
+		check("mikrofonens tecken finns i fonten, båda", getTextWidth(MIC_LIVE) > 8 && getTextWidth(MIC_OFF) > 8);
+		check("emojin gör det inte", getTextWidth("🎤") <= 4, String(getTextWidth("🎤")));
+		check("kroppen har plats för det som radbröts", wrapText(LONG).every((l) => l.length <= BODY_COLS));
+
+		check("en öppen mikrofon syns längst till höger i titelraden", f.lines[0].endsWith(` ${MIC_LIVE} ╮`), f.lines[0]);
+		const off = renderLens({ from: "Bosse", text: "hej", status: "thinking 12s", mic: "off", page: 0 });
+		check("en stängd mikrofon också — oberoende av statusordet", off.lines[0].endsWith(` ${MIC_OFF} ╮`) && off.lines[0].includes("thinking 12s"), off.lines[0]);
+		const none = renderLens({ from: "Bosse", text: "hej", page: 0 });
+		check("och utan mikrofon står inget där", none.lines[0].endsWith("─╮"), none.lines[0]);
+		const blank = renderLens({ from: "Bosse", text: "hej", mic: "live", blank: true });
+		check("en släckt lins har ingen ram heller", blank.content === "" && blank.lines.every((l) => l === ""));
+	}
 
 	section("linsen: vem som talar syns (R4.2, krav 6)");
 	check("arbetarens namn står i rubriken",
@@ -141,7 +178,7 @@ try {
 		// difference between "readable through tap or swipe" and "truncated".
 		const wrapped = wrapText(LONGER);
 		const paged = [];
-		for (let p = 0; p < f0.pages; p++) paged.push(...renderLens({ from: "Mike", text: LONGER, page: p }).lines.slice(1));
+		for (let p = 0; p < f0.pages; p++) paged.push(...renderLens({ from: "Mike", text: LONGER, page: p }).lines.slice(1, -1).map(inner));
 		const words = (s) => s.split(/\s+/).filter(Boolean);
 		check("varje rad från radbrytningen finns på någon sida",
 			wrapped.every((line) => paged.includes(line)), `${wrapped.length} rader`);
@@ -149,7 +186,7 @@ try {
 			words(paged.join(" ")).join(" ") === words(LONGER).join(" "),
 			words(paged.join(" ")).length + " mot " + words(LONGER).length);
 
-		check("en sida rymmer nio rader kropp", BODY_ROWS === 9);
+		check("en sida rymmer åtta rader kropp — titelraden och underkanten tar var sin", BODY_ROWS === 8);
 		check("sidräkningen stämmer med antalet rader",
 			f0.pages === Math.ceil(wrapped.length / BODY_ROWS), `${f0.pages} mot ${wrapped.length} rader`);
 	}
@@ -163,7 +200,7 @@ try {
 		// A word that cannot fit on a line of its own is broken by us, where the
 		// preview can show it, rather than by the firmware where it cannot.
 		const f = renderLens({ from: "Mike", text: "y".repeat(120), page: 0 });
-		const body = f.lines.slice(1).filter(Boolean);
+		const body = f.lines.slice(1, -1).map(inner).filter(Boolean);
 		check("ett för långt ord bryts i stället för att skjutas ut ur linsen",
 			body.length >= 2 && body.join("").startsWith("y".repeat(60)), JSON.stringify(body.slice(0, 2)));
 	}
@@ -611,7 +648,7 @@ try {
 		check("och ingenting påstår längre att något pågår", s.working() === false);
 	}
 
-	section("modellen: linsen släcks när ingen har sagt något på tio sekunder");
+	section("modellen: linsen släcks när ingen har sagt något på trettio sekunder");
 	{
 		const s = new Store();
 		s.state.connection = "online";
@@ -657,6 +694,81 @@ try {
 		w.apply({ type: "event", kind: "turn", data: { id: "t1", to: "Bosse", parts: ["kör sviten"], phase: "started" } });
 		const long = Date.now() + LENS_IDLE_MS * 3;
 		check("men något som pågår släcks aldrig", w.lensDark(long) === false && w.lensView(long).text.includes("kör sviten"), w.lensView().text);
+		check("trettio sekunder, inte tio", LENS_IDLE_MS === 30_000, String(LENS_IDLE_MS));
+
+		// The user starting to speak lights it, before any word has come back.
+		const sp = new Store();
+		sp.state.connection = "online";
+		sp.apply({ type: "text", text: "Svar.", from: "Bosse", seq: 1 });
+		sp.state.lensAt -= LENS_IDLE_MS + 1;
+		check("släckt före talet", sp.lensDark() === true);
+		let woke = 0;
+		sp.subscribe(() => woke++);
+		sp.wake();
+		check("att börja prata tänder linsen", sp.lensDark() === false && woke === 1, `${sp.lensDark()} ${woke}`);
+	}
+
+	section("modellen: display off släcker linsen tills display on sägs");
+	{
+		const s = new Store();
+		s.state.connection = "online";
+		s.apply({ type: "text", text: "Svar.", from: "Bosse", seq: 1 });
+		check("tänd innan", s.lensDark() === false);
+		s.apply({ type: "event", kind: "displayRequested", data: { on: false } });
+		check("display off släcker den", s.lensDark() === true && s.state.displayOff === true);
+		check("och armerar ingen tomgångstimer", s.nextIdleExpiry() === null);
+		s.apply({ type: "text", text: "Ett nytt svar.", from: "Bosse", seq: 2 });
+		check("ett meddelande från servern tänder den inte", s.lensDark() === true);
+		s.wake();
+		check("att börja prata tänder den inte", s.lensDark() === true);
+		s.setPage(0);
+		check("en tryckning tänder den inte", s.lensDark() === true);
+		s.apply({ type: "event", kind: "turn", data: { id: "t1", to: "Bosse", parts: ["kör"], phase: "started" } });
+		check("inte ens en tur som pågår", s.lensDark() === true);
+		check("men det som sades finns kvar att visa", s.state.lens.text === "Ett nytt svar.");
+		s.apply({ type: "event", kind: "displayRequested", data: { on: true } });
+		check("display on tänder den igen", s.lensDark() === false && s.state.displayOff === false);
+		check("och säger det på telefonen", s.state.lastEvent === "display on");
+		s.state.turns = [];
+		s.state.lensAt -= LENS_IDLE_MS + 1;
+		check("tänd av display on räknas som nyss sedd, så tomgången börjar om", s.lensDark() === false);
+	}
+
+	section("modellen: mikrofonen som titelraden visar den");
+	{
+		const s = new Store();
+		const voice = (over) => { s.state.voice = { enabled: false, live: false, held: false, speaking: false, mic: "closed", detail: "", sent: 0, lastSegmentMs: 0, device: "glasses", ...over }; };
+		check("ingen mikrofon alls: inget tecken", s.lensMic() === null);
+		voice({});
+		check("stängd: ringen", s.lensMic() === "off");
+		voice({ enabled: true, live: true });
+		check("öppen och hörande: pricken", s.lensMic() === "live");
+		voice({ enabled: true, live: false });
+		check("påslagen men inte öppen — pausad, i bakgrunden — räknas som stängd", s.lensMic() === "off");
+		voice({ held: true, live: true });
+		check("ett håll är öppen", s.lensMic() === "live");
+	}
+
+	section("modellen: parkopplingsskärmen visas när servern inte finns");
+	{
+		const s = new Store();
+		check("inte förrän något är känt", s.needsPairing() === false);
+		s.setConnection("fatal", "no token");
+		check("ingen token: genast", s.needsPairing() === true);
+		s.setConnection("connecting", "");
+		const t0 = Date.now();
+		check("en anslutning som är på väg visas inte", s.needsPairing(t0) === false);
+		s.setConnection("online", "");
+		check("uppkopplad: inte", s.needsPairing() === false && s.nextPairingExpiry() === null);
+		s.setConnection("offline", "socket closed");
+		const down = Date.now();
+		check("ett avbrott får en frist", s.needsPairing(down + 1000) === false, String(s.needsPairing(down + 1000)));
+		check("och fristen är bokad, inte pollad", Math.abs((s.nextPairingExpiry(down) ?? 0) - PAIRING_GRACE_MS) <= 50, String(s.nextPairingExpiry(down)));
+		check("när fristen gått visas den", s.needsPairing(down + PAIRING_GRACE_MS + 1) === true);
+		s.setConnection("offline", "retrying");
+		check("ett nytt försök nollställer inte fristen", s.needsPairing(down + PAIRING_GRACE_MS + 1) === true);
+		s.setConnection("online", "");
+		check("och den försvinner när servern är tillbaka", s.needsPairing() === false && s.state.offlineSince === null);
 	}
 
 	section("modellen: många meningar får plats, de äldsta viker undan");
