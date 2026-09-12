@@ -47,7 +47,7 @@ The server even echoes the traversal path back as `ready.sessionId` and logs
 
 **Why it matters.** It is an arbitrary file write with attacker-chosen path, attacker-chosen
 content and a `.jsonl` / `.meta.json` suffix, running as whatever user the service runs as
-— which R1.1 says will *not* be root but will be Robin's own account, i.e. the account that
+— which R1.1 says will *not* be root but will be Mannie's own account, i.e. the account that
 owns `~/.ssh`, `~/.config/systemd/user`, and the repo. `SessionStore.delete()` unlinks the
 same two computed paths, so the same flaw is an arbitrary-delete primitive the moment
 R1.5's delete action is wired up (see M5). It is gated behind the bearer token, which is why
@@ -481,7 +481,7 @@ needs writing when `seq` matters (on reconnect, on shutdown) or on a timer.
 the PRD says to expect.
 
 ### m14 — No `Origin` check on the WebSocket upgrade
-`server.js:181-182`. Any web page in Robin's browser can open `wss://<host>/ws`. Not directly
+`server.js:181-182`. Any web page in Mannie's browser can open `wss://<host>/ws`. Not directly
 exploitable — the credential is a bearer token in `hello`, not a cookie, so a cross-origin
 page has nothing to replay — but it does mean unauthenticated strangers can reach the hello
 window (M10) from any page, and R1.2's rationale leans on same-origin.

@@ -168,7 +168,7 @@ try {
 		["byt till always", MODES.ALWAYS], ["sätt läget till alltid", MODES.ALWAYS],
 		["change mode to always", MODES.ALWAYS], ["switch to always", MODES.ALWAYS],
 		["gå till alltid", MODES.ALWAYS], ["always mode", MODES.ALWAYS],
-		// Said out loud by Robin, and dropped: "always ON" is how the mode is
+		// Said out loud by Mannie, and dropped: "always ON" is how the mode is
 		// named in speech, and the command did not know the word.
 		["ändra mode till always on", MODES.ALWAYS], ["byt till alltid på", MODES.ALWAYS],
 		["byt till via namn", MODES.BYNAME], ["namnläge", MODES.BYNAME],

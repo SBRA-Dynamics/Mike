@@ -160,7 +160,7 @@ const TO = "(?:to|till)";
 const GO = `(?:${VERB}|go|ga|byt|vaxla|switch|set|satt|stall)`;
 
 // A trailing particle is allowed, and only these: "always ON", "alltid PÅ" is
-// how the mode is actually said out loud. Measured — Robin said "ändra mode
+// how the mode is actually said out loud. Measured — Mannie said "ändra mode
 // till always on" and the command fell through to Mike, who explained the
 // exact word that did not match. The alternative, allowing any trailing word,
 // would throw away the anchoring that keeps "byt till alltid när du felsöker"

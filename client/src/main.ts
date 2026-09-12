@@ -336,7 +336,7 @@ const paint = (): void => {
 	mark("painted");
 	// The lens going dark and lighting again, written where it can be read
 	// after the fact: the server's log. This is the one behaviour of the lens
-	// that cannot be seen in a screenshot of the phone, and the one Robin
+	// that cannot be seen in a screenshot of the phone, and the one Mannie
 	// reported as not happening — so every transition says why.
 	if (dark !== lensWasDark) {
 		lensWasDark = dark;

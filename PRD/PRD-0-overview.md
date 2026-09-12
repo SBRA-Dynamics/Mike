@@ -2,12 +2,12 @@
 
 ## What this is
 
-A voice-first assistant that runs on Robin's own machine and is used through
+A voice-first assistant that runs on Mannie's own machine and is used through
 Even Realities G2 smart glasses, a phone, or a desktop browser. You talk to one
 persistent agent — **Mike** — who orchestrates a set of **workers**: real
 Claude Code sessions doing the actual work.
 
-Everything runs on hardware Robin owns. No third-party tunnel, no hosted
+Everything runs on hardware Mannie owns. No third-party tunnel, no hosted
 gateway, no speech sent to an external API.
 
 ## Fixed decisions

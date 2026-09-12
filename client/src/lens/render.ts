@@ -51,7 +51,7 @@ const ELLIPSIS = "…";
  * Top and bottom only. There were side edges for a day: the edge glyph is
  * 20 px tall on a 27 px row, so they came out dashed, and each empty row had
  * to be padded to the right edge with a hundred spaces to hold its bar up —
- * which is what pushed a frame past the host's byte limits. Robin looked at
+ * which is what pushed a frame past the host's byte limits. Mannie looked at
  * it and preferred it without, and so does the byte count.
  */
 const CORNER_TL = "╭";

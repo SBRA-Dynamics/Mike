@@ -273,7 +273,7 @@ try {
 		check("okänd talare behålls, och versaler från värden spelar ingen roll",
 			shape(unknown.segments) === shape(clean.segments), shape(unknown.segments));
 		// The counter, not the filter. `roles=self/other/unknown` is the number
-		// Robin reads off the glasses to decide whether R5b.2 is worth anything
+		// Mannie reads off the glasses to decide whether R5b.2 is worth anything
 		// at all — if it books Unknown as Other he would conclude the filter
 		// works when it never saw a tag it could use.
 		check("okända ramar bokförs som okända, inte som någon annan",
