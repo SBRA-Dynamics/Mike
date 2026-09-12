@@ -50,6 +50,9 @@ export type AppState = {
 	 *  transcript entry so the indicator can expire it without touching the
 	 *  conversation (R5a.8). */
 	heard: { text: string; confidence: number | null; at: number } | null;
+	/** When the current turn started, so "thinking" can carry how long it has
+	 *  been thinking. Null whenever nothing is running. */
+	busySince: number | null;
 };
 
 export type Pending = {
@@ -73,6 +76,17 @@ export const HEARD_MS = 3000;
  *  true at once. Thinking outranks heard: once a turn has started, that the
  *  words were understood is settled. */
 export type ListeningState = "idle" | "listening" | "heard" | "thinking";
+
+/** "thinking", with the seconds it has been thinking for once there is a
+ *  second to show. A turn that takes a while and a turn that has hung look
+ *  identical without the count, and which of the two it is is the whole
+ *  question the user is asking when they look at the lens. */
+export const thinkingText = (since: number | null, now = Date.now()): string => {
+	if (since === null) return "thinking";
+	const secs = Math.floor((now - since) / 1000);
+	if (secs < 1) return "thinking";
+	return secs < 60 ? `thinking ${secs}s` : `thinking ${Math.floor(secs / 60)}m${secs % 60}s`;
+};
 
 /** How many lines of transcript the companion keeps. A phone that has been
  *  open all day should not hold a week of conversation in memory. */
@@ -108,6 +122,7 @@ export class Store {
 		glasses: "unknown",
 		sessions: [],
 		voice: null,
+		busySince: null,
 		heard: null
 	};
 
@@ -157,10 +172,19 @@ export class Store {
 		return this.state.voice?.live ? "listening" : "idle";
 	}
 
+	thinkingLabel(now = Date.now()): string {
+		return thinkingText(this.state.busySince, now);
+	}
+
 	/** When the "heard" indicator stops being true, so the caller can repaint
 	 *  exactly then instead of polling. Null when nothing is on a clock. */
 	nextListeningExpiry(now = Date.now()): number | null {
-		if (this.state.busy || !this.state.heard) return null;
+		// While thinking, the next change is the next tick of the counter.
+		if (this.state.busy) {
+			const since = this.state.busySince ?? now;
+			return 1000 - ((now - since) % 1000);
+		}
+		if (!this.state.heard) return null;
 		const left = this.state.heard.at + HEARD_MS - now;
 		return left > 0 ? left : null;
 	}
@@ -305,7 +329,7 @@ export class Store {
 		const waiting = this.notice(now);
 		if (waiting) return waiting;
 		const listening = this.listening(now);
-		if (listening === "thinking") return "thinking";
+		if (listening === "thinking") return this.thinkingLabel(now);
 		if (listening === "heard") return "heard";
 		// Paused is what the user most needs to know, and hold-to-talk explains
 		// why nothing is happening when they speak.
@@ -362,6 +386,7 @@ export class Store {
 
 			case "state": {
 				const before = this.state.worker;
+				if (m.busy !== this.state.busy) this.state.busySince = m.busy ? Date.now() : null;
 				this.state.busy = m.busy;
 				this.state.worker = m.worker ?? null;
 				this.state.mode = m.mode ?? this.state.mode;

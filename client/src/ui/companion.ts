@@ -12,6 +12,7 @@ import { LENS } from "../lens/render.ts";
 import type { LensFrame } from "../lens/render.ts";
 import { MODES, MODE_LABEL } from "../../../src/routing.js";
 import type { AppState, ListeningState } from "../state.ts";
+import { thinkingText } from "../state.ts";
 
 export type CompanionActions = {
 	say: (text: string) => boolean;
@@ -382,7 +383,9 @@ export class Companion {
 
 		n.listening.textContent = listening === "heard" && state.heard
 			? `heard: ${state.heard.text.slice(0, 40)}`
-			: LISTENING_TEXT[listening];
+			: listening === "thinking"
+				? thinkingText(state.busySince)
+				: LISTENING_TEXT[listening];
 		n.listening.classList.toggle("live", listening === "listening" || listening === "heard");
 		n.listening.classList.toggle("speaking", !!v?.speaking);
 
