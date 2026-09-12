@@ -137,12 +137,37 @@ export function createEchoHandler({ log, transcriber, audioMaxBytes }) {
 const GREETING = "Jarvis here.";
 
 /**
+ * How long an utterance waits for the rest of the sentence.
+ *
+ * The segmenter closes a segment after 700 ms of silence (client/src/audio/
+ * segment.ts), which is the right length for "has this person stopped talking"
+ * and the wrong one for "has this person finished the thought". Someone
+ * dictating while they think — and choosing between two languages while they do
+ * it — produces three segments of one sentence, and without this each of them
+ * was a turn of its own: the first one started a long job on half an
+ * instruction and the other two queued up behind it to be answered out of
+ * context.
+ *
+ * So a routed utterance is held, and anything else arriving for the same
+ * addressee inside the window joins it. The cost is real and is paid on every
+ * spoken turn — this is latency added to the thing PRD 6 exists to remove — and
+ * it is why the window is configurable and why the parts appear on the lens the
+ * moment they are heard rather than when the turn starts. The user watches the
+ * sentence assemble instead of watching nothing.
+ *
+ * Two seconds by default: long enough to cross the rest of a thinking pause
+ * plus one short fragment and its transcription, short enough not to feel like
+ * a hang. Typed input never waits — pressing Enter is the boundary.
+ */
+export const DEFAULT_HOLD_MS = 2000;
+
+/**
  * The real handler.
  *
  * `jarvis`, `registry` and `engine` are the three things a turn can be about;
  * everything else is plumbing this file borrows from the session.
  */
-export function createJarvisHandler({ log, jarvis, registry, engine, classifier, transcriber, audioMaxBytes }) {
+export function createJarvisHandler({ log, jarvis, registry, engine, classifier, transcriber, audioMaxBytes, holdMs = DEFAULT_HOLD_MS }) {
 
 	// PRD 5a. Null only when the server was started with no transcription at
 	// all; every other case is the whisper client, which reports its own
@@ -170,6 +195,108 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 		log?.info(`mode ${before} -> ${session.mode} session=${session.id.slice(0, 8)}`);
 	};
 
+	// ------------------------------------------------------------------ turns
+	//
+	// A turn is now a thing with a name, because the user has to be able to see
+	// one. It gathers words (`held`), goes to a model (`queued`), reaches a
+	// process that is running it (`started`) and ends (`done`, or `dropped` when
+	// it was stopped before it ever ran).
+	//
+	// The events are transient, all of them, and so is `progress` now. They are
+	// facts about this moment on this screen — sessions.js's own rule for
+	// choosing — and `alive` alone would otherwise write one line to disk every
+	// five seconds for as long as a turn lasts.
+
+	let turnSeq = 0;
+	const holds = new Map();   // session.id -> the turn still gathering words
+
+	/** Say where a turn has got to. `parts` is sent every time rather than just
+	 *  the new one: it makes the message idempotent, a client that missed one
+	 *  still draws the right thing, and three short sentences are not a payload
+	 *  worth being clever about. */
+	const announce = (session, turn, phase) => {
+		turn.phase = phase;
+		session.transient(msg.event("turn", { id: turn.id, to: turn.to, parts: [...turn.parts], phase }));
+	};
+
+	/** Once per turn, whichever way it ended, and before the answer is emitted:
+	 *  the lens shows the turn while it runs, and it has to stop doing that
+	 *  before the thing it was waiting for arrives, or the answer is hidden
+	 *  behind the question. */
+	const finishTurn = (session, turn, phase = "done") => {
+		if (!turn || turn.phase === "done" || turn.phase === "dropped") return;
+		announce(session, turn, phase);
+	};
+
+	/** Add an utterance to the turn being assembled, starting one if there is
+	 *  none. A different addressee ends the old one where it stands: two
+	 *  sentences to two different people are two thoughts, whatever the clock
+	 *  says. */
+	const hold = (session, to, name, text, origin) => {
+		let turn = holds.get(session.id);
+		if (turn && turn.to !== to) { void flush(session); turn = null; }
+		if (!turn) {
+			turn = { id: `t${++turnSeq}`, to, name, parts: [], at: Date.now(), phase: "held", timer: null };
+			holds.set(session.id, turn);
+		}
+		turn.parts.push(text);
+		// Before the wait, not after it: this is the receipt for having been
+		// heard, and it is the whole reason the wait is bearable.
+		announce(session, turn, "held");
+		clearTimeout(turn.timer);
+
+		// Typing is its own boundary — Enter already said the sentence is over —
+		// and a window of zero turns the whole thing off.
+		if (origin === ORIGIN.TYPED || !(holdMs > 0)) return flush(session);
+		turn.timer = setTimeout(() => { void flush(session); }, holdMs);
+		log?.info(`held ${turn.id} (${turn.parts.length}) for ${to} session=${session.id.slice(0, 8)}`);
+		return Promise.resolve();
+	};
+
+	/** The window closed: the parts become one utterance and the turn runs.
+	 *  Never throws — it is called from a timer, where a rejection has nobody to
+	 *  catch it and takes the process with it. */
+	const flush = (session) => {
+		const turn = holds.get(session.id);
+		if (!turn) return Promise.resolve();
+		holds.delete(session.id);
+		clearTimeout(turn.timer);
+
+		// One space, and nothing cleverer. The fragments are separate because
+		// the speaker paused, not because they are separate sentences, and
+		// punctuation invented here would be punctuation the model reads as
+		// meaning something.
+		const text = turn.parts.join(" ");
+		announce(session, turn, "queued");
+		log?.info(`turn ${turn.id} ${turn.parts.length > 1 ? `merged ${turn.parts.length} parts ` : ""}-> ${turn.to} session=${session.id.slice(0, 8)}`);
+
+		return (async () => {
+			if (!turn.name) return await toJarvis(session, text, turn);
+			// Re-resolved here rather than at routing time: the window is two
+			// seconds long, and a worker can be ended from another device inside it.
+			const w = registry.get(turn.name);
+			if (!w) {
+				finishTurn(session, turn);
+				return session.emit(msg.error(`no worker called "${turn.name}"`));
+			}
+			return await toWorker(session, w, text, turn);
+		})().catch((e) => {
+			finishTurn(session, turn);
+			log?.error(`turn ${turn.id}: ${e.stack || e.message}`);
+		});
+	};
+
+	/** Throw away a turn that never ran. Returns what it discarded, so the
+	 *  caller can tell the user that something did stop. */
+	const dropHold = (session) => {
+		const turn = holds.get(session.id);
+		if (!turn) return null;
+		holds.delete(session.id);
+		clearTimeout(turn.timer);
+		announce(session, turn, "dropped");
+		return turn;
+	};
+
 	/** Kill whatever is running, whether the user pressed the button or said the
 	 *  word. Both, because they do not know which of the two is mid-turn and
 	 *  should not have to: the worker they are talking to, and Jarvis.
@@ -178,17 +305,22 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 	 *  turn stopped — and replaying "Stopped." on a reconnect hours later would
 	 *  be a lie about something that is no longer running. */
 	const stopTurns = (session) => {
+		// Words still being gathered count as something to stop. Saying "stopp"
+		// two seconds after a sentence you did not mean is the commonest case
+		// there is, and it would be a strange machine that answered "nothing
+		// running" while it was holding your words to send.
+		const held = dropHold(session);
 		const w = activeWorker(session);
 		const stoppedWorker = w ? engine.interrupt(w) : false;
 		const stoppedJarvis = jarvis.interrupt();
-		const stopped = stoppedWorker || stoppedJarvis;
+		const stopped = stoppedWorker || stoppedJarvis || !!held;
 		session.transient(msg.event("interrupted", { stopped }));
 		// Said out loud as well as raised as an event: the lens is showing
 		// progress text from the turn that just died, and without a word it goes
 		// quiet in a way that looks like a hang rather than an obedience.
 		session.transient(msg.text(stopped ? "Stopped." : "Nothing running.", "system"));
 		session.transient(state(session, false));
-		log?.info(`stopped worker=${stoppedWorker} jarvis=${stoppedJarvis} session=${session.id.slice(0, 8)}`);
+		log?.info(`stopped worker=${stoppedWorker} jarvis=${stoppedJarvis} held=${held?.parts.length ?? 0} session=${session.id.slice(0, 8)}`);
 		return stopped;
 	};
 
@@ -212,20 +344,31 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 	 *  and a hung one looked the same. The events are advisory: nothing is
 	 *  recorded in the transcript from here, because the turn's real answer
 	 *  still arrives at the end and would be said twice. */
-	const progressTo = (session, from) => (p) => {
-		if (p?.kind === "tool" && p.tool) session.emit(msg.event("progress", { from, tool: p.tool }));
-		else if (p?.kind === "text" && p.text) session.emit(msg.event("progress", { from, text: p.text }));
+	const progressTo = (session, from, turn) => (p) => {
+		// The process is up and has the whole utterance. This is the moment the
+		// user's words stop being a promise, and the only one worth marking them
+		// with — "queued" is a fact about us, not about their instruction.
+		if (p?.kind === "start") return turn ? announce(session, turn, "started") : undefined;
+
+		const at = { from, turn: turn?.id ?? null };
+		if (p?.kind === "tool" && p.tool) session.transient(msg.event("progress", { ...at, tool: p.tool, doing: p.doing ?? null }));
+		else if (p?.kind === "text" && p.text) session.transient(msg.event("progress", { ...at, text: p.text }));
+		else if (p?.kind === "alive") session.transient(msg.event("progress", { ...at, alive: true }));
 	};
 
-	const toJarvis = async (session, text) => {
+	const toJarvis = async (session, text, turn = null) => {
 		session.emit(state(session, true));
 		try {
-			const r = await jarvis.say(session, text, { onProgress: progressTo(session, "jarvis") });
+			const r = await jarvis.say(session, text, { onProgress: progressTo(session, "jarvis", turn) });
+			// Before the reply, always: the lens carries the turn while it runs,
+			// and an answer arriving underneath it would not be seen.
+			finishTurn(session, turn);
 			// After the turn, not before: a tool call inside it may have switched
 			// the active worker, and the reply has to be tagged and the state
 			// reported as they are now.
 			if (r.text) session.emit(msg.text(r.text, "jarvis"));
 		} catch (e) {
+			finishTurn(session, turn);
 			// An interrupted turn is not a failure to report: the user asked for
 			// it and has already been told "Stopped."
 			if (e.kind === "interrupted") log?.info("jarvis turn stopped");
@@ -238,11 +381,12 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 		}
 	};
 
-	const toWorker = async (session, worker, text) => {
+	const toWorker = async (session, worker, text, turn = null) => {
 		registry.touch(worker, { busy: true });
 		session.emit(state(session, true));
 		try {
-			const r = await engine.send(worker, text, { onProgress: progressTo(session, worker.name) });
+			const r = await engine.send(worker, text, { onProgress: progressTo(session, worker.name, turn) });
+			finishTurn(session, turn);
 
 			// A reply from somebody the user is no longer talking to must not take
 			// over the lens — they switched away on purpose, and a long job
@@ -271,6 +415,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 				}
 			}
 		} catch (e) {
+			finishTurn(session, turn);
 			// Interrupted is the user's own doing, same as for Jarvis above.
 			if (e.kind === "interrupted") log?.info(`worker ${worker.name} turn stopped`);
 			else {
@@ -305,9 +450,15 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 		const worker = activeWorker(session);
 		const decision = route(text, { mode: session.mode, worker: worker?.name ?? null, origin });
 
+		// An unaddressed fragment with a window open is the rest of a sentence
+		// that WAS addressed, and it is about to reach a model. That decides
+		// which side of the durable line it falls on, so it is worked out here,
+		// before anything is emitted.
+		const joining = decision.kind === "dropped" && decision.reason === "unaddressed" && holds.has(session.id);
+
 		if (heard) {
 			const line = msg.heard(heard.text, heard.confidence);
-			if (decision.kind === "dropped") session.transient(line);
+			if (decision.kind === "dropped" && !joining) session.transient(line);
 			else session.emit(line);
 		}
 
@@ -341,6 +492,16 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 				return;
 
 			case "dropped":
+				// The rest of a sentence whose beginning was addressed. In ByName
+				// an unaddressed fragment is dropped, which is right for ambient
+				// speech and wrong for the second half of an instruction the user
+				// addressed two seconds ago — they said the name once, the way
+				// people do. An open window is the evidence that they did: there
+				// is no hold unless something got through the gate just now.
+				if (joining) {
+					const open = holds.get(session.id);
+					return hold(session, open.to, open.name, text, origin);
+				}
 				// Reported, never silent. A user whose words are being dropped
 				// needs to know which of the two reasons it is, or the system is
 				// simply broken as far as they can tell.
@@ -357,16 +518,11 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 				return;
 
 			case "jarvis":
-				return await toJarvis(session, decision.text);
+				return await hold(session, "jarvis", null, decision.text, origin);
 
-			case "worker": {
-				// Re-resolved rather than trusting the name routing came back
-				// with: nothing has awaited in between, but this is the one place
-				// a name becomes an action.
-				const w = registry.get(decision.name);
-				if (!w) return session.emit(msg.error(`no worker called "${decision.name}"`));
-				return await toWorker(session, w, decision.text);
-			}
+			case "worker":
+				// The name is resolved when the window closes, not here: see flush.
+				return await hold(session, decision.name, decision.name, decision.text, origin);
 
 			default:
 				log?.warn(`routing returned ${decision.kind}`);

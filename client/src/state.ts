@@ -7,6 +7,7 @@
 // SDK.
 
 import { DEFAULT_MODE, MODE_LABEL, MODES } from "../../src/routing.js";
+import { BODY_ROWS, wrapText } from "./lens/render.ts";
 import type { VoiceStatus } from "./audio/voice.ts";
 import type { ConnectionStatus } from "./connection.ts";
 import type { EventMsg, ReadyMsg, SeqMsg, WorkerInfo } from "./protocol.ts";
@@ -22,6 +23,38 @@ export type Entry = {
 };
 
 export type LensItem = { from: string; text: string; page: number };
+
+/**
+ * A turn, while it is one.
+ *
+ * The server assembles an utterance out of however many fragments the speaker
+ * produced and reports where it has got to; this is that report, plus whatever
+ * the turn has since said about itself.
+ *
+ * `parts` is the user's own words, one entry per fragment, in the order they
+ * were spoken. They are shown separately rather than joined because the
+ * question the user is asking is "did it get all of that", and a merged
+ * sentence cannot answer it.
+ */
+export type LiveTurn = {
+	id: string;
+	/** A worker's name, or "jarvis". */
+	to: string;
+	parts: string[];
+	/** held: still gathering words. queued: sent, nothing running it yet.
+	 *  started: a process has the whole utterance. done/dropped: over. */
+	phase: "held" | "queued" | "started" | "done" | "dropped";
+	/** The one line the model wrote before it started working. */
+	plan: string | null;
+	/** What it is doing right now — a tool call, or a later sentence. */
+	doing: string | null;
+	at: number;
+	/** When `doing` last changed, and when the process was last known to be
+	 *  producing anything at all. The second is the weaker claim and the one
+	 *  that keeps the blink honest. */
+	doingAt: number;
+	aliveAt: number;
+};
 
 export type AppState = {
 	connection: ConnectionStatus;
@@ -57,10 +90,15 @@ export type AppState = {
 	 *  moment the turn ends: the finished answer arrives as a `text` message
 	 *  and must be the last word, not a leftover half-sentence. */
 	progress: { from: string; text: string | null; tool: string | null } | null;
-	/** The last thing the user said or typed, whichever came last, so a turn in
-	 *  progress can show what it is answering. Separate from `heard`, which is
-	 *  about the microphone and expires on its own clock. */
+	/** The last thing the user said or typed, whichever came last. Separate from
+	 *  `heard`, which is about the microphone and expires on its own clock. */
 	said: { text: string; at: number } | null;
+	/** Every turn the server has told us about that is not finished and gone.
+	 *  Oldest first — the order they were spoken in. */
+	turns: LiveTurn[];
+	/** When the lens last got something worth reading. Compared against the
+	 *  turns so an answer is not covered up by the next question. */
+	lensAt: number;
 };
 
 export type Pending = {
@@ -80,10 +118,37 @@ export const NOTICE_MS = 8000;
  *  answer needs the row. */
 export const HEARD_MS = 3000;
 
-/** How long before a turn started an utterance may have been said and still
- *  count as the one it is answering. One round trip through the server, not
- *  one conversation. */
-export const ECHO_SLACK_MS = 5000;
+/**
+ * How long a turn may say nothing new before the lens starts blinking.
+ *
+ * Not a timeout and not an error: a job that reads twenty files says something
+ * every second, and one that runs a build says nothing for minutes and is
+ * perfectly well. What the blink carries is that the last line is still the
+ * latest news — the alternative is a screen that has been identical for two
+ * minutes, which reads as a hang whether or not it is one.
+ *
+ * Ten seconds on, ten seconds off, so the lens changes at least that often
+ * while a turn is running, which is what it was asked for.
+ */
+export const STALE_MS = 10_000;
+
+/** How long a finished turn stays on the lens when nothing arrived to replace
+ *  it. Normally the answer does that within a message or two; this is for the
+ *  turns that end without one — an interrupted turn, a worker answering in the
+ *  background — so that a lens is never left holding a question nobody is
+ *  working on any more. */
+export const DONE_LINGER_MS = 2500;
+
+/** The two marks a spoken fragment can carry. `√` rather than `✓` on purpose:
+ *  the firmware font has no tick, and @evenrealities/pretext measures the one
+ *  everybody reaches for first at the same width as a missing glyph, which on
+ *  glass is a box where the confirmation should be. Both of these are in the
+ *  font and are within a pixel of each other, so the line does not move when
+ *  the mark changes. */
+export const MARK_WAITING = "»";
+export const MARK_TAKEN = "√";
+/** What a turn says about itself, which is not the user's words. */
+export const MARK_THEIRS = "«";
 
 /** What the user is told is happening, in the order that matters when two are
  *  true at once. Thinking outranks heard: once a turn has started, that the
@@ -139,7 +204,9 @@ export class Store {
 		busySince: null,
 		progress: null,
 		said: null,
-		heard: null
+		heard: null,
+		turns: [],
+		lensAt: 0
 	};
 
 	#subs = new Set<(s: AppState) => void>();
@@ -182,8 +249,30 @@ export class Store {
 	 * `now` is a parameter so the answer is a function of the state rather than
 	 * of when it happened to be asked, which is what makes it testable.
 	 */
+	/**
+	 * Is anything being worked on?
+	 *
+	 * Not `state.busy` on its own, and the difference is a bug this replaces.
+	 * Two utterances in flight produce `busy:true, busy:true, busy:false,
+	 * busy:false` — one pair per turn — so the lens went quiet the moment the
+	 * FIRST of them finished, while the second was still running. The turns know
+	 * better: while one of them is unfinished, something is being worked on.
+	 */
+	working(now = Date.now()): boolean {
+		return this.state.busy || this.liveTurns(now).length > 0;
+	}
+
+	/** When the oldest thing still being worked on started, so the counter
+	 *  measures the wait the user is actually having. */
+	workingSince(now = Date.now()): number | null {
+		const live = this.liveTurns(now);
+		const first = live.length ? live[0].at : null;
+		if (first === null) return this.state.busySince;
+		return this.state.busySince === null ? first : Math.min(first, this.state.busySince);
+	}
+
 	listening(now = Date.now()): ListeningState {
-		if (this.state.busy) return "thinking";
+		if (this.working(now)) return "thinking";
 		if (this.state.heard && now - this.state.heard.at < HEARD_MS) return "heard";
 		return this.state.voice?.live ? "listening" : "idle";
 	}
@@ -191,15 +280,20 @@ export class Store {
 	/** "thinking 7s", or the tool it is running instead of the word, because a
 	 *  name the user recognises answers the question the counter only measures. */
 	thinkingLabel(now = Date.now()): string {
-		return thinkingText(this.state.busySince, now, this.state.progress?.tool ?? null);
+		// The tool's name used to be spent here. It says more in the body now,
+		// where it has room for what the tool is being pointed at, and this row
+		// goes back to the one thing only it can say: how long.
+		return thinkingText(this.workingSince(now), now);
 	}
 
 	/** When the "heard" indicator stops being true, so the caller can repaint
 	 *  exactly then instead of polling. Null when nothing is on a clock. */
 	nextListeningExpiry(now = Date.now()): number | null {
-		// While thinking, the next change is the next tick of the counter.
-		if (this.state.busy) {
-			const since = this.state.busySince ?? now;
+		// While thinking, the next change is the next tick of the counter. That
+		// tick is also what drives the blink, which is why neither needs a timer
+		// of its own.
+		if (this.working(now)) {
+			const since = this.workingSince(now) ?? now;
 			return 1000 - ((now - since) % 1000);
 		}
 		if (!this.state.heard) return null;
@@ -273,20 +367,90 @@ export class Store {
 	 * ago would be a lie about what is being worked on.
 	 */
 	lensView(now = Date.now()): LensItem {
-		const s = this.state;
-		const echo = s.busy && !s.progress?.text ? this.#echo(now) : null;
-		if (echo) return { from: s.worker ?? JARVIS, text: `» ${echo}`, page: 0 };
-		return s.lens;
+		const work = this.workingView(now);
+		return work ?? this.state.lens;
 	}
 
-	/** The utterance this turn is answering, if it belongs to this turn. The
-	 *  slack is the gap between the server saying what it heard and the turn
-	 *  starting — one round trip, not one conversation. */
-	#echo(now: number): string | null {
-		const said = this.state.said;
-		if (!said) return null;
-		const started = this.state.busySince ?? now;
-		return said.at >= started - ECHO_SLACK_MS ? said.text : null;
+	/** The turns still worth drawing. Finished ones are kept for a moment in
+	 *  case nothing replaces them, then dropped. */
+	liveTurns(now = Date.now()): LiveTurn[] {
+		const over = (t: LiveTurn) => t.phase === "done" || t.phase === "dropped";
+		return this.state.turns.filter((t) => !over(t) || now - t.doingAt < DONE_LINGER_MS);
+	}
+
+	/**
+	 * The lens while something is being worked on.
+	 *
+	 * What it has to answer, in the order the user asks it: did you get all of
+	 * what I said, have you started, and what are you doing now. Null when
+	 * nothing is running, which is when the lens goes back to showing the last
+	 * thing that was said.
+	 *
+	 * It loses to an answer that is newer than the work. A reply arriving while
+	 * the next utterance is already being held would otherwise never be seen —
+	 * it would be covered by the question that came after it — so an answer
+	 * holds the lens until the next turn actually does something.
+	 */
+	workingView(now = Date.now()): LensItem | null {
+		const live = this.liveTurns(now);
+		if (!live.length) return null;
+
+		const newest = live[live.length - 1];
+		const newsAt = Math.max(newest.at, newest.doingAt);
+		if (this.state.lensAt > newsAt) return null;
+
+		// Bottom up, because the bottom is the part that must survive: one row
+		// for what it is doing, up to two for what it said it would do, and
+		// whatever is left for the user's own words.
+		const doing = newest.doing ? this.#doingLine(newest, now) : null;
+		const plan = newest.plan ? wrapText(`${MARK_THEIRS} ${newest.plan}`).slice(0, 2) : [];
+		const budget = BODY_ROWS - (doing ? 1 : 0) - plan.length;
+
+		// One group per fragment, so a fragment that is dropped for space is
+		// dropped whole rather than by the line.
+		const groups: string[][] = [];
+		for (const t of live) {
+			const mark = t.phase === "held" || t.phase === "queued" ? MARK_WAITING : MARK_TAKEN;
+			for (const part of t.parts) groups.push(wrapText(`${mark} ${part}`));
+		}
+
+		const said: string[] = [];
+		let rows = 0;
+		let hidden = 0;
+		// Newest first while filling, oldest first when drawn: what is dropped
+		// for space is what the user has already watched land.
+		for (let i = groups.length - 1; i >= 0; i--) {
+			const g = groups[i];
+			// The last row of the budget is owed to "+N earlier" whenever
+			// anything is going to be left out.
+			const room = budget - rows - (i > 0 ? 1 : 0);
+			if (g.length > Math.max(0, room)) { hidden = i + 1; break; }
+			said.unshift(...g);
+			rows += g.length;
+		}
+		if (hidden) said.unshift(`+${hidden} earlier`);
+
+		return {
+			from: newest.to === "jarvis" ? JARVIS : newest.to,
+			text: [...said, ...plan, ...(doing ? [doing] : [])].join("\n"),
+			page: 0
+		};
+	}
+
+	/**
+	 * What it is doing, on one row, with the blink.
+	 *
+	 * The mark appears only once the line has stopped being news, and then
+	 * alternates: ten seconds with, ten without. It says nothing in words —
+	 * there is no room to spend a row on "still" — and it is driven by when the
+	 * PROCESS last produced anything, not by the client's own clock, so a blink
+	 * is evidence rather than decoration.
+	 */
+	#doingLine(turn: LiveTurn, now: number): string {
+		const quiet = now - Math.max(turn.doingAt, turn.aliveAt);
+		const blink = quiet >= STALE_MS && Math.floor(quiet / STALE_MS) % 2 === 1 ? " *" : "";
+		const line = `${MARK_THEIRS} ${turn.doing}${blink}`;
+		return wrapText(line)[0] ?? line;
 	}
 
 	/** Paging through a long reply (R4.3). Returns true when the page moved, so
@@ -414,6 +578,44 @@ export class Store {
 		// thing said starts at its first page — otherwise a short answer after a
 		// long one would open on page three of nothing.
 		this.state.lens = { from, text, page: 0 };
+		this.state.lensAt = Date.now();
+		// The question this answers has been answered. Turns that ended without
+		// one time out instead (DONE_LINGER_MS); this is the ordinary path, and
+		// it is what keeps a finished turn from lingering under the reply.
+		this.state.turns = this.state.turns.filter((t) => t.phase !== "done" && t.phase !== "dropped");
+	}
+
+	/** The turn a progress event belongs to. Null for one we never heard of —
+	 *  a reconnect mid-turn, where the `turn` events were transient and gone. */
+	#turnFor(id: unknown): LiveTurn | null {
+		if (typeof id !== "string" || !id) return null;
+		return this.state.turns.find((t) => t.id === id) ?? null;
+	}
+
+	/** One turn's report about itself. Upserted by id: the server sends the
+	 *  whole of `parts` every time, so a message that went missing costs a
+	 *  redraw and not a wrong picture. */
+	#turn(d: Record<string, unknown>): void {
+		const id = String(d.id ?? "");
+		if (!id) return;
+		const now = Date.now();
+		const phase = String(d.phase ?? "held") as LiveTurn["phase"];
+		const parts = Array.isArray(d.parts) ? d.parts.map((v) => String(v)) : [];
+
+		const at = this.state.turns.find((t) => t.id === id);
+		if (!at) {
+			this.state.turns.push({
+				id, to: String(d.to ?? JARVIS), parts, phase,
+				plan: null, doing: null, at: now, doingAt: now, aliveAt: now
+			});
+			return;
+		}
+		at.parts = parts;
+		at.phase = phase;
+		// A phase change is news: it is what moves the mark from » to √, and the
+		// blink must not start counting from before it.
+		at.doingAt = now;
+		at.aliveAt = now;
 	}
 
 	#reduce(m: SeqMsg): void {
@@ -533,13 +735,30 @@ export class Store {
 				if (!mine) break;
 				const text = d.text ? String(d.text) : null;
 				const tool = d.tool ? String(d.tool) : null;
+				const doing = d.doing ? String(d.doing) : null;
 				this.state.progress = { from, text, tool: text ? null : tool };
-				// Partial text goes on the lens but NOT in the transcript: the
-				// finished answer arrives as its own `text` message and would
-				// otherwise be said twice, once in halves.
-				if (text) this.state.lens = { from: this.state.worker ?? JARVIS, text, page: 0 };
+
+				const turn = this.#turnFor(d.turn);
+				const now = Date.now();
+				if (turn) turn.aliveAt = now;
+				// `alive` is the process saying it is producing something, and
+				// nothing else. It refreshes the blink and changes no words.
+				if (d.alive || !turn) break;
+
+				// The first thing written is what it intends to do; everything
+				// after it is what it is doing. Both are shown, in that order,
+				// and neither is the answer — that arrives as its own `text`
+				// message and would otherwise be said twice, once in halves.
+				const line = doing ?? text;
+				if (!line) break;
+				if (turn.plan === null && text) turn.plan = text;
+				else { turn.doing = line; turn.doingAt = now; }
 				break;
 			}
+
+			case "turn":
+				this.#turn(d as Record<string, unknown>);
+				break;
 
 			case "workerNotice":
 				// Somebody the user is not talking to has spoken, and the server

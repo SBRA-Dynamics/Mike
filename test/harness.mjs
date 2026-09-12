@@ -40,7 +40,12 @@ process.on("uncaughtException", (e) => { killAll(); console.error(e); process.ex
 export async function startServer(extraArgs = [], { env: extraEnv = {} } = {}) {
 	const dataDir = mkdtempSync(join(tmpdir(), "jarvis-test-"));
 	const token = "test-token-" + Math.random().toString(16).slice(2, 10);
-	const env = { ...process.env, ...extraEnv };
+	// The hold window (PRD 6) is off unless a suite asks for it. Every test
+	// here sends one whole utterance and waits for the answer, which is the one
+	// shape the window is not for — leaving it on would add two seconds to every
+	// one of a few hundred turns and assert nothing. The suite that tests the
+	// merging turns it back on.
+	const env = { JARVIS_HOLD_MS: "0", ...process.env, ...extraEnv };
 
 	// Port 0: the OS hands out one that is free, and tells us which.
 	//

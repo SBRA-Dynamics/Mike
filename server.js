@@ -28,7 +28,7 @@ import { WebSocketServer } from "ws";
 import { log } from "./src/log.js";
 import { SessionStore } from "./src/sessions.js";
 import { attachConnection } from "./src/connection.js";
-import { createEchoHandler, createJarvisHandler } from "./src/handler.js";
+import { createEchoHandler, createJarvisHandler, DEFAULT_HOLD_MS } from "./src/handler.js";
 import { PROTOCOL_VERSION } from "./src/protocol.js";
 import { WorkerRegistry } from "./src/workers.js";
 import { NamedDirs } from "./src/namedDirs.js";
@@ -78,6 +78,8 @@ if (has("help")) {
   --context-budget <n> token budget for that quote (default 1200)
   --turn-timeout <ms>  how long one model turn may take (default 600000)
   --mode <m>           addressing mode for a fresh session (default byname)
+  --hold <ms>          how long an utterance waits for the rest of the
+                       sentence before it becomes a turn (default 2000, 0 off)
   --whisper <url|off>  the transcription service (default http://127.0.0.1:3461)
   --whisper-timeout <ms>  how long one transcription may take (default 20000)
   --audio-max-bytes <n>   biggest accepted audio segment (default 1000000)
@@ -127,6 +129,10 @@ const config = {
 	contextBudget: parseInt(flag("context-budget", process.env.JARVIS_CONTEXT_BUDGET ?? String(DEFAULT_CONTEXT_BUDGET_TOKENS)), 10),
 	turnTimeoutMs: parseInt(flag("turn-timeout", process.env.JARVIS_TURN_TIMEOUT ?? "600000"), 10),
 	defaultMode: flag("mode", process.env.JARVIS_MODE || DEFAULT_MODE),
+	// PRD 6. Dictation arrives in fragments; this is how long one waits for the
+	// rest of itself. Tunable because the right number is a fact about how the
+	// person speaks, not about the software.
+	holdMs: parseInt(flag("hold", process.env.JARVIS_HOLD_MS ?? String(DEFAULT_HOLD_MS)), 10),
 
 	// PRD 5a. The service is a separate process on loopback (see
 	// services/whisper/serve.py); this is where it is, not something this
@@ -143,6 +149,7 @@ const tokenWasGenerated = !flag("token", null) && !process.env.JARVIS_TOKEN;
 
 if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) { log.error(`--port must be a number, got "${flag("port", "")}"`); process.exit(1); }
 if (!Number.isInteger(config.pingIntervalMs) || config.pingIntervalMs < 1000) { log.error(`--ping must be at least 1000 ms`); process.exit(1); }
+if (!Number.isInteger(config.holdMs) || config.holdMs < 0 || config.holdMs > 30_000) { log.error(`--hold must be 0-30000 ms, got "${flag("hold", "")}"`); process.exit(1); }
 if (!Number.isInteger(config.mcpPort) || config.mcpPort < 0 || config.mcpPort > 65535) { log.error(`--mcp-port must be a port number`); process.exit(1); }
 if (!["readonly", "edits", "full"].includes(config.workerPerms)) { log.error(`--worker-perms must be readonly, edits or full, got "${config.workerPerms}"`); process.exit(1); }
 // Checked at startup, not at the first spawn_worker, because at the first
@@ -210,7 +217,7 @@ const transcriber = config.whisper === "off"
 
 const handler = config.handler === "echo"
 	? createEchoHandler({ log, transcriber, audioMaxBytes: config.audioMaxBytes })
-	: createJarvisHandler({ classifier, log, jarvis, registry, engine, transcriber, audioMaxBytes: config.audioMaxBytes });
+	: createJarvisHandler({ classifier, log, jarvis, registry, engine, transcriber, audioMaxBytes: config.audioMaxBytes, holdMs: config.holdMs });
 
 // ----------------------------------------------------------------- TLS certs
 // Re-read on mtime change so a certbot renewal lands without a restart

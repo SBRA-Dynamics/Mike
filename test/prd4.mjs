@@ -24,7 +24,7 @@ import { startProxy } from "./netcut.mjs";
 
 import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS } from "../client/src/lens/render.ts";
 import { Connection, wsUrlFrom } from "../client/src/connection.ts";
-import { Store, NOTICE_MS } from "../client/src/state.ts";
+import { Store, NOTICE_MS, STALE_MS, MARK_WAITING, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
 import { settingsFromScan, decodeFrame } from "../client/src/qr.ts";
 import { readUrlSettings, SettingsStore } from "../client/src/settings.ts";
 import { Glasses, hasHostChannel } from "../client/src/glasses.ts";
@@ -536,6 +536,80 @@ try {
 		check("sidvändning nedåt över sista sidan gör ingenting", s.turnPage(1, 1) === false);
 		check("sidvändning uppåt från första sidan gör ingenting", s.turnPage(-1, 3) === false);
 		check("sidvändning inom svaret flyttar sidan", s.turnPage(1, 3) === true && s.state.lens.page === 1);
+	}
+
+	section("modellen: linsen medan något arbetas på (PRD 6)");
+	{
+		const s = new Store();
+		s.state.connection = "online";
+		s.state.worker = "Bosse";
+		const turn = (phase, parts) => s.apply({ type: "event", kind: "turn", data: { id: "t1", to: "Bosse", parts, phase } });
+		const progress = (data) => s.apply({ type: "event", kind: "progress", data: { from: "Bosse", turn: "t1", ...data } });
+		const lines = () => s.lensView().text.split("\n");
+
+		turn("held", ["bygg klart testerna"]);
+		check("en mening som hålls står på linsen med en gång",
+			lines()[0] === `${MARK_WAITING} bygg klart testerna`, JSON.stringify(lines()));
+		check("och det räknas som att något pågår, före serverns state", s.working() === true);
+
+		turn("held", ["bygg klart testerna", "och kör dem sen"]);
+		check("båda meningarna syns, inte bara den sista", lines().length === 2, JSON.stringify(lines()));
+
+		turn("started", ["bygg klart testerna", "och kör dem sen"]);
+		check("när processen har orden byts pilen mot en bock",
+			lines().every((l) => l.startsWith(MARK_TAKEN)), JSON.stringify(lines()));
+		// The tick everybody reaches for first is not in the firmware font, and a
+		// missing glyph is a box on the user's eye. This is the check that keeps
+		// somebody from "fixing" the mark back to it.
+		check("och bocken är en glyf som finns i fonten", getTextWidth(MARK_TAKEN) > 8, String(getTextWidth(MARK_TAKEN)));
+		check("till skillnad från ✓", getTextWidth("✓") <= 4, String(getTextWidth("✓")));
+
+		progress({ text: "Jag kör sviten och lagar det som failar." });
+		progress({ tool: "Bash", doing: "Running node test/prd3.mjs" });
+		const withWork = lines();
+		check("det den sa att den skulle göra står kvar",
+			withWork.some((l) => l === `${MARK_THEIRS} Jag kör sviten och lagar det som failar.`), JSON.stringify(withWork));
+		check("och vad den gör just nu står under det",
+			withWork.at(-1) === `${MARK_THEIRS} Running node test/prd3.mjs`, JSON.stringify(withWork));
+
+		// Ten seconds of nothing new. No word for it — the mark is the whole
+		// message, and it goes away again so that the line keeps changing.
+		const t = s.state.turns[0];
+		const age = (ms) => { t.doingAt -= ms; t.aliveAt -= ms; };
+		age(STALE_MS + 2000);
+		check("tystnad tänder en markering", s.lensView().text.endsWith(" *"), JSON.stringify(lines().at(-1)));
+		check("och inget ord om att den fortfarande jobbar", !/still|fortfarande/i.test(s.lensView().text));
+		age(STALE_MS);
+		check("och släcker den igen, så raden ändrar sig", !s.lensView().text.endsWith(" *"), JSON.stringify(lines().at(-1)));
+
+		check("hela vyn ryms på linsen", s.lensView().text.split("\n").length <= BODY_ROWS, JSON.stringify(lines()));
+
+		// A process producing output refreshes the blink without changing a word.
+		const before = s.lensView().text;
+		progress({ alive: true });
+		check("ett livstecken ändrar inga ord", s.lensView().text === before.replace(/ \*$/, ""), s.lensView().text);
+
+		s.apply({ type: "event", kind: "turn", data: { id: "t1", to: "Bosse", parts: ["bygg klart testerna", "och kör dem sen"], phase: "done" } });
+		s.apply({ type: "text", text: "Alla 41 checkar gröna.", from: "Bosse", seq: 2 });
+		check("svaret tar över linsen när turen är slut", s.lensView().text === "Alla 41 checkar gröna.", s.lensView().text);
+		check("och ingenting påstår längre att något pågår", s.working() === false);
+	}
+
+	section("modellen: många meningar får plats, de äldsta viker undan");
+	{
+		const s = new Store();
+		s.state.connection = "online";
+		s.state.worker = "Bosse";
+		const parts = Array.from({ length: 12 }, (_, i) => `mening nummer ${i + 1} som är ganska lång och radbryts`);
+		s.apply({ type: "event", kind: "turn", data: { id: "t1", to: "Bosse", parts, phase: "started" } });
+		s.apply({ type: "event", kind: "progress", data: { from: "Bosse", turn: "t1", tool: "Bash", doing: "Running the suite" } });
+
+		const lines = s.lensView().text.split("\n");
+		check("linsen svämmar aldrig över", lines.length <= BODY_ROWS, `${lines.length}: ${JSON.stringify(lines)}`);
+		check("det som görs just nu överlever alltid", lines.at(-1) === `${MARK_THEIRS} Running the suite`, JSON.stringify(lines.at(-1)));
+		check("den sista meningen man sa överlever", lines.some((l) => l.includes("nummer 12")), JSON.stringify(lines));
+		check("och det som inte fick plats räknas, det försvinner inte tyst",
+			/^\+\d+ earlier$/.test(lines[0]), JSON.stringify(lines[0]));
 	}
 
 	// ============================================================== glasögon

@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { startServer, connect, check, failed, section, sleep, ROOT, grantTools, McpClient } from "./harness.mjs";
 import { route, stripAddress, matchModeCommand, applyModeCommand, MODES, ORIGIN } from "../src/routing.js";
 import { buildWorkerContext, composePrompt } from "../src/jarvis.js";
+import { describeTool } from "../src/claudeCli.js";
 
 const FAKE = join(ROOT, "test", "fixtures", "fake-claude.mjs");
 
@@ -730,6 +731,110 @@ try {
 		check("och när inget pågår sägs det", nothing.data?.stopped === false, JSON.stringify(nothing));
 
 		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
+	section("PRD 6: ett verktygsanrop blir en mening");
+	{
+		// Pure, so it is asserted here rather than through a model. The shapes
+		// are the inputs Claude Code's own tools take.
+		check("en fil läses vid namn, utan katalogen",
+			describeTool("Read", { file_path: "/home/robin/jarvis/src/workerEngine.js" }) === "Reading workerEngine.js",
+			describeTool("Read", { file_path: "/home/robin/jarvis/src/workerEngine.js" }));
+		check("ett kommando visas med sin egen beskrivning",
+			describeTool("Bash", { description: "Run the PRD 3 suite", command: "node test/prd3.mjs" }) === "Running Run the PRD 3 suite");
+		check("och utan beskrivning med kommandot",
+			describeTool("Bash", { command: "node test/prd3.mjs" }) === "Running node test/prd3.mjs");
+		check("en sökning bär det den söker efter", describeTool("Grep", { pattern: "lensView" }) === "Searching lensView");
+		check("ett verktyg vi inte känner blir läsbart ändå",
+			describeTool("mcp__jarvis__spawn_worker", {}) === "Spawn worker", describeTool("mcp__jarvis__spawn_worker", {}));
+		// A lens row is fifty columns and two of them are the prefix.
+		const long = describeTool("Bash", { description: "x".repeat(300) });
+		check("och ingen rad är längre än linsen", long.length <= 48, `${long.length}: ${long}`);
+		check("en tom indata ger ingen trasig mening", describeTool("Read", {}) === "Read", describeTool("Read", {}));
+	}
+
+	section("PRD 6: uppdelade meningar blir en tur");
+	{
+		// The window is on here and off everywhere else (see harness.mjs): this
+		// is the one suite that is about what happens between two fragments.
+		const server = track(await startJarvis([], { JARVIS_HOLD_MS: "1200" }));
+		const c = await connect(server);
+		await say(c, "Jarvis, starta en arbetare som heter Bosse.");
+
+		const since = c.mark();
+		// Three fragments of one sentence, the way a person who is choosing
+		// between two languages produces them. Only the FIRST names Bosse — in
+		// ByName the other two would be dropped as unaddressed, and joining them
+		// to an open window is the whole point: the name was said once.
+		c.send({ type: "say", text: "Bosse, bygg klart" });
+		await sleep(200);
+		c.send({ type: "say", text: "testerna" });
+		await sleep(200);
+		c.send({ type: "say", text: "och kör dem sen" });
+		await c.waitFor((m) => m.type === "state" && m.busy === false, 20_000, "turen hinner bli klar", since);
+		const msgs = c.messages.slice(since);
+
+		const turns = msgs.filter((m) => m.type === "event" && m.kind === "turn");
+		const ids = new Set(turns.map((m) => m.data.id));
+		check("tre meningar blir en enda tur", ids.size === 1, JSON.stringify([...ids]));
+
+		const held = turns.filter((m) => m.data.phase === "held");
+		check("varje mening kvitteras medan den hålls", held.length === 3, JSON.stringify(held.map((m) => m.data.parts.length)));
+		check("och listan växer, den ersätts inte",
+			JSON.stringify(held.map((m) => m.data.parts.length)) === "[1,2,3]", JSON.stringify(held.map((m) => m.data.parts)));
+		check("de bär användarens egna ord, var för sig",
+			JSON.stringify(held.at(-1).data.parts) === JSON.stringify(["bygg klart", "testerna", "och kör dem sen"]),
+			JSON.stringify(held.at(-1).data.parts));
+
+		const started = turns.find((m) => m.data.phase === "started");
+		check("turen når en process som kör den", !!started, JSON.stringify(turns.map((m) => m.data.phase)));
+		check("och det är det som gör bocken sann, inte kön",
+			turns.findIndex((m) => m.data.phase === "queued") < turns.indexOf(started));
+
+		const replies = msgs.filter((m) => m.type === "text" && m.from === "Bosse");
+		check("arbetaren svarar en gång, inte tre", replies.length === 1, JSON.stringify(replies.map((m) => m.text)));
+		check("och fick hela meningen i ett stycke",
+			/bygg klart testerna och kör dem sen/.test(String(replies[0]?.text)), JSON.stringify(replies[0]?.text));
+
+		const done = turns.find((m) => m.data.phase === "done");
+		check("turen stängs som en tur", !!done);
+		check("och den stängs före svaret, inte efter",
+			msgs.indexOf(done) < msgs.indexOf(replies[0]), JSON.stringify(msgs.map((m) => m.type + (m.kind ? `:${m.kind}` : ""))));
+
+		// Stopping inside the window: the words never ran, and saying so is the
+		// difference between obedience and a shrug.
+		const held2 = c.mark();
+		c.send({ type: "say", text: "Bosse, glöm inte att" });
+		await sleep(250);
+		c.send({ type: "say", text: "stopp" });
+		const stopped = await c.waitFor((m) => m.type === "event" && m.kind === "interrupted", 5000, "stopp i fönstret", held2);
+		check("ord som ännu hålls går att stoppa", stopped.data?.stopped === true, JSON.stringify(stopped));
+		check("och turen rapporteras som slängd, inte klar",
+			c.messages.slice(held2).some((m) => m.type === "event" && m.kind === "turn" && m.data.phase === "dropped"),
+			JSON.stringify(c.messages.slice(held2).filter((m) => m.kind === "turn").map((m) => m.data.phase)));
+		await sleep(2000);
+		check("och ingenting nådde arbetaren",
+			!c.messages.slice(held2).some((m) => m.type === "text" && m.from === "Bosse"),
+			JSON.stringify(c.messages.slice(held2).filter((m) => m.type === "text").map((m) => m.text)));
+
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
+	section("PRD 6: skrivna ord väntar inte");
+	{
+		const server = track(await startJarvis([], { JARVIS_HOLD_MS: "5000" }));
+		const c = await connect(server);
+		// Five seconds of window, and the answer has to beat it: pressing Enter
+		// already said the sentence was over.
+		const t0 = Date.now();
+		const turn = await type(c, "Jarvis, säg något kort");
+		const took = Date.now() - t0;
+		check("tangentbordet går rakt igenom fönstret", took < 4000, `${took}ms`);
+		check("och svaret kommer ändå", turn.some((m) => m.type === "text"), JSON.stringify(turn.map((m) => m.type)));
 		c.close();
 		server.stop();
 	}

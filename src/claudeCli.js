@@ -34,6 +34,13 @@ import { StringDecoder } from "node:string_decoder";
  *  is longer than any answer and shorter than a lost afternoon. */
 export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
 
+/** How often a turn that is producing nothing readable still says it is alive.
+ *  The stream writes a line per event — a tool call, a tool's answer — and
+ *  between two of them there can be minutes of a command running. One tick per
+ *  five seconds is enough for a lens to tell "working" from "wedged" and few
+ *  enough to be free. */
+export const ALIVE_MS = 5000;
+
 /** What we keep of a run that failed, for the log. Full stderr from a crashed
  *  CLI can be megabytes of stack. */
 const errTail = (s) => String(s ?? "").trim().split("\n").slice(-4).join(" ").slice(0, 400);
@@ -58,6 +65,69 @@ export class ChildTracker {
 	killAll(signal = "SIGKILL") {
 		for (const c of [...this.children]) { try { c.kill(signal); } catch { } }
 	}
+}
+
+/** The last path segment, so a lens shows "handler.js" and not forty
+ *  characters of directory the user already knows they are in. */
+const base = (p) => {
+	const s = String(p ?? "").trim();
+	if (!s) return "";
+	return s.split(/[\\/]/).filter(Boolean).pop() ?? s;
+};
+
+/** One line of a fifty-column lens, minus the two characters of prefix it is
+ *  shown behind. Cut on a word where there is one. */
+const short = (s, n = 40) => {
+	const t = String(s ?? "").replace(/\s+/g, " ").trim();
+	if (t.length <= n) return t;
+	const cut = t.slice(0, n);
+	const space = cut.lastIndexOf(" ");
+	return (space > n * 0.6 ? cut.slice(0, space) : cut).trimEnd() + "…";
+};
+
+/** "spawn_worker" -> "Spawn worker", "mcp__jarvis__read_worker" -> "Read
+ *  worker". The fallback for every tool this does not know by name, which is
+ *  most of them and all of the future ones. */
+const humanize = (name) => {
+	const bare = String(name ?? "").replace(/^mcp__[^_]+__/, "").replace(/[_-]+/g, " ").trim();
+	if (!bare) return "Working";
+	return bare[0].toUpperCase() + bare.slice(1);
+};
+
+/**
+ * What a tool call looks like on a lens, in the words the user would use.
+ *
+ * PRD 6 step 2 put the tool's NAME on the status line, which answered "is it
+ * stuck" but not "on what". The stream carries the arguments too, and a file
+ * name is the difference between "Read" and "Reading workerEngine.js" — the
+ * second is the answer to the question the user actually looked up to ask.
+ *
+ * Pure and exported so the suite can assert the shapes without a model: the
+ * inputs are exactly the ones Claude Code's own tools take.
+ */
+export function describeTool(name, input) {
+	const i = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+	const file = base(i.file_path ?? i.path ?? i.notebook_path);
+
+	switch (String(name ?? "")) {
+		case "Read": case "NotebookRead": if (file) return `Reading ${short(file)}`; break;
+		case "Edit": case "MultiEdit": case "NotebookEdit": if (file) return `Editing ${short(file)}`; break;
+		case "Write": if (file) return `Writing ${short(file)}`; break;
+		// The CLI's own Bash tool carries a one-line description written for a
+		// human to read, which is better than any summary of the command.
+		case "Bash": { const w = short(i.description || i.command, 38); if (w) return `Running ${w}`; break; }
+		case "Grep": { const w = short(i.pattern, 34); if (w) return `Searching ${w}`; break; }
+		case "Glob": { const w = short(i.pattern, 32); if (w) return `Looking for ${w}`; break; }
+		case "WebSearch": { const w = short(i.query, 32); return w ? `Searching the web for ${w}` : "Searching the web"; }
+		case "WebFetch": {
+			let host = "";
+			try { host = new URL(String(i.url)).host; } catch { host = ""; }
+			return host ? `Fetching ${short(host)}` : "Fetching a page";
+		}
+		case "Task": { const w = short(i.description, 40); if (w) return w[0].toUpperCase() + w.slice(1); break; }
+		case "TodoWrite": return "Planning";
+	}
+	return humanize(name);
 }
 
 /**
@@ -141,6 +211,10 @@ export function createClaudeRunner({
 		args.push(...extraArgs, prompt);
 
 		const started = Date.now();
+		// A progress callback must never be able to fail the turn it is
+		// reporting on, and there are now four places that call one.
+		const progress = (p) => { try { onProgress?.(p); } catch (e) { log?.warn(`claude progress: ${e.message}`); } };
+
 		let child;
 		try {
 			child = spawn(bin, args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
@@ -152,6 +226,10 @@ export function createClaudeRunner({
 		// `interrupt`) without reaching for the tracker, which would kill every
 		// worker's turn at once.
 		try { onSpawn?.(child); } catch { /* an interrupt hook must not fail the turn */ }
+		// The prompt is now in a process that is running it, which is a stronger
+		// claim than "queued" and the only one worth marking an utterance with:
+		// everything the user said has been handed over, in full.
+		progress({ kind: "start" });
 
 		let out = "";
 		let err = "";
@@ -162,6 +240,7 @@ export function createClaudeRunner({
 		// may carry anything after it (a rate-limit notice does).
 		let result = null;
 		let pending = "";
+		let aliveAt = 0;
 
 		/** One event of the stream. Only two shapes matter to a lens: words the
 		 *  model has written, and the name of a tool it is running. Everything
@@ -174,7 +253,13 @@ export function createClaudeRunner({
 				// would be quoting the model's notes to itself as if it had said
 				// them out loud.
 				if (block?.type === "text" && block.text) onProgress({ kind: "text", text: String(block.text) });
-				else if (block?.type === "tool_use" && block.name) onProgress({ kind: "tool", tool: String(block.name) });
+				// `tool` is the raw name and `doing` is the sentence a lens shows.
+				// Both, because they answer different questions: the log wants the
+				// name, and the person looking up from what they were doing wants
+				// to know it is reading workerEngine.js.
+				else if (block?.type === "tool_use" && block.name) {
+					onProgress({ kind: "tool", tool: String(block.name), doing: describeTool(block.name, block.input) });
+				}
 			}
 		};
 
@@ -205,8 +290,12 @@ export function createClaudeRunner({
 			// Only the tail is ever read again (errTail, and the one-object
 			// fallback below), and a turn with tool calls streams megabytes.
 			out = (out + chunk).slice(-OUT_KEEP);
-			// A progress callback must never be able to kill the turn it is
-			// reporting on.
+			// Evidence, not a heartbeat the server invents: the process wrote
+			// something. Between two events there can be minutes of a command
+			// running, and this is what tells a lens the difference between that
+			// and a turn that has died quietly.
+			const now = Date.now();
+			if (now - aliveAt >= ALIVE_MS) { aliveAt = now; progress({ kind: "alive" }); }
 			try { consume(chunk); } catch (e) { log?.warn(`claude stream: ${e.message}`); }
 		});
 		child.stderr.on("data", (d) => { err += d.toString(); });
