@@ -30,6 +30,11 @@ import { CONTROL } from "./protocol.ts";
 import { SettingsStore, browserStorage, bridgeStorage, readUrlSettings, scrubUrl } from "./settings.ts";
 import { Companion } from "./ui/companion.ts";
 
+/** Stamped into the bundle at build time (vite.config.ts). Not read from a
+ *  file at runtime: the question it answers is which BUILD this is. */
+declare const __JARVIS_VERSION__: string;
+const VERSION = typeof __JARVIS_VERSION__ === "string" ? __JARVIS_VERSION__ : "dev";
+
 const store = new Store();
 let connection: Connection | null = null;
 
@@ -51,7 +56,7 @@ const mark = (s: string): void => { step = s; };
 
 const report = (what: string, e: unknown): void => {
 	const detail = e instanceof Error ? `${e.message} ${(e.stack ?? "").split("\n")[1] ?? ""}` : String(e);
-	const line = `${what} at "${step}": ${detail}`;
+	const line = `${VERSION} ${what} at "${step}": ${detail}`;
 	console.error(`[jarvis] ${line}`);
 	// Best effort, and never able to throw on its own account: the thing being
 	// reported may well be the socket.
@@ -310,6 +315,15 @@ const openConnection = (): void => {
 			onStatus: (status, detail) => store.setConnection(status, detail),
 			onReady: (ready) => {
 				store.applyReady(ready);
+				// Which build is actually on the glasses, written where it
+				// survives the glasses: installing a package and running it are
+				// two different claims, and only the server's log can settle the
+				// second one.
+				try {
+					connection?.control(CONTROL.CLIENT_LOG, {
+						text: `client ${VERSION} attached — glasses ${store.state.glasses}, ${navigator.userAgent.slice(0, 80)}`
+					});
+				} catch { }
 				// The session id is the conversation. Persisting it is what makes
 				// closing the app and opening it again a continuation rather than
 				// a new start (PRD 1 R1.5).
@@ -348,7 +362,7 @@ const start = async (): Promise<void> => {
 	if (!attached) companion.note(`No glasses attached — companion only (${glasses.error ?? "no host"}).`);
 	// One line, at startup. On a phone this is the only way to see which half of
 	// the app came up, and it is what the simulator test waits for.
-	console.log(`[jarvis] client up — glasses ${attached ? "attached" : "absent"}`);
+	console.log(`[jarvis] client up ${VERSION} — glasses ${attached ? "attached" : "absent"}`);
 
 	// R4.7: the SDK's storage is the only one that survives an app restart on
 	// the phone; the browser copy is the development fallback and the desktop's
