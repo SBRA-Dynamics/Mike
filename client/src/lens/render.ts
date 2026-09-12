@@ -44,16 +44,21 @@ const ELLIPSIS = "…";
  * dark (LENS_IDLE_MS, and "display off"); a frame made of glyphs goes away
  * with the rest of the content. The rounded corners and the lines all exist in
  * the firmware font and all measure 20 px, which is what makes the arithmetic
- * below exact: a frame 28 glyphs wide is 560 px, and every row is padded to
- * that width so the right edge lines up. The microphone marks likewise — the
- * emoji everybody reaches for first measures as a missing glyph.
+ * below exact: a frame 28 glyphs wide is 560 px, and the two edge rows are
+ * filled to that width so the corners line up. The microphone marks likewise
+ * — the emoji everybody reaches for first measures as a missing glyph.
+ *
+ * Top and bottom only. There were side edges for a day: the edge glyph is
+ * 20 px tall on a 27 px row, so they came out dashed, and each empty row had
+ * to be padded to the right edge with a hundred spaces to hold its bar up —
+ * which is what pushed a frame past the host's byte limits. Robin looked at
+ * it and preferred it without, and so does the byte count.
  */
 const CORNER_TL = "╭";
 const CORNER_TR = "╮";
 const CORNER_BL = "╰";
 const CORNER_BR = "╯";
 const EDGE_H = "─";
-const EDGE_V = "│";
 /** The microphone, at the right end of the title bar: open and hearing, or
  *  not. Its own slot, so it is there whatever the status word is saying —
  *  "thinking 12s" used to hide whether anyone was listening. */
@@ -63,15 +68,14 @@ export const MIC_OFF = "○";
 /** Twenty-eight glyphs of 20 px. Sixteen pixels of the lens are left unused
  *  at the right, which is the price of an edge that is straight. */
 export const FRAME_PX = 560;
-const SIDE_L = `${EDGE_V} `;
-const SIDE_R = ` ${EDGE_V}`;
 const TITLE_L = `${CORNER_TL}${EDGE_H} `;
 
 /** The title bar and the bottom edge each take a row; the rest is the reply. */
 export const BODY_ROWS = LENS.rows - 2;
-/** What a body row can hold between the two edges, in both budgets. */
-export const BODY_COLS = LENS.cols - SIDE_L.length - SIDE_R.length;
-export const BODY_PX = FRAME_PX - getTextWidth(SIDE_L) - getTextWidth(SIDE_R);
+/** What a body row can hold, in both budgets: the full width of the frame,
+ *  so nothing runs past the corners. */
+export const BODY_COLS = LENS.cols;
+export const BODY_PX = FRAME_PX;
 
 export type LensMic = "live" | "off" | null;
 
@@ -95,11 +99,11 @@ export type LensFrame = {
 	/** The title text alone: who is speaking and the status, without the frame
 	 *  around it. What the tests read; the glasses get it inside the bar. */
 	header: string;
-	/** Exactly LENS.rows lines, padded with "" — what the preview renders,
-	 *  padded by columns because the preview is monospace. */
+	/** Exactly LENS.rows lines, padded with "" — what the preview renders;
+	 *  the two edge rows filled by columns because the preview is monospace. */
 	lines: string[];
-	/** The same rows padded by pixels for the firmware's proportional font —
-	 *  what the glasses get. */
+	/** The same rows with the edge rows filled by pixels for the firmware's
+	 *  proportional font — what the glasses get. */
 	content: string;
 	page: number;
 	pages: number;
@@ -264,7 +268,9 @@ export const renderLens = (view: LensView): LensFrame => {
 
 	const rows: Row[] = [fillRow(`${TITLE_L}${header} `, titleRight(view.mic), EDGE_H)];
 	const shown = pages[page];
-	for (let i = 0; i < BODY_ROWS; i++) rows.push(fillRow(`${SIDE_L}${shown[i] ?? ""}`, SIDE_R));
+	// Body rows are the text and nothing else: with no side edges there is
+	// nothing to pad them out to, and an empty row costs one newline.
+	for (let i = 0; i < BODY_ROWS; i++) { const line = shown[i] ?? ""; rows.push({ cols: line, px: line }); }
 	rows.push(fillRow(CORNER_BL, CORNER_BR, EDGE_H));
 
 	return {

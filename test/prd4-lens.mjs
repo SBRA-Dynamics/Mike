@@ -30,18 +30,6 @@ let sim = null;
 let automationPort = 0;
 const api = (path) => `http://127.0.0.1:${automationPort}${path}`;
 
-/** The columns of the lens between the frame's two edges. The edge glyph is
- *  20 px and sits at each end of a 560 px frame. */
-const cropX = (img, x0, x1) => {
-	const width = x1 - x0;
-	const data = new Uint8Array(width * img.height * 4);
-	for (let y = 0; y < img.height; y++) {
-		data.set(img.data.subarray((y * img.width + x0) * 4, (y * img.width + x1) * 4), y * width * 4);
-	}
-	return { width, height: img.height, data };
-};
-const inner = (img) => cropX(img, 30, 530);
-
 const shot = async (name, path = "/api/screenshot/glasses") => {
 	const res = await fetch(api(path));
 	if (!res.ok) throw new Error(`${path} svarade ${res.status}`);
@@ -184,19 +172,12 @@ try {
 	await sleep(1200);      // one BLE-shaped round trip in the simulator
 
 	const page1 = await shot("02-sida1");
-	// Measured inside the frame: its two vertical edges run the full height and
-	// would read as one band. What is left is the title bar, the bottom edge,
-	// and one band per body row that has words on it.
-	const bands1 = textBands(inner(page1));
-	const expectedRows = expected.lines.filter((l, i) => i === 0 || i === LENS.rows - 1 || l.replace(/[│ ]/g, "") !== "").length;
+	// The title bar, the bottom edge, and one band per body row with words.
+	const bands1 = textBands(page1);
+	const expectedRows = expected.lines.filter((l, i) => i === 0 || i === LENS.rows - 1 || l.trim() !== "").length;
 	check(`linsen visar ${expectedRows} rader — ramens två plus de klienten radbröt`,
 		bands1.length === expectedRows, `${bands1.length} band: ${JSON.stringify(bands1)}`);
-	// The edge glyph is 20 px tall on a 27 px row, so the vertical edges are
-	// ten segments with a gap between each — the font's doing, and visible in
-	// the shot. Ten of them, from the title row to the bottom one.
-	const edges = textBands(cropX(page1, 0, 24));
-	check("ramens vänsterkant löper från titelraden till underkanten, ett segment per rad",
-		edges.length === LENS.rows && edges[0].top < 27 && edges.at(-1).bottom > 240, JSON.stringify(edges));
+	check("underkanten ligger på sista raden", bands1.at(-1).top >= 27 * (LENS.rows - 1), JSON.stringify(bands1.at(-1)));
 	check("och aldrig fler än tio", bands1.length <= 10, String(bands1.length));
 	check("ingenting ritas utanför linsens 288 px", bands1.at(-1).bottom < 288, JSON.stringify(bands1.at(-1)));
 	check("rubrikraden ligger överst", bands1[0].top < 27, JSON.stringify(bands1[0]));

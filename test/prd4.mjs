@@ -123,16 +123,18 @@ try {
 		check("ramen är tio rader på glaset också — ingen tom rad kapas", glass.length === LENS.rows, String(glass.length));
 		check("titelraden börjar med ett hörn och slutar med ett", /^╭─ .* ╮$/.test(f.lines[0]), f.lines[0]);
 		check("namnet och statusen står i titelraden", f.lines[0].includes("Bosse · thinking 3s"), f.lines[0]);
-		check("kroppens rader har en kant på var sida", f.lines.slice(1, -1).every((l) => l.startsWith("│ ") && l.endsWith(" │")), JSON.stringify(f.lines.slice(1, -1)));
+		check("kroppens rader är bara texten — inga sidokanter", f.lines.slice(1, -1).every((l) => !/[│╭╮╰╯]/.test(l)), JSON.stringify(f.lines.slice(1, -1)));
 		check("nedersta raden är ramens underkant", /^╰─+╯$/.test(f.lines.at(-1)), f.lines.at(-1));
-		check("förhandsvisningen är exakt femtio kolumner bred på varje rad", f.lines.every((l) => l.length === LENS.cols), JSON.stringify(f.lines.map((l) => l.length)));
-		// The glasses get the same rows padded by pixels: every row ends where
-		// the frame's right edge is, give or take the width of half a space.
+		check("förhandsvisningens två kantrader är exakt femtio kolumner", f.lines[0].length === LENS.cols && f.lines.at(-1).length === LENS.cols, JSON.stringify([f.lines[0].length, f.lines.at(-1).length]));
+		// The glasses get the edge rows filled by pixels: both end where the
+		// frame's right edge is, give or take the width of half a space, and
+		// no body row reaches past it.
 		const widths = glass.map((l) => getTextWidth(l));
-		check("på glaset slutar varje rad inom en halv mellanslagsbredd från kanten",
-			widths.every((w) => w <= FRAME_PX && FRAME_PX - w < 5), JSON.stringify(widths));
+		check("på glaset slutar båda kantraderna inom en halv mellanslagsbredd från hörnet",
+			[widths[0], widths.at(-1)].every((w) => w <= FRAME_PX && FRAME_PX - w < 5), JSON.stringify(widths));
+		check("och ingen textrad når förbi hörnen", widths.every((w) => w <= FRAME_PX), JSON.stringify(widths));
 		check("och ramen är smalare än linsen", FRAME_PX <= LENS.width);
-		check("ramens glyfer finns i fonten", ["╭", "╮", "╰", "╯", "─", "│"].every((g) => getTextWidth(g) > 8));
+		check("ramens glyfer finns i fonten", ["╭", "╮", "╰", "╯", "─"].every((g) => getTextWidth(g) > 8));
 		check("mikrofonens tecken finns i fonten, båda", getTextWidth(MIC_LIVE) > 8 && getTextWidth(MIC_OFF) > 8);
 		check("emojin gör det inte", getTextWidth("🎤") <= 4, String(getTextWidth("🎤")));
 		check("kroppen har plats för det som radbröts", wrapText(LONG).every((l) => l.length <= BODY_COLS));
