@@ -60,7 +60,7 @@ if (has("help")) {
   --key <file>         TLS private key
   --static <dir>       directory to serve the client from (default ./public)
   --dev-proxy <url>    serve the client from a dev server instead of --static
-  --data <dir>         session storage (default ~/.local/share/jarvis)
+  --data <dir>         session storage (default ~/.local/share/mike)
   --ping <ms>          keepalive interval (default 20000)
   --mcp-port <n>       loopback port for the MCP tool surface (default: ephemeral)
   --worker-model <m>   default model for a new worker (default sonnet)

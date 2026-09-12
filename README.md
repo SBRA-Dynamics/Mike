@@ -72,7 +72,7 @@ sudo cp mike-server.service services/whisper/mike-whisper.service /etc/systemd/s
 sudo systemctl daemon-reload && sudo systemctl enable --now mike-whisper mike-server
 ```
 
-The server reads its bearer token from `/etc/jarvis.env` (root-only, never on the
+The server reads its bearer token from `/etc/mike.env` (root-only, never on the
 command line where `ps` would show it) and serves the client from `./public` over
 TLS. The client is handed the token once, in a link, and keeps it in SDK storage.
 

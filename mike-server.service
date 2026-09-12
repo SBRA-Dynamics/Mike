@@ -17,7 +17,7 @@ Environment=PATH=/home/robin/.nvm/versions/node/v24.16.0/bin:/home/robin/.local/
 Environment=HOME=/home/robin
 # Token from a root-only file: never on the command line, where ps exposes it
 # to every user on the machine.
-EnvironmentFile=/etc/jarvis.env
+EnvironmentFile=/etc/mike.env
 # PRD 2's MCP tool surface binds its own listener on 127.0.0.1 with an
 # ephemeral port. Nothing outside the process needs to find it — each Claude
 # Code invocation is handed the URL in its grant — so no port is opened for it.

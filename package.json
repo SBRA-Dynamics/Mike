@@ -11,7 +11,7 @@
     "test:lens": "node test/prd4-lens.mjs",
     "test:live": "node test/mcp-live.mjs && node test/e2e-live.mjs",
     "test:browser": "node test/prd4-browser.mjs && node test/prd5a-browser.mjs",
-    "whisper": "$HOME/.local/share/jarvis/venv/bin/python services/whisper/serve.py --port 3461"
+    "whisper": "$HOME/.local/share/mike/venv/bin/python services/whisper/serve.py --port 3461"
   },
   "dependencies": {
     "ws": "^8.18.0"

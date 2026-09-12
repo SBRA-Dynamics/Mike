@@ -15,18 +15,18 @@ file is one more thing to leak.
 Reproducing the environment, exactly as it was built (Ubuntu 24.04, RTX 5060 Ti,
 driver 595.84, Python 3.12):
 
-    python3 -m venv ~/.local/share/jarvis/venv
-    ~/.local/share/jarvis/venv/bin/pip install --upgrade pip faster-whisper
+    python3 -m venv ~/.local/share/mike/venv
+    ~/.local/share/mike/venv/bin/pip install --upgrade pip faster-whisper
     # CTranslate2 needs CUDA's own libraries and does not depend on them itself;
     # without these the model loads and then fails at the first inference with
     # "Library libcublas.so.12 is not found". See _preload_cuda_libraries below.
-    ~/.local/share/jarvis/venv/bin/pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+    ~/.local/share/mike/venv/bin/pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 
     # once, to fetch the weights (~1.6 GB for large-v3-turbo) into ~/.cache/huggingface
-    ~/.local/share/jarvis/venv/bin/python services/whisper/serve.py --warm-only
+    ~/.local/share/mike/venv/bin/python services/whisper/serve.py --warm-only
 
     # normal run: the port the Mike server defaults to
-    ~/.local/share/jarvis/venv/bin/python services/whisper/serve.py --port 3461
+    ~/.local/share/mike/venv/bin/python services/whisper/serve.py --port 3461
 
 faster-whisper (CTranslate2) rather than openai-whisper or transformers: no
 PyTorch install measured in gigabytes, the model loads in about a second, and

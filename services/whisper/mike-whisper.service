@@ -20,7 +20,7 @@ Environment=HOME=/home/robin
 # The venv built the way services/whisper/serve.py documents. cuBLAS and cuDNN
 # come from pip inside it and are loaded by the service itself, so there is no
 # LD_LIBRARY_PATH to keep in sync here.
-ExecStart=/home/robin/.local/share/jarvis/venv/bin/python /home/robin/mike/services/whisper/serve.py \
+ExecStart=/home/robin/.local/share/mike/venv/bin/python /home/robin/mike/services/whisper/serve.py \
   --port 3461 --host 127.0.0.1
 Restart=always
 RestartSec=5
