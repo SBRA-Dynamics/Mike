@@ -3,3 +3,4 @@ public/
 *.log
 test/out/
 jarvis.ehpk
+dirs.json

@@ -35,11 +35,12 @@ export class ToolError extends Error {
 const MAX_WORKERS = 24;
 
 export class WorkerRegistry {
-	constructor({ file, log, defaultModel = "sonnet", defaultCwd = process.cwd() }) {
+	constructor({ file, log, defaultModel = "sonnet", defaultCwd = process.cwd(), dirs }) {
 		this.file = file;
 		this.log = log;
 		this.defaultModel = defaultModel;
 		this.defaultCwd = defaultCwd;
+		this.dirs = dirs;
 		this.workers = new Map();      // key (normalized name) -> record
 		this.#load();
 	}
@@ -151,15 +152,29 @@ export class WorkerRegistry {
 	 *  root: Jarvis has Bash and can already reach anywhere, so a jail here
 	 *  would be theatre. What it must not be is a relative path or a directory
 	 *  that is not there — both fail later, inside a spawn, where the error is
-	 *  unreadable. */
+	 *  unreadable.
+	 *
+	 *  A non-absolute value is tried against the spoken-name map (dirs.json)
+	 *  before it is refused, so "start a worker in MyProject" resolves without a
+	 *  slash ever being said. An absolute path always keeps working — the map
+	 *  is a suggestion, not a jail, and will always be missing something. */
 	#checkCwd(cwd) {
 		const raw = cwd == null || cwd === "" ? this.defaultCwd : String(cwd);
 		if (raw.includes("\0")) throw new ToolError("that folder name is not valid");
-		if (!raw.startsWith("/")) throw new ToolError(`"${raw.slice(0, 40)}" is not a full path`);
+		let dir = raw;
+		if (!raw.startsWith("/")) {
+			const named = this.dirs?.resolve(raw);
+			if (!named) {
+				const names = this.dirs?.names() ?? [];
+				const hint = names.length ? ` — use ${names.join(", ")}, or a full path` : "";
+				throw new ToolError(`"${raw.slice(0, 40)}" is not a full path${hint}`);
+			}
+			dir = named;
+		}
 		let stat;
-		try { stat = statSync(raw); } catch { throw new ToolError(`no folder ${raw.slice(0, 60)}`); }
-		if (!stat.isDirectory()) throw new ToolError(`${raw.slice(0, 60)} is not a folder`);
-		return raw;
+		try { stat = statSync(dir); } catch { throw new ToolError(`no folder ${dir.slice(0, 60)}`); }
+		if (!stat.isDirectory()) throw new ToolError(`${dir.slice(0, 60)} is not a folder`);
+		return dir;
 	}
 
 	#load() {

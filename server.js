@@ -31,6 +31,7 @@ import { attachConnection } from "./src/connection.js";
 import { createEchoHandler, createJarvisHandler } from "./src/handler.js";
 import { PROTOCOL_VERSION } from "./src/protocol.js";
 import { WorkerRegistry } from "./src/workers.js";
+import { NamedDirs } from "./src/namedDirs.js";
 import { createStubWorkerEngine, createClaudeWorkerEngine } from "./src/workerEngine.js";
 import { createToolset } from "./src/tools.js";
 import { createClassifier } from "./src/classify.js";
@@ -64,6 +65,7 @@ if (has("help")) {
   --mcp-port <n>       loopback port for the MCP tool surface (default: ephemeral)
   --worker-model <m>   default model for a new worker (default sonnet)
   --worker-cwd <dir>   default working directory for a new worker
+  --dirs <file>        spoken names for directories, e.g. "MyProject" (default ./dirs.json)
   --handler <h>        jarvis (default) or echo, which pins PRD 1's transport
   --engine <e>         claude (default) or stub, which spends no money
   --claude-bin <path>  the Claude Code binary to drive (default: claude)
@@ -103,6 +105,7 @@ const config = {
 	// the expensive one, workers are many and long-lived.
 	workerModel: flag("worker-model", process.env.JARVIS_WORKER_MODEL || "sonnet"),
 	workerCwd: flag("worker-cwd", process.env.JARVIS_WORKER_CWD || process.cwd()),
+	dirsFile: path.resolve(flag("dirs", process.env.JARVIS_DIRS || path.join(HERE, "dirs.json"))),
 	// What a worker turn may do. `full` means --dangerously-skip-permissions,
 	// and since this server is reachable from the internet behind one bearer
 	// token, that makes the token the ability to run code here. Deliberate
@@ -161,14 +164,15 @@ const store = new SessionStore(path.join(config.dataDir, "sessions"), { defaultM
 // PRD 2. The registry is the state the tools mutate; the engine is the seam
 // PRD 3 replaces with real Claude Code sessions. Everything above the engine —
 // registry, tools, MCP transport — is finished work either way.
+const dirs = new NamedDirs(config.dirsFile, log);
 const registry = new WorkerRegistry({
 	file: path.join(config.dataDir, "workers.json"),
-	log, defaultModel: config.workerModel, defaultCwd: config.workerCwd
+	log, defaultModel: config.workerModel, defaultCwd: config.workerCwd, dirs
 });
 const engine = config.engine === "stub"
 	? createStubWorkerEngine({ log })
 	: createClaudeWorkerEngine({ permissions: config.workerPerms, promptFile: config.workerPrompt, log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.turnTimeoutMs });
-const toolset = createToolset({ registry, engine, log });
+const toolset = createToolset({ registry, engine, log, dirs });
 const mcp = createMcpServer({ store, toolset, registry, log });
 
 // ------------------------------------------------------------------- jarvis

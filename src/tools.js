@@ -93,7 +93,7 @@ const publicWorker = (w) => ({
  * conversation the tool call belongs to — that is what makes spawn_worker able
  * to switch "the active conversation" rather than some global.
  */
-export function createToolset({ registry, engine, log }) {
+export function createToolset({ registry, engine, log, dirs }) {
 
 	/** Setting the active worker is one operation with one event, because PRD 2
 	 *  R2.2 says switching is part of spawning and not a second call. The
@@ -147,7 +147,7 @@ export function createToolset({ registry, engine, log }) {
 					name: { type: "string", description: "What the user called it, as spoken." },
 					systemPrompt: { type: "string", description: "Its system prompt — the worker-specific part, added to the standing instructions every session of this kind already gets. Written addressed to it, saying what it is responsible for: \"You are looking after the BLE firmware in MyLibrary.\" It is present on EVERY turn it ever takes, so it still knows its job an hour from now. Never mention workers, models or this orchestration — write the job, not the assignment." },
 					model: { type: "string", description: `Which model to run: ${MODEL_LIST}. Omit to use the default.` },
-					cwd: { type: "string", description: "Absolute path the worker works in. Omit to inherit the default." },
+					cwd: { type: "string", description: "Absolute path the worker works in, or one of the known names below. Omit to inherit the default." },
 					prompt: { type: "string", description: "An optional first message, said to it once and then gone, like any other message. This is where a briefing goes — the state of play, what was just found, what to start on. Use it when the user wants work to begin now. Standing facts about what it IS belong in `systemPrompt`; put them here and they scroll out of reach." }
 				},
 				// `systemPrompt` is required, and that is a measured decision
@@ -324,9 +324,23 @@ export function createToolset({ registry, engine, log }) {
 
 	const byName = new Map(tools.map((t) => [t.name, t]));
 
+	/** spawn_worker's `cwd` description, rebuilt on every call so an edit to
+	 *  dirs.json is visible on the next tools/list without a restart — the same
+	 *  mechanism that already keeps the model list current. */
+	const cwdSchema = (base) => {
+		const names = dirs?.names() ?? [];
+		return { ...base, description: names.length ? `${base.description} Known names: ${names.join(", ")}.` : base.description };
+	};
+
 	return {
 		/** What tools/list answers with — the schema half only. */
-		definitions: () => tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+		definitions: () => tools.map(({ name, description, inputSchema }) => {
+			if (name !== "spawn_worker") return { name, description, inputSchema };
+			return {
+				name, description,
+				inputSchema: { ...inputSchema, properties: { ...inputSchema.properties, cwd: cwdSchema(inputSchema.properties.cwd) } }
+			};
+		}),
 		has: (name) => byName.has(name),
 		/** Run one tool. Throws ToolError for anything the user should hear. */
 		run: async (name, args, ctx) => {
