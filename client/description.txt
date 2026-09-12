@@ -1,0 +1,9 @@
+Mike is your own AI, on your own server, in your glasses.
+
+Talk to him hands-free through the G2 microphone. Say "Mike" and he answers; say what you want done and he puts a worker on it — a Claude Code session with a name, a model and a working directory of its own. Start workers, switch between them, ask what they are doing, and read their answers on the lens, one page at a time, with a swipe for more.
+
+Everything runs on a machine you control. Speech is transcribed on your server, never sent anywhere else, and the only thing this app talks to is that server — paired once by scanning the QR code it prints.
+
+Voice commands work in every mode: pause and resume input, switch between by-name, always and hold-to-talk, turn the microphone or the display on and off, and "null program" to stop whatever is running and wait.
+
+Requires a Mike server (open source) and a Claude subscription. Mycroft Holmes IV would approve.
