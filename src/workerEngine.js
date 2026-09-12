@@ -248,13 +248,16 @@ export function createClaudeWorkerEngine({
 	/** True once the CLI has actually created this worker's session, so a later
 	 *  turn resumes instead of trying to create it again.
 	 *
-	 *  This is read off the transcript rather than an in-memory flag because it
-	 *  has to survive a restart: `--session-id <existing>` fails, and a worker
-	 *  that was talked to before the restart would be unreachable afterwards —
-	 *  which is exactly R3.6's "coming back resumes where it left off". A meta
-	 *  entry rather than "has an assistant turn", because a turn can fail after
-	 *  the session exists and before anything was said. */
-	const sessionExists = (worker) => thread(worker).some((e) => e.role === "meta" && e.text === "session-created");
+	 *  Kept as a field on the worker record itself (persisted by the registry's
+	 *  `touch`, same as `engineSessionId`), not read off the transcript: the
+	 *  transcript is capped at TRANSCRIPT_DEPTH, and a worker long-lived enough
+	 *  to scroll its "session-created" meta entry out of that window would
+	 *  otherwise look brand new again and retry `--session-id` on an id the CLI
+	 *  already has — which fails with "already in use" instead of resuming.
+	 *  The transcript scan is kept as a fallback for records written before
+	 *  this flag existed. */
+	const sessionExists = (worker) => worker.sessionCreated === true
+		|| thread(worker).some((e) => e.role === "meta" && e.text === "session-created");
 
 	const turn = async (worker, text) => {
 		const first = !sessionExists(worker);
@@ -278,7 +281,10 @@ export function createClaudeWorkerEngine({
 		// that was never created; and an API error — which arrives as exit 0
 		// with is_error set, after the session exists — must be, or every later
 		// turn tries to create it again and fails with "already exists".
-		if (first && (r.ok || r.sessionId)) append(worker, "meta", "session-created");
+		if (first && (r.ok || r.sessionId)) {
+			worker.sessionCreated = true;
+			append(worker, "meta", "session-created");
+		}
 
 		if (!r.ok) {
 			log?.warn(`worker ${worker.name} turn failed (${r.kind}): ${r.error}`);
