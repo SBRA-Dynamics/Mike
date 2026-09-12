@@ -101,7 +101,7 @@ try {
 	};
 
 	for (const [name, text] of Object.entries(cases)) {
-		const f = renderLens({ from: "Jarvis", text, page: 0 });
+		const f = renderLens({ from: "Mike", text, page: 0 });
 		check(`${name}: exakt ${LENS.rows} rader`, f.lines.length === LENS.rows, `${f.lines.length}`);
 		check(`${name}: ingen rad spränger 50 kolumner eller 576 px`, budgetBreak(f.lines) === null, budgetBreak(f.lines) ?? "");
 	}
@@ -129,11 +129,11 @@ try {
 		// Long enough to need more than the nine body rows — which the previous
 		// sample was not, and the test said so.
 		const LONGER = LONG + " Filen heter src/handler.js och den ändringen rör bara den ena grenen, så det går att göra i två steg om du vill ha något att läsa igenom innan resten. Jag kan också lämna den som den är och bara skriva ned vad som skulle behöva göras.";
-		const f0 = renderLens({ from: "Jarvis", text: LONGER, page: 0 });
+		const f0 = renderLens({ from: "Mike", text: LONGER, page: 0 });
 		check("ett långt svar blir flera sidor", f0.pages > 1, `${f0.pages} sidor`);
 		check("första sidan säger att det finns mer", f0.header.includes("↓") && f0.header.includes(`1/${f0.pages}`), f0.header);
 
-		const last = renderLens({ from: "Jarvis", text: LONGER, page: f0.pages - 1 });
+		const last = renderLens({ from: "Mike", text: LONGER, page: f0.pages - 1 });
 		check("sista sidan säger att det finns något ovanför", last.header.includes("↑"), last.header);
 		check("sista sidan lovar inte mer nedanför", !last.header.includes("↓"), last.header);
 
@@ -141,7 +141,7 @@ try {
 		// difference between "readable through tap or swipe" and "truncated".
 		const wrapped = wrapText(LONGER);
 		const paged = [];
-		for (let p = 0; p < f0.pages; p++) paged.push(...renderLens({ from: "Jarvis", text: LONGER, page: p }).lines.slice(1));
+		for (let p = 0; p < f0.pages; p++) paged.push(...renderLens({ from: "Mike", text: LONGER, page: p }).lines.slice(1));
 		const words = (s) => s.split(/\s+/).filter(Boolean);
 		check("varje rad från radbrytningen finns på någon sida",
 			wrapped.every((line) => paged.includes(line)), `${wrapped.length} rader`);
@@ -155,14 +155,14 @@ try {
 	}
 
 	check("ett sidnummer bortom slutet klampas i stället för att visa tomt",
-		renderLens({ from: "Jarvis", text: "kort", page: 99 }).page === 0);
+		renderLens({ from: "Mike", text: "kort", page: 99 }).page === 0);
 	check("ett kort svar har ingen sidräknare i rubriken",
-		!renderLens({ from: "Jarvis", text: "kort", page: 0 }).header.includes("1/"));
+		!renderLens({ from: "Mike", text: "kort", page: 0 }).header.includes("1/"));
 
 	{
 		// A word that cannot fit on a line of its own is broken by us, where the
 		// preview can show it, rather than by the firmware where it cannot.
-		const f = renderLens({ from: "Jarvis", text: "y".repeat(120), page: 0 });
+		const f = renderLens({ from: "Mike", text: "y".repeat(120), page: 0 });
 		const body = f.lines.slice(1).filter(Boolean);
 		check("ett för långt ord bryts i stället för att skjutas ut ur linsen",
 			body.length >= 2 && body.join("").startsWith("y".repeat(60)), JSON.stringify(body.slice(0, 2)));
@@ -180,30 +180,30 @@ try {
 		let n = 0;
 		const feed = (m) => s.apply({ ...m, seq: ++n });
 
-		feed({ type: "text", from: "Jarvis", text: "Hej." });
-		check("utan arbetare står Jarvis överst", s.state.lens.from === "Jarvis", s.state.lens.from);
+		feed({ type: "text", from: "Mike", text: "Hej." });
+		check("utan arbetare står Mike överst", s.state.lens.from === "Mike", s.state.lens.from);
 
-		// Jarvis skapar en arbetare: hans bekräftelse, sedan turens state.
-		feed({ type: "text", from: "Jarvis", text: "Bosse är igång." });
+		// Mike skapar en arbetare: hans bekräftelse, sedan turens state.
+		feed({ type: "text", from: "Mike", text: "Bosse är igång." });
 		feed({ type: "state", busy: false, worker: "Bosse", mode: "byname" });
 		check("efter att en arbetare skapats står arbetaren överst", s.state.lens.from === "Bosse", s.state.lens.from);
 		check("och texten står kvar", /Bosse är igång/.test(s.state.lens.text), s.state.lens.text);
 
-		// Ett inpass från Jarvis mitt i: samma arbetare kvar.
-		feed({ type: "text", from: "Jarvis", text: "Den läser om filerna." });
+		// Ett inpass från Mike mitt i: samma arbetare kvar.
+		feed({ type: "text", from: "Mike", text: "Den läser om filerna." });
 		feed({ type: "state", busy: false, worker: "Bosse", mode: "byname" });
-		check("Jarvis inpass hamnar inte under arbetarens namn", s.state.lens.from === "Jarvis", s.state.lens.from);
+		check("Mike inpass hamnar inte under arbetarens namn", s.state.lens.from === "Mike", s.state.lens.from);
 
-		feed({ type: "text", from: "Jarvis", text: "Nu pratar du med Kalle." });
+		feed({ type: "text", from: "Mike", text: "Nu pratar du med Kalle." });
 		feed({ type: "state", busy: false, worker: "Kalle", mode: "byname" });
 		check("vid växling står den nya arbetaren överst", s.state.lens.from === "Kalle", s.state.lens.from);
 
 		feed({ type: "state", busy: false, worker: null, mode: "byname" });
-		check("när arbetaren avslutas står Jarvis överst igen", s.state.lens.from === "Jarvis", s.state.lens.from);
+		check("när arbetaren avslutas står Mike överst igen", s.state.lens.from === "Mike", s.state.lens.from);
 	}
 
 	// R3.6 on the lens: switching back to somebody is not a new conversation, so
-	// what you see is where it left off — not Jarvis's sentence announcing the
+	// what you see is where it left off — not Mike's sentence announcing the
 	// switch, which is the one thing the user already knows.
 	section("växling visar arbetarens samtal, inte bekräftelsen");
 	{
@@ -214,7 +214,7 @@ try {
 		feed({ type: "event", kind: "workerSwitched",
 			data: { active: "Bosse", worker: { name: "Bosse", model: "sonnet", cwd: "/tmp" },
 				last: { from: "Bosse", text: "Jag hittade felet i BLE-koden." } } });
-		feed({ type: "text", from: "Jarvis", text: "Nu pratar du med Bosse." });
+		feed({ type: "text", from: "Mike", text: "Nu pratar du med Bosse." });
 		feed({ type: "state", busy: false, worker: "Bosse", mode: "byname" });
 		check("linsen visar det Bosse sa, inte bekräftelsen",
 			s.state.lens.text === "Jag hittade felet i BLE-koden.", s.state.lens.text);
@@ -223,15 +223,15 @@ try {
 		// En arbetare som aldrig sagt något har ingenting att återuppta.
 		feed({ type: "event", kind: "workerSpawned",
 			data: { active: "Kalle", worker: { name: "Kalle", model: "sonnet", cwd: "/tmp" } } });
-		feed({ type: "text", from: "Jarvis", text: "Kalle är igång." });
+		feed({ type: "text", from: "Mike", text: "Kalle är igång." });
 		feed({ type: "state", busy: false, worker: "Kalle", mode: "byname" });
-		check("en ny arbetare behåller Jarvis besked", /Kalle är igång/.test(s.state.lens.text), s.state.lens.text);
+		check("en ny arbetare behåller Mike besked", /Kalle är igång/.test(s.state.lens.text), s.state.lens.text);
 		check("men namnet är den nyas", s.state.lens.from === "Kalle", s.state.lens.from);
 
 		// Det återupptagna får inte dyka upp igen vid en senare, orelaterad växling.
 		feed({ type: "event", kind: "workerSwitched",
 			data: { active: "Doris", worker: { name: "Doris", model: "sonnet", cwd: "/tmp" }, last: null } });
-		feed({ type: "text", from: "Jarvis", text: "Nu pratar du med Doris." });
+		feed({ type: "text", from: "Mike", text: "Nu pratar du med Doris." });
 		feed({ type: "state", busy: false, worker: "Doris", mode: "byname" });
 		check("ett gammalt återupptagande läcker inte in", /Doris/.test(s.state.lens.text), s.state.lens.text);
 	}
@@ -291,8 +291,8 @@ try {
 	section("modellen: linsen och telefonen läser samma tillstånd (R4.4)");
 	{
 		const s = new Store();
-		s.apply({ type: "text", text: "Hej, jag är här.", from: "jarvis", seq: 1 });
-		check("text hamnar på linsen med avsändare", s.state.lens.from === "jarvis" && s.state.lens.text === "Hej, jag är här.");
+		s.apply({ type: "text", text: "Hej, jag är här.", from: "mike", seq: 1 });
+		check("text hamnar på linsen med avsändare", s.state.lens.from === "mike" && s.state.lens.text === "Hej, jag är här.");
 		check("och i transkriptet", s.state.transcript.at(-1).text === "Hej, jag är här.");
 
 		s.setPage(2);
@@ -320,7 +320,7 @@ try {
 			s.state.workers.some((w) => w.name === "Kalle"));
 
 		const before = s.state.transcript.length;
-		s.applyHistory([{ type: "text", text: "gammalt", from: "jarvis", seq: 1 }]);
+		s.applyHistory([{ type: "text", text: "gammalt", from: "mike", seq: 1 }]);
 		check("historik ersätter transkriptet i stället för att lägga till",
 			s.state.transcript.length === 1 && before > 1, `${before} -> ${s.state.transcript.length}`);
 	}
@@ -332,7 +332,7 @@ try {
 		// looks exactly like nothing happening. One representative message per
 		// S2C value, and every one of them has to move the model.
 		const samples = {
-			[S2C.TEXT]: { type: "text", text: "ett svar", from: "jarvis", seq: 1 },
+			[S2C.TEXT]: { type: "text", text: "ett svar", from: "mike", seq: 1 },
 			[S2C.STATE]: { type: "state", busy: true, worker: "Bosse", mode: "always", seq: 2 },
 			[S2C.HEARD]: { type: "heard", text: "det jag sa", confidence: 0.9, seq: 3 },
 			[S2C.EVENT]: { type: "event", kind: "workerSwitched", data: { active: "Kalle" }, seq: 4 },
@@ -378,7 +378,7 @@ try {
 			check("en nyskapad arbetare hamnar i listan", names(st) === "Bosse", names(st));
 			check("och är den man pratar med", st.state.worker === "Bosse", String(st.state.worker));
 			// Det som gick fel: listan erbjöd alla utom den aktiva, så väljaren
-			// visade "Jarvis" medan orden gick till Bosse.
+			// visade "Mike" medan orden gick till Bosse.
 			check("väljaren kan alltså visa den aktiva",
 				st.state.workers.some((w) => w.name === st.state.worker), names(st));
 			ended(st, "Bosse");
@@ -450,8 +450,8 @@ try {
 			st.apply({ type: "state", busy: false, worker: "Kalle", mode: MODES.BYNAME, seq: 1 });
 			ended(st, "Kalle", null);
 			st.apply({ type: "state", busy: false, worker: null, mode: MODES.BYNAME, seq: 2 });
-			check("att avsluta den man talar med lämnar tillbaka en till Jarvis på linsen",
-				st.state.lens.from === "Jarvis" && st.state.worker === null,
+			check("att avsluta den man talar med lämnar tillbaka en till Mike på linsen",
+				st.state.lens.from === "Mike" && st.state.worker === null,
 				JSON.stringify({ from: st.state.lens.from, worker: st.state.worker }));
 
 			const st2 = new Store();
@@ -510,7 +510,7 @@ try {
 			// And ready's own list survives a replay that mentions nobody.
 			const st = new Store();
 			st.applyReady(ready([worker("Kalle")]));
-			st.applyHistory([{ type: "text", text: "hej", from: "jarvis", seq: 1 }]);
+			st.applyHistory([{ type: "text", text: "hej", from: "mike", seq: 1 }]);
 			check("det ready sa står kvar efter en historik", names(st) === "Kalle", names(st));
 		}
 
@@ -521,7 +521,7 @@ try {
 			// bug this mechanism was written to solve in the first place.
 			const st = new Store();
 			st.applyReady(ready([]));
-			st.applyHistory([{ type: "text", text: "hej", from: "jarvis", seq: 1 }]);
+			st.applyHistory([{ type: "text", text: "hej", from: "mike", seq: 1 }]);
 			st.apply({ type: "event", kind: "workerSwitched", data: { active: "Nina", worker: worker("Nina") }, seq: 2 });
 			check("men en arbetare som skapas live syns fortfarande direkt", names(st) === "Nina", names(st));
 			st.apply({ type: "event", kind: "workerEnded", data: { worker: worker("Nina"), active: null }, seq: 3 });
@@ -532,7 +532,7 @@ try {
 	section("modellen: sidvändning (R4.3)");
 	{
 		const s = new Store();
-		s.apply({ type: "text", text: "x", from: "jarvis", seq: 1 });
+		s.apply({ type: "text", text: "x", from: "mike", seq: 1 });
 		check("sidvändning nedåt över sista sidan gör ingenting", s.turnPage(1, 1) === false);
 		check("sidvändning uppåt från första sidan gör ingenting", s.turnPage(-1, 3) === false);
 		check("sidvändning inom svaret flyttar sidan", s.turnPage(1, 3) === true && s.state.lens.page === 1);
@@ -819,7 +819,7 @@ try {
 		check("systemhändelser får fortfarande synas",
 			isAudioChatter(["[EvenAppBridge] EvenHub event:", { sysEvent: { sysType: 9 } }]) === false);
 		check("och allt annat i konsolen är orört",
-			isAudioChatter(["[jarvis] client up 0.3.2"]) === false
+			isAudioChatter(["[mike] client up 0.3.2"]) === false
 			&& isAudioChatter(["something", { audioEvent: {} }]) === false);
 		// The old shape, so nobody "simplifies" back to it.
 		check("den gamla formen var aldrig sann",
@@ -827,7 +827,7 @@ try {
 	}
 
 	section("adressen: klienten vet var servern finns utan konfiguration (R4.1)");
-	check("https blir wss", wsUrlFrom("https://jarvis.example.se/") === "wss://jarvis.example.se/ws");
+	check("https blir wss", wsUrlFrom("https://mike.example.se/") === "wss://mike.example.se/ws");
 	check("http blir ws och porten följer med", wsUrlFrom("http://127.0.0.1:3460/x?y=1") === "ws://127.0.0.1:3460/ws");
 	check("frågesträngen följer inte med in i socket-adressen", !wsUrlFrom("http://h/?token=hemligt").includes("hemligt"));
 	check("token kan komma in i länken en gång", readUrlSettings("http://h/?token=abc").token === "abc");
@@ -863,11 +863,11 @@ try {
 				const m = JSON.parse(data.toString());
 				if (m.type !== "hello") return;
 				ws.send(JSON.stringify({ type: "ready", sessionId: "11111111-2222-4333-8444-555555555555", cursor: 0, protocol: 1, worker: null, workers: [], mode: "byname", resumed: false, missed: 0, gap: false }));
-				ws.send(JSON.stringify({ type: "text", text: "ett", from: "jarvis", seq: 1 }));
-				ws.send(JSON.stringify({ type: "text", text: "två", from: "jarvis", seq: 2 }));
-				ws.send(JSON.stringify({ type: "text", text: "ett igen", from: "jarvis", seq: 1 }));   // efterslängen
-				ws.send(JSON.stringify({ type: "text", text: "två igen", from: "jarvis", seq: 2 }));
-				ws.send(JSON.stringify({ type: "text", text: "tre", from: "jarvis", seq: 3 }));
+				ws.send(JSON.stringify({ type: "text", text: "ett", from: "mike", seq: 1 }));
+				ws.send(JSON.stringify({ type: "text", text: "två", from: "mike", seq: 2 }));
+				ws.send(JSON.stringify({ type: "text", text: "ett igen", from: "mike", seq: 1 }));   // efterslängen
+				ws.send(JSON.stringify({ type: "text", text: "två igen", from: "mike", seq: 2 }));
+				ws.send(JSON.stringify({ type: "text", text: "tre", from: "mike", seq: 3 }));
 			});
 		});
 

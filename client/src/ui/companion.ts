@@ -45,8 +45,8 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = ""):
 
 /** Stamped in at build time (vite.config.ts), same as in main.ts: the bar says
  *  which build the phone is actually running, where it can be read out loud. */
-declare const __JARVIS_VERSION__: string;
-const VERSION = typeof __JARVIS_VERSION__ === "string" ? __JARVIS_VERSION__ : "dev";
+declare const __MIKE_VERSION__: string;
+const VERSION = typeof __MIKE_VERSION__ === "string" ? __MIKE_VERSION__ : "dev";
 
 const STATUS_TEXT: Record<string, string> = {
 	idle: "idle",
@@ -72,7 +72,7 @@ const LISTENING_TEXT: Record<ListeningState, string> = {
  *  `Always` here means every word spoken in the room reaches a model. */
 const MODE_NOTE: Record<string, string> = {
 	[MODES.IGNORE]: "Listening, and dropping everything except the mode commands.",
-	[MODES.BYNAME]: "Only what starts with “Jarvis” or the worker’s name is sent on.",
+	[MODES.BYNAME]: "Only what starts with “Mike” or the worker’s name is sent on.",
 	[MODES.ALWAYS]: "Everything spoken in the room reaches a model. A desk microphone cannot tell you from the room.",
 	[MODES.PUSHTOTALK]: "The microphone is off until you hold the button."
 };
@@ -102,7 +102,7 @@ export class Companion {
 	#buildBar(): HTMLElement {
 		const bar = el("header", "bar");
 		const dot = el("span", "dot");
-		const title = el("h1", "", "Jarvis");
+		const title = el("h1", "", "Mike");
 		const status = el("span", "chip");
 		const worker = el("span", "chip worker");
 		const glasses = el("span", "chip");
@@ -163,7 +163,7 @@ export class Companion {
 		const form = el("form", "composer");
 		const input = el("input");
 		input.type = "text";
-		input.placeholder = "Say something to Jarvis…";
+		input.placeholder = "Say something to Mike…";
 		input.autocomplete = "off";
 		// Dictation on a phone keyboard capitalises and punctuates; the server
 		// folds that away (routing.js), so nothing is done to it here.
@@ -350,7 +350,7 @@ export class Companion {
 			: STATUS_TEXT[state.connection] ?? state.connection;
 		n.status.classList.toggle("warn", state.connection === "fatal" || state.connection === "offline");
 
-		n.worker.textContent = state.worker ? `▸ ${state.worker}` : "▸ Jarvis";
+		n.worker.textContent = state.worker ? `▸ ${state.worker}` : "▸ Mike";
 		n.glasses.textContent = state.glasses === "attached" ? "glasses" : "companion only";
 		n.glasses.classList.toggle("warn", state.glasses !== "attached");
 
@@ -456,9 +456,9 @@ export class Companion {
 		if (select.dataset.names !== wanted) {
 			select.dataset.names = wanted;
 			select.replaceChildren();
-			const jarvis = el("option", "", "Jarvis");
-			jarvis.value = "";
-			select.append(jarvis);
+			const mike = el("option", "", "Mike");
+			mike.value = "";
+			select.append(mike);
 			for (const w of state.workers) {
 				const o = el("option", "", w.model ? `${w.name} (${w.model})` : w.name);
 				o.value = w.name;

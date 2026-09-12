@@ -7,12 +7,12 @@
        {{name}}      the spoken name the user gave it
        {{model}}     opus / sonnet / haiku / fable
        {{cwd}}       its working directory
-       {{systemPrompt}}  the worker-specific instructions Jarvis wrote for
+       {{systemPrompt}}  the worker-specific instructions Mike wrote for
                          this one — what it is responsible for — or empty
 
      This comment is stripped before the prompt is sent.
 
-     What must NOT go in here: the words worker, Jarvis, orchestrator, or
+     What must NOT go in here: the words worker, Mike, orchestrator, or
      anything else about how the system is put together. PRD 3 is deliberate
      about that — a session told it is one of several starts discussing the
      arrangement instead of doing the job. Everything below is about the medium

@@ -1,10 +1,10 @@
-# Jarvis — overview and phase map
+# Mike — overview and phase map
 
 ## What this is
 
 A voice-first assistant that runs on Robin's own machine and is used through
 Even Realities G2 smart glasses, a phone, or a desktop browser. You talk to one
-persistent agent — **Jarvis** — who orchestrates a set of **workers**: real
+persistent agent — **Mike** — who orchestrates a set of **workers**: real
 Claude Code sessions doing the actual work.
 
 Everything runs on hardware Robin owns. No third-party tunnel, no hosted
@@ -27,14 +27,14 @@ These are settled and not revisited by the phase PRDs:
 1. Start a conversation with Claude Code **on the PC or in the glasses**
 2. Continue it **hands-free** in the glasses — no push-to-talk
 3. **Switch between PC and glasses inside the same conversation**
-4. A main agent, **Jarvis**, who is always the same conversation and acts as the
-   menu: starting or resuming a session means talking to Jarvis
-5. Ask Jarvis to **switch the current conversation to a new worker with a model
+4. A main agent, **Mike**, who is always the same conversation and acts as the
+   menu: starting or resuming a session means talking to Mike
+5. Ask Mike to **switch the current conversation to a new worker with a model
    I name**, or to resume an existing one
-6. **Jarvis always sees the worker conversation** and acts when addressed —
-   saying *"Jarvis, start a new worker called Bosse"* mid-conversation must
+6. **Mike always sees the worker conversation** and acts when addressed —
+   saying *"Mike, start a new worker called Bosse"* mid-conversation must
    create it and switch the active conversation to it
-7. Ask Jarvis to **run shell commands mid-conversation**, using conversational
+7. Ask Mike to **run shell commands mid-conversation**, using conversational
    context — *"list the files in the folder we are talking about"*
 
 ## Phases
@@ -42,8 +42,8 @@ These are settled and not revisited by the phase PRDs:
 | PRD | Scope | Main risk |
 |---|---|---|
 | **1** | Server foundation: TLS, HTTP, WebSocket, static hosting, wire protocol, auth, ops | A long-lived stream being cut by the runtime |
-| **2** | MCP server in the same process: the tool surface Jarvis acts through | Getting tool calls back into a running server |
-| **3** | Jarvis + workers: identity, routing, context injection, handoff, end-to-end tests | Routing correctness; Jarvis doing the work himself |
+| **2** | MCP server in the same process: the tool surface Mike acts through | Getting tool calls back into a running server |
+| **3** | Mike + workers: identity, routing, context injection, handoff, end-to-end tests | Routing correctness; Mike doing the work himself |
 | **4** | Even Hub SDK client: lens view + companion view | Lens is 50×10; everything must fit |
 | **5a** | Voice from the browser: capture, VAD, segments, server-side STT, addressing modes | Whisper latency, VAD splitting sentences |
 | **5b** | Voice from the glasses: the G2 mic array as a source for 5a's pipeline | Battery, bandwidth, speakerRole accuracy |
@@ -64,7 +64,7 @@ unaffected and the product still works.
 ```
    glasses (lens)  ◄── SDK ──┐
                              │
-   phone / browser  ────► Even Hub plugin ──WSS──► Jarvis server ──► Claude Code
+   phone / browser  ────► Even Hub plugin ──WSS──► Mike server ──► Claude Code
         (mic, text)                                    │              (workers)
                                                        ├──► MCP tools
                                                        └──► whisper (STT)
@@ -87,7 +87,7 @@ Carried over from the exploratory work; these are measured, not assumed.
 - Dictation never produces `/`, capitalises the first word, and appends a full
   stop. Any text arriving from voice needs normalisation before use.
 - Claude Code supports `--session-id`, `--resume`, `--model`, `--mcp-config`
-  and `--append-system-prompt`, which is what makes workers and Jarvis possible
+  and `--append-system-prompt`, which is what makes workers and Mike possible
   without inventing an agent runtime.
 
 ## Non-goals

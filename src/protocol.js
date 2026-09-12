@@ -37,7 +37,7 @@ export const CONTROL = {
 	// to the handler rather than answering them itself — but they live here
 	// because R1.6 says one shared schema file, and the client imports this one.
 	SET_MODE: "setMode",            // { mode: "ignore" | "byname" | "always" | "pushtotalk" }
-	SWITCH_WORKER: "switchWorker",  // { name } or { name: null } to go back to Jarvis
+	SWITCH_WORKER: "switchWorker",  // { name } or { name: null } to go back to Mike
 	WHO_IS: "whoIs"                 // { name? } -> the worker's Claude Code session id
 };
 

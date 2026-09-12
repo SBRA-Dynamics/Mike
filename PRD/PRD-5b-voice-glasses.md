@@ -129,7 +129,7 @@ practical, this phase becomes the touchpad and the filter, and PRD 5a's
 
 ## Acceptance criteria
 
-1. Speaking "Jarvis, what time is it" with hands busy produces an answer on the
+1. Speaking "Mike, what time is it" with hands busy produces an answer on the
    lens without touching anything
 2. Another person talking nearby does not produce a turn
 3. The wearer talking to that person does not produce a turn

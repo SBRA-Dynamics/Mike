@@ -2,7 +2,7 @@
 //
 //   node test/prd4-lens.mjs [--no-build] [--keep]
 //
-// The Even Hub simulator runs the BUILT client, served by a real Jarvis server,
+// The Even Hub simulator runs the BUILT client, served by a real Mike server,
 // and its automation API hands back the actual glasses framebuffer, the
 // WebView's console, and injected touchpad gestures. That makes most of the
 // lens half of this PRD testable without hardware, which is the difference
@@ -129,7 +129,7 @@ try {
 
 	// ------------------------------------------------------------------ start
 	section("värden: klienten hittar Even-appen genom Flutter-kanalen (R4.6)");
-	const ready = await waitUntil(async () => (await consoleEntries()).find((e) => e.message.includes("[jarvis] client up")), 40_000, "klientens startrad");
+	const ready = await waitUntil(async () => (await consoleEntries()).find((e) => e.message.includes("[mike] client up")), 40_000, "klientens startrad");
 	check("klienten startar i simulatorn", !!ready, ready?.message);
 	check("och ser att den har glasögon — inte en stubbe", /glasses attached/.test(ready.message), ready.message);
 
@@ -239,7 +239,7 @@ try {
 	const relit = await shot("12-tapp-tander-igen");
 	check("en tapp tänder den igen", litPixels(relit) > 0, `${litPixels(relit)} px tända`);
 	check("och visar svarets första sida", differingPixels(relit, wrapped) === 0, String(differingPixels(relit, wrapped)));
-	const micLines = (await consoleEntries()).filter((e) => e.message.includes("[jarvis] mic "));
+	const micLines = (await consoleEntries()).filter((e) => e.message.includes("[mike] mic "));
 	check("och rör inte mikrofonen på vägen",
 		micLines.every((e) => / live=false/.test(e.message)),
 		JSON.stringify(micLines.slice(-2).map((e) => e.message)));

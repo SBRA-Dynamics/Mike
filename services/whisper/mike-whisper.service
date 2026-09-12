@@ -1,13 +1,13 @@
 [Unit]
 # PRD 5a R5a.5. Install:
-#   sudo cp ~/jarvis/services/whisper/jarvis-whisper.service /etc/systemd/system/
-#   sudo systemctl daemon-reload && sudo systemctl enable --now jarvis-whisper
+#   sudo cp ~/mike/services/whisper/mike-whisper.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now mike-whisper
 #
-# The Jarvis server defaults to http://127.0.0.1:3461 for transcription, which
+# The Mike server defaults to http://127.0.0.1:3461 for transcription, which
 # is the port below. Neither one starts the other: the model takes a couple of
 # seconds to load and should outlive a server restart, and a server whose ears
 # are not up says so in one line rather than refusing to run.
-Description=Jarvis transcription service (whisper on the GPU)
+Description=Mike transcription service (whisper on the GPU)
 After=network-online.target
 Wants=network-online.target
 

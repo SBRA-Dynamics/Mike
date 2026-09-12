@@ -1,4 +1,4 @@
-// Jarvis — PRD 3.
+// Mike — PRD 3.
 //
 // One Claude Code session, one stable id, never replaced, never forked, alive
 // across restarts. He is not a session per client: every connected device talks
@@ -16,7 +16,7 @@
 //
 // His turns are serialised for the same reason a worker's are: T1 measured two
 // drivers of one session forking it and losing a turn with no error anywhere.
-// Two devices asking Jarvis something at the same moment is the ordinary case,
+// Two devices asking Mike something at the same moment is the ordinary case,
 // not the exotic one, so the queue is load-bearing.
 
 import { randomUUID } from "node:crypto";
@@ -38,11 +38,11 @@ export const DEFAULT_CONTEXT_TURNS = 6;
 export const DEFAULT_CONTEXT_BUDGET_TOKENS = 1200;
 const CHARS_PER_TOKEN = 4;
 
-/** The built-in tools Jarvis is allowed, on top of the MCP tools. PRD 2 is
+/** The built-in tools Mike is allowed, on top of the MCP tools. PRD 2 is
  *  explicit that shell is not a tool of ours — he is a Claude Code session and
  *  already has Bash, and a second path to the same capability only creates
  *  ambiguity about which one he should reach for. R3.4 needs this one. */
-export const JARVIS_BUILTIN_TOOLS = ["Bash", "Read", "Glob", "Grep"];
+export const MIKE_BUILTIN_TOOLS = ["Bash", "Read", "Glob", "Grep"];
 
 /** A worker's answer can be arbitrarily long; the quote of it must not be. */
 const QUOTE_LIMIT = 600;
@@ -95,7 +95,7 @@ export function composePrompt(text, context) {
 
 /** His id on disk. One small file, rewritten whole through a temp file, the
  *  same shape and reasoning as SessionStore's meta. */
-class JarvisIdentity {
+class MikeIdentity {
 	constructor(file, log) {
 		this.file = file;
 		this.log = log;
@@ -105,9 +105,9 @@ class JarvisIdentity {
 			this.state.sessionId = randomUUID();
 			this.state.createdAt = Date.now();
 			this.#save();
-			log?.info(`jarvis: new session ${this.state.sessionId}`);
+			log?.info(`mike: new session ${this.state.sessionId}`);
 		} else {
-			log?.info(`jarvis: resuming session ${this.state.sessionId} (${this.state.turns} turns)`);
+			log?.info(`mike: resuming session ${this.state.sessionId} (${this.state.turns} turns)`);
 		}
 	}
 	get sessionId() { return this.state.sessionId; }
@@ -123,9 +123,9 @@ class JarvisIdentity {
 			// Claude Code's own store. It is ours and it is a uuid; anything else
 			// on disk is a corrupt file, and starting fresh is the safe reading.
 			if (typeof p?.sessionId === "string" && /^[0-9a-f-]{36}$/i.test(p.sessionId)) this.state = { ...this.state, ...p };
-			else this.log?.warn(`jarvis: ${this.file} has no usable session id; starting a new conversation`);
+			else this.log?.warn(`mike: ${this.file} has no usable session id; starting a new conversation`);
 		} catch (e) {
-			this.log?.error(`jarvis: could not read ${this.file}: ${e.message}; starting a new conversation`);
+			this.log?.error(`mike: could not read ${this.file}: ${e.message}; starting a new conversation`);
 		}
 	}
 	#save() {
@@ -134,7 +134,7 @@ class JarvisIdentity {
 			mkdirSync(dirname(this.file), { recursive: true });
 			writeFileSync(tmp, JSON.stringify(this.state));
 			renameSync(tmp, this.file);
-		} catch (e) { this.log?.error(`jarvis: could not persist identity: ${e.message}`); }
+		} catch (e) { this.log?.error(`mike: could not persist identity: ${e.message}`); }
 	}
 }
 
@@ -147,7 +147,7 @@ class JarvisIdentity {
 // --------------------------------------------------------------------- agent
 
 /**
- * Build Jarvis.
+ * Build Mike.
  *
  * `mcp` is the PRD 2 tool server: a grant is minted per turn and bound to the
  * session the utterance came from, which is what lets `spawn_worker` switch
@@ -155,7 +155,7 @@ class JarvisIdentity {
  * command line of a child process we spawn ourselves and never reaches a
  * client.
  */
-export function createJarvis({
+export function createMike({
 	log, dataDir, mcp, registry, engine,
 	bin = "claude", runner, tracker = new ChildTracker(),
 	model = "opus", cwd = process.cwd(), promptFile,
@@ -163,9 +163,9 @@ export function createJarvis({
 	contextBudgetTokens = DEFAULT_CONTEXT_BUDGET_TOKENS,
 	timeoutMs, env
 } = {}) {
-	if (!dataDir) throw new Error("createJarvis needs a dataDir");
-	const identity = new JarvisIdentity(join(dataDir, "jarvis.json"), log);
-	const prompt = new PromptFile(promptFile ?? join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "jarvis.md"), log, "jarvis prompt");
+	if (!dataDir) throw new Error("createMike needs a dataDir");
+	const identity = new MikeIdentity(join(dataDir, "mike.json"), log);
+	const prompt = new PromptFile(promptFile ?? join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "mike.md"), log, "mike prompt");
 	const cli = runner ?? createClaudeRunner({ bin, log, tracker, timeoutMs, env });
 
 	let queue = Promise.resolve();
@@ -187,7 +187,7 @@ export function createJarvis({
 		// hour would be fine except that the grant table evicts the oldest when
 		// it fills, and an hour of busy use is more turns than it holds — which
 		// would evict a grant out from under a turn still running on it.
-		const grant = mcp.mintGrant({ sessionId: session.id, role: "jarvis", ttlMs: (timeoutMs ?? 600_000) + 60_000 });
+		const grant = mcp.mintGrant({ sessionId: session.id, role: "mike", ttlMs: (timeoutMs ?? 600_000) + 60_000 });
 		const first = !identity.started;
 		const context = contextFor(session);
 
@@ -199,8 +199,8 @@ export function createJarvis({
 			appendSystemPrompt: prompt.read() || undefined,
 			mcpConfig: grant.config,
 			allowedTools: [
-				...JARVIS_BUILTIN_TOOLS,
-				...mcp.allowedToolNames("jarvis")
+				...MIKE_BUILTIN_TOOLS,
+				...mcp.allowedToolNames("mike")
 			],
 			onSpawn: (c) => { child = c; },
 			// PRD 6: the turn is read as it is written, so the lens can stop
@@ -213,18 +213,18 @@ export function createJarvis({
 		// having named the session rather than of the turn having worked. An API
 		// error arrives as exit 0 with is_error set, and by then the session
 		// exists — so retrying the next turn with --session-id would fail
-		// forever with "already exists", and Jarvis would be unreachable because
+		// forever with "already exists", and Mike would be unreachable because
 		// of one bad minute at Anthropic.
 		if (first && (r.ok || r.sessionId)) identity.markStarted();
 
 		if (!r.ok) {
-			log?.warn(`jarvis turn failed (${r.kind}): ${r.error}`);
+			log?.warn(`mike turn failed (${r.kind}): ${r.error}`);
 			const e = new Error(r.error || "I could not answer that");
 			e.kind = r.kind;
 			throw e;
 		}
 		identity.countTurn();
-		log?.info(`jarvis turn ok in ${r.durationMs}ms cost=$${(r.costUsd ?? 0).toFixed(4)} context=${context ? "worker" : "none"} session=${session.id.slice(0, 8)}`);
+		log?.info(`mike turn ok in ${r.durationMs}ms cost=$${(r.costUsd ?? 0).toFixed(4)} context=${context ? "worker" : "none"} session=${session.id.slice(0, 8)}`);
 		return { text: r.text, durationMs: r.durationMs, costUsd: r.costUsd, hadContext: !!context };
 	};
 
@@ -252,7 +252,7 @@ export function createJarvis({
 			child.interrupted = true;
 			try { child.kill("SIGKILL"); } catch { }
 			child = null;
-			log?.info("jarvis interrupted");
+			log?.info("mike interrupted");
 			return true;
 		},
 

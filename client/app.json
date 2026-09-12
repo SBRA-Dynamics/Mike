@@ -1,7 +1,7 @@
 {
-  "package_id": "se.onvo.jarvis",
+  "package_id": "se.onvo.mike",
   "edition": "202601",
-  "name": "Jarvis",
+  "name": "Mike",
   "version": "0.3.10",
   "min_app_version": "2.2.10",
   "min_sdk_version": "0.0.15",
@@ -9,7 +9,7 @@
   "permissions": [
     {
       "name": "g2-microphone",
-      "desc": "Hears what you say through the glasses, so you can talk to Jarvis with your hands busy. Audio is transcribed on your own server and never uploaded anywhere else."
+      "desc": "Hears what you say through the glasses, so you can talk to Mike with your hands busy. Audio is transcribed on your own server and never uploaded anywhere else."
     },
     {
       "name": "phone-microphone",
@@ -17,7 +17,7 @@
     },
     {
       "name": "network",
-      "desc": "Connects to your own Jarvis server, which is the only thing this app talks to. The address is yours and is set by you."
+      "desc": "Connects to your own Mike server, which is the only thing this app talks to. The address is yours and is set by you."
     },
     {
       "name": "camera",

@@ -10,12 +10,12 @@
 // They were made with, roughly:
 //
 //   pip install piper-tts && python -m piper.download_voices sv_SE-nst-medium
-//   echo "Jarvis, vad är klockan?" | python -m piper -m sv_SE-nst-medium.onnx -f u1.wav
+//   echo "Mike, vad är klockan?" | python -m piper -m sv_SE-nst-medium.onnx -f u1.wav
 //   ffmpeg -i u1.wav -ar 16000 -ac 1 -f s16le u1.raw
 //   cat tone600 u1.raw tone1200 u2.raw tone1200 u3.raw tone8000 > three.raw
 //   ffmpeg -f s16le -ar 16000 -ac 1 -i three.raw three-sv.wav
 //
-//   three-sv.wav   "Jarvis, vad är klockan?" / "Hey Jarvis, pausa input." /
+//   three-sv.wav   "Mike, vad är klockan?" / "Hey Mike, pausa input." /
 //                  "Fortsätt input.", 1.2 s apart, then 8 s of room tone
 //   pauses-sv.wav  two sentences, each spoken in pieces 350-450 ms apart —
 //                  ordinary pauses, which must not split a sentence (krav 6)
@@ -129,8 +129,8 @@ export async function startWhisperStub(script = [""], { status = 200, delayMs = 
 
 /** Where the real service's interpreter lives, if it was installed the way
  *  services/whisper/serve.py documents. */
-export const WHISPER_PYTHON = process.env.JARVIS_WHISPER_PYTHON
-	?? join(homedir(), ".local", "share", "jarvis", "venv", "bin", "python");
+export const WHISPER_PYTHON = process.env.MIKE_WHISPER_PYTHON
+	?? join(homedir(), ".local", "share", "mike", "venv", "bin", "python");
 
 export const whisperInstalled = () => existsSync(WHISPER_PYTHON);
 
@@ -141,7 +141,7 @@ export const whisperInstalled = () => existsSync(WHISPER_PYTHON);
  * ~15 s to load a model, a suite that talked to the wrong port would be a
  * fifteen-second way to learn nothing.
  */
-export async function startWhisperService({ timeoutMs = 180_000, model = process.env.JARVIS_WHISPER_MODEL } = {}) {
+export async function startWhisperService({ timeoutMs = 180_000, model = process.env.MIKE_WHISPER_MODEL } = {}) {
 	const args = [join(ROOT, "services", "whisper", "serve.py"), "--port", "0", "--quiet"];
 	if (model) args.push("--model", model);
 	const proc = spawn(WHISPER_PYTHON, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });

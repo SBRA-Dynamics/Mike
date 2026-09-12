@@ -114,7 +114,7 @@ Server to client:
 | `event` | `{ kind, data }` | worker created, switched, ended |
 | `error` | `{ message, fatal }` | something went wrong |
 
-`from` matters: the client must be able to show whether Jarvis or a worker is
+`from` matters: the client must be able to show whether Mike or a worker is
 speaking, and the lens has no room for a label unless it is short.
 
 ### R1.7 — Auth

@@ -38,7 +38,7 @@ export type LensItem = { from: string; text: string; page: number };
  */
 export type LiveTurn = {
 	id: string;
-	/** A worker's name, or "jarvis". */
+	/** A worker's name, or "mike". */
 	to: string;
 	parts: string[];
 	/** held: still gathering words. queued: sent, nothing running it yet.
@@ -71,7 +71,7 @@ export type AppState = {
 	busy: boolean;
 	workers: WorkerInfo[];
 	transcript: Entry[];
-	/** What Jarvis last did — R4.4. The `event` stream in one sentence. */
+	/** What Mike last did — R4.4. The `event` stream in one sentence. */
 	lastEvent: string | null;
 	lens: LensItem;
 	/** Set once, by the SDK layer, so the companion can say "no glasses" honestly. */
@@ -212,7 +212,7 @@ export const thinkingText = (since: number | null, now = Date.now(), doing: stri
  *  open all day should not hold a week of conversation in memory. */
 const TRANSCRIPT_LIMIT = 400;
 
-const JARVIS = "Jarvis";
+const MIKE = "Mike";
 
 export class Store {
 	/**
@@ -237,7 +237,7 @@ export class Store {
 		workers: [],
 		transcript: [],
 		lastEvent: null,
-		lens: { from: JARVIS, text: "Connecting…", page: 0 },
+		lens: { from: MIKE, text: "Connecting…", page: 0 },
 		pending: [],
 		glasses: "unknown",
 		sessions: [],
@@ -518,7 +518,7 @@ export class Store {
 		if (hidden) said.unshift(`+${hidden} earlier`);
 
 		return {
-			from: newest.to === "jarvis" ? JARVIS : newest.to,
+			from: newest.to === "mike" ? MIKE : newest.to,
 			text: [...said, ...plan, ...(doing ? [doing] : [])].join("\n"),
 			page: 0
 		};
@@ -720,7 +720,7 @@ export class Store {
 		const at = this.state.turns.find((t) => t.id === id);
 		if (!at) {
 			this.state.turns.push({
-				id, to: String(d.to ?? JARVIS), parts, phase,
+				id, to: String(d.to ?? MIKE), parts, phase,
 				plan: null, doing: null, at: now, sentAt: sent ? now : null, doingAt: now, aliveAt: now
 			});
 			return;
@@ -745,13 +745,13 @@ export class Store {
 					this.state.transcript.push({ seq: m.seq, from: m.from, text: m.text, kind: "text", at: Date.now() });
 					return;
 				}
-				this.#say(m.from === "system" ? JARVIS : m.from, m.text, "text", m.seq);
+				this.#say(m.from === "system" ? MIKE : m.from, m.text, "text", m.seq);
 				return;
 
 			case "error":
 				// Errors reach the lens: a user waiting on an answer that failed
 				// has to learn that from the device they are looking at.
-				this.#say(this.state.worker ?? JARVIS, m.message, "error", m.seq);
+				this.#say(this.state.worker ?? MIKE, m.message, "error", m.seq);
 				return;
 
 			case "state": {
@@ -768,10 +768,10 @@ export class Store {
 				// not at the next reply. Spawning or switching a worker ends the
 				// turn with a `state` carrying the new one, and until this the
 				// header kept the previous name until somebody said something —
-				// so the lens told you that you were still talking to Jarvis while
+				// so the lens told you that you were still talking to Mike while
 				// your next sentence was going to Bosse.
 				//
-				// Gated on an actual change, deliberately. Jarvis answering an
+				// Gated on an actual change, deliberately. Mike answering an
 				// aside mid-conversation ends with a `state` too, carrying the
 				// SAME worker; updating on every state would then put his words
 				// under the worker's name and misattribute them.
@@ -783,9 +783,9 @@ export class Store {
 				if (changed) {
 					// Switching back to somebody shows their conversation again
 					// (R3.6). A worker with nothing to show — one that has just
-					// been created — keeps the text on the lens, which is Jarvis
+					// been created — keeps the text on the lens, which is Mike
 					// saying it exists.
-					const who = this.#pending?.from ?? this.state.worker ?? JARVIS;
+					const who = this.#pending?.from ?? this.state.worker ?? MIKE;
 					this.state.lens = this.#pending?.text
 						? { from: this.#pending.fromName ?? who, text: this.#pending.text, page: 0 }
 						: { ...this.state.lens, from: who };
@@ -829,11 +829,11 @@ export class Store {
 
 		// Any event that names who is active may have changed the addressee —
 		// spawn, switch, end, rename. Armed here and applied at the `state` that
-		// ends the same turn, because Jarvis's own sentence about it arrives in
+		// ends the same turn, because Mike's own sentence about it arrives in
 		// between and would otherwise be the last word on the lens.
 		if ("active" in d) {
 			this.#pending = {
-				from: (d.active as string) ?? JARVIS,
+				from: (d.active as string) ?? MIKE,
 				text: d.last?.text ? String(d.last.text) : null,
 				fromName: d.last?.from ? String(d.last.from) : null
 			};
@@ -846,8 +846,8 @@ export class Store {
 				// a background worker's half-sentence would take the screen away
 				// from the one they are looking at, which is the same rule the
 				// finished answer follows.
-				const from = String(d.from ?? JARVIS);
-				const mine = from === (this.state.worker ?? "jarvis") || (from === "jarvis" && !this.state.worker);
+				const from = String(d.from ?? MIKE);
+				const mine = from === (this.state.worker ?? "mike") || (from === "mike" && !this.state.worker);
 				if (!mine) break;
 				const text = d.text ? String(d.text) : null;
 				const tool = d.tool ? String(d.tool) : null;
@@ -886,7 +886,7 @@ export class Store {
 				// The mirror image of the bug `workerEnded` fixes. A worker that
 				// has just been created IS the active one — `spawn_worker`
 				// switches as part of itself — so without this the picker offers
-				// every worker except the one being talked to, and shows "Jarvis"
+				// every worker except the one being talked to, and shows "Mike"
 				// while the words are going to Bosse. A list that disagrees with
 				// reality is the same defect whichever way it leans.
 				this.state.worker = d.active ?? this.state.worker;
@@ -897,11 +897,11 @@ export class Store {
 			case "workerSwitched":
 				this.state.worker = d.active ?? null;
 				this.#clearNotice(d.active ?? null);
-				this.state.lastEvent = d.active ? `switched to ${d.active}` : "back to Jarvis";
+				this.state.lastEvent = d.active ? `switched to ${d.active}` : "back to Mike";
 				if (d.worker?.name) this.#rememberWorker(d.worker);
 				// Where that conversation left off, sent by the server because it
 				// owns the transcripts and this client may never have seen them.
-				// Applied at the state change below, not here: Jarvis's own "now
+				// Applied at the state change below, not here: Mike's own "now
 				// talking to Kalle" arrives AFTER this event and would overwrite
 				// it, and that sentence is the one thing the user already knows.
 				break;
@@ -950,14 +950,14 @@ export class Store {
 				// talking to a paused microphone".
 				const why = this.state.mode === MODES.IGNORE
 					? `Not heard — input is ${MODE_LABEL[MODES.IGNORE]}.`
-					: "Not heard — start with Jarvis or a worker's name.";
-				this.#say(JARVIS, why, "note", m.seq);
+					: "Not heard — start with Mike or a worker's name.";
+				this.#say(MIKE, why, "note", m.seq);
 				this.state.lastEvent = "not heard";
 				break;
 			}
 
 			case "toolFailed":
-				// The one event that says Jarvis tried to act and could not.
+				// The one event that says Mike tried to act and could not.
 				this.state.lastEvent = `${d.tool} failed: ${d.summary ?? ""}`.trim();
 				break;
 

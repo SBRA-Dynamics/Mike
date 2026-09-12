@@ -25,7 +25,7 @@ const TURN_MS = 180_000;
 
 /** A working directory with a file nobody else on this machine has, so "the
  *  listing is real" is not satisfied by a hallucinated plausible name. */
-const workDir = mkdtempSync(join(tmpdir(), "jarvis-e2e-"));
+const workDir = mkdtempSync(join(tmpdir(), "mike-e2e-"));
 writeFileSync(join(workDir, "kanelbulle.txt"), "sju sorters kakor\n");
 writeFileSync(join(workDir, "vaniljhjarta.txt"), "och en till\n");
 
@@ -40,10 +40,10 @@ const runClaude = (args, cwd) => new Promise((resolve) => {
 });
 
 const server = await startServer([
-	"--jarvis-model", "haiku",
+	"--mike-model", "haiku",
 	"--worker-model", "haiku",
 	"--worker-cwd", workDir,
-	"--jarvis-cwd", workDir,
+	"--mike-cwd", workDir,
 	// Every utterance below names somebody, so the default mode is what is
 	// being exercised rather than worked around.
 	"--turn-timeout", String(TURN_MS)
@@ -76,11 +76,11 @@ try {
 
 	// 1 --------------------------------------------------------------------
 	const c = await connect(server);
-	const hello = await c.waitFor((m) => m.type === "text" && m.from === "jarvis", 10_000, "Jarvis hälsar");
-	check("1. Jarvis hälsar", !!hello.text, hello.text);
+	const hello = await c.waitFor((m) => m.type === "text" && m.from === "mike", 10_000, "Mike hälsar");
+	check("1. Mike hälsar", !!hello.text, hello.text);
 
 	// 2 --------------------------------------------------------------------
-	const t2 = await say(c, "Jarvis, starta en arbetare som heter Bosse med sonnet.");
+	const t2 = await say(c, "Mike, starta en arbetare som heter Bosse med sonnet.");
 	const spawned = ev(t2, "workerSpawned");
 	check("2. arbetaren skapades av modellen själv", spawned?.data.worker.name?.toLowerCase() === "bosse", JSON.stringify(t2.map((m) => m.type + ":" + (m.kind ?? ""))));
 	check("2. med modellen användaren namngav, inte standardmodellen", spawned?.data.worker.model === "sonnet", spawned?.data.worker.model);
@@ -94,30 +94,30 @@ try {
 	check("3. arbetaren fick ett riktigt sessions-id", /^[0-9a-f-]{36}$/.test(String(bosse.sessionId)), JSON.stringify(bosse));
 
 	// 4 --------------------------------------------------------------------
-	const t4 = await say(c, "Jarvis, vad jobbar Bosse med?");
+	const t4 = await say(c, "Mike, vad jobbar Bosse med?");
 	// PRD 3 step 4 asks for an answer that references the exchange, and does not
 	// say how. Both ways are the design working: the injected context is meant
 	// to be "observably identical to him having watched", and read_worker is
 	// there for when it is not enough. So the answer is asserted and the route
 	// he took is only reported.
 	console.log(`    (via ${ev(t4, "workerRead") ? "read_worker" : "injicerad kontext"})`);
-	check("4. Jarvis svarar om arbetarens utbyte utan att ha sett det hända — R3.2",
+	check("4. Mike svarar om arbetarens utbyte utan att ha sett det hända — R3.2",
 		/kaffebrygg/i.test(texts(t4).map((m) => m.text).join(" ")), texts(t4).map((m) => m.text).join(" ").slice(0, 200));
 	check("4. utan att byta vem man pratar med", t4.filter((m) => m.type === "state").pop()?.worker?.toLowerCase() === "bosse");
 
 	// 5 --------------------------------------------------------------------
-	const t5 = await say(c, "Jarvis, lista filerna i mappen vi pratar om.");
-	check("5. Jarvis svarar om arbetarens katalog utan att den namngavs — R3.4",
+	const t5 = await say(c, "Mike, lista filerna i mappen vi pratar om.");
+	check("5. Mike svarar om arbetarens katalog utan att den namngavs — R3.4",
 		/kanelbulle/.test(texts(t5).map((m) => m.text).join(" ")), texts(t5).map((m) => m.text).join(" ").slice(0, 300));
 
 	// 6 --------------------------------------------------------------------
-	const t6 = await say(c, "Jarvis, starta en arbetare som heter Kalle.");
+	const t6 = await say(c, "Mike, starta en arbetare som heter Kalle.");
 	check("6. den nya arbetaren blev den aktiva", ev(t6, "workerSpawned")?.data.active?.toLowerCase() === "kalle", JSON.stringify(t6.map((m) => m.kind ?? m.type)));
 	const health6 = await (await fetch(`${server.base}/healthz`)).json();
 	check("6. och Bosse finns kvar", health6.workers === 2, JSON.stringify(health6));
 
 	// 7 --------------------------------------------------------------------
-	const t7 = await say(c, "Jarvis, byt tillbaka till Bosse.");
+	const t7 = await say(c, "Mike, byt tillbaka till Bosse.");
 	check("7. samtalet är tillbaka hos Bosse", (ev(t7, "workerSwitched") ?? ev(t7, "workersListed"))?.data.active?.toLowerCase() === "bosse", JSON.stringify(t7.map((m) => m.kind ?? m.type)));
 	const t7b = await say(c, "Bosse, vad var det vi felsökte?");
 	check("7. transkriptet fortsätter, det startar inte om — R3.6",
@@ -126,12 +126,12 @@ try {
 
 	// 8 --------------------------------------------------------------------
 	const sessionId = c.readyMsg.sessionId;
-	const jarvisBefore = (await (await fetch(`${server.base}/healthz`)).json()).jarvis.sessionId;
+	const mikeBefore = (await (await fetch(`${server.base}/healthz`)).json()).mike.sessionId;
 	c.close();
 	await server.restart();
 	const c8 = await connect(server, { sessionId });
 	const health8 = await (await fetch(`${server.base}/healthz`)).json();
-	check("8. Jarvis är samma samtal efter omstarten — R3.7", health8.jarvis.sessionId === jarvisBefore, `${health8.jarvis.sessionId} vs ${jarvisBefore}`);
+	check("8. Mike är samma samtal efter omstarten — R3.7", health8.mike.sessionId === mikeBefore, `${health8.mike.sessionId} vs ${mikeBefore}`);
 	check("8. båda arbetarna finns kvar", health8.workers === 2, JSON.stringify(health8));
 	check("8. sessionen minns vem man pratade med", c8.readyMsg.worker?.toLowerCase() === "bosse", JSON.stringify(c8.readyMsg));
 	const t8 = await say(c8, "Bosse, vad var det vi felsökte?");

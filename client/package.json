@@ -1,14 +1,14 @@
 {
-  "name": "jarvis-client",
+  "name": "mike-client",
   "private": true,
   "version": "0.3.10",
   "type": "module",
-  "description": "Jarvis client \u2014 Even Hub plugin: lens view + companion view (PRD 4)",
+  "description": "Mike client \u2014 Even Hub plugin: lens view + companion view (PRD 4)",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && node -e \"require('fs').copyFileSync('app.json','../public/app.json')\"",
     "preview": "vite preview",
-    "pack": "node -e \"const a=require('./app.json'),p=require('./package.json');if(a.version!==p.version){console.error('app.json '+a.version+' != package.json '+p.version);process.exit(1)}console.log('packing '+a.package_id+' '+a.version)\" && npm run build && evenhub pack app.json ../public -o ../jarvis.ehpk"
+    "pack": "node -e \"const a=require('./app.json'),p=require('./package.json');if(a.version!==p.version){console.error('app.json '+a.version+' != package.json '+p.version);process.exit(1)}console.log('packing '+a.package_id+' '+a.version)\" && npm run build && evenhub pack app.json ../public -o ../mike.ehpk"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.15",

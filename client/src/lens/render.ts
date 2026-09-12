@@ -40,7 +40,7 @@ const DOWN = "↓";
 const ELLIPSIS = "…";
 
 export type LensView = {
-	/** Who is speaking: "Jarvis", a worker's name, or a system label. */
+	/** Who is speaking: "Mike", a worker's name, or a system label. */
 	from: string;
 	text: string;
 	/** Short status shown next to the name — "thinking", "offline", "paused". */
@@ -147,7 +147,7 @@ export const buildHeader = (from: string, status: string | null | undefined, pag
 	const tail = [status ?? "", marks].filter(Boolean).join(SEP);
 	const suffix = tail ? SEP + tail : "";
 
-	const name = String(from || "").trim() || "Jarvis";
+	const name = String(from || "").trim() || "Mike";
 	const budgetCols = cols - suffix.length;
 	const budgetPx = px - getTextWidth(suffix);
 	if (fits(name, budgetCols, budgetPx)) return name + suffix;

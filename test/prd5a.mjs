@@ -36,10 +36,10 @@ const track = (s) => { servers.push(s); return s; };
 const newFakeDir = () => { const d = mkdtempSync(join(tmpdir(), "fake-claude-")); fakeDirs.push(d); return d; };
 
 /** A server whose Claude Code is the stand-in and whose ears are a stub. */
-const startJarvis = async (stubUrl, extra = []) => {
+const startMike = async (stubUrl, extra = []) => {
 	const fakeDir = newFakeDir();
 	return track(await startServer(
-		["--claude-bin", FAKE, "--worker-cwd", "/tmp", "--jarvis-cwd", "/tmp", "--whisper", stubUrl, ...extra],
+		["--claude-bin", FAKE, "--worker-cwd", "/tmp", "--mike-cwd", "/tmp", "--whisper", stubUrl, ...extra],
 		{ env: { FAKE_CLAUDE_DIR: fakeDir } }));
 };
 
@@ -297,14 +297,14 @@ try {
 	check("under ett håll släpps orden fram ordagrant, som i always",
 		JSON.stringify(route("vad är klockan", { mode: MODES.PUSHTOTALK, worker: "Bosse" })) ===
 		JSON.stringify({ kind: "worker", name: "Bosse", text: "vad är klockan" }));
-	check("men ett tilltal slår fortfarande igenom till Jarvis",
-		route("Jarvis, vad är klockan", { mode: MODES.PUSHTOTALK, worker: "Bosse" }).kind === "jarvis");
-	check("utan arbetare går hållet till Jarvis",
-		route("vad är klockan", { mode: MODES.PUSHTOTALK, worker: null }).kind === "jarvis");
+	check("men ett tilltal slår fortfarande igenom till Mike",
+		route("Mike, vad är klockan", { mode: MODES.PUSHTOTALK, worker: "Bosse" }).kind === "mike");
+	check("utan arbetare går hållet till Mike",
+		route("vad är klockan", { mode: MODES.PUSHTOTALK, worker: null }).kind === "mike");
 	check("tangentbordet är ogrindat även här",
 		route("lista filerna", { mode: MODES.PUSHTOTALK, worker: "Bosse", origin: ORIGIN.TYPED }).kind === "worker");
 
-	for (const text of ["ändra input till håll in", "change input to push to talk", "Hey Jarvis, change input to push-to-talk.", "byt input till pushtotalk"]) {
+	for (const text of ["ändra input till håll in", "change input to push to talk", "Hey Mike, change input to push-to-talk.", "byt input till pushtotalk"]) {
 		check(`"${text}" byter till håll in`, matchModeCommand(text)?.to === MODES.PUSHTOTALK, JSON.stringify(matchModeCommand(text)));
 	}
 
@@ -312,7 +312,7 @@ try {
 	// prata sig ur. I PushToTalk gäller det under hållet, vilket är hela
 	// anledningen till att kommandona matchas före grinden.
 	const commands = [
-		["pausa input", MODES.IGNORE], ["Hey Jarvis, pause the input.", MODES.IGNORE],
+		["pausa input", MODES.IGNORE], ["Hey Mike, pause the input.", MODES.IGNORE],
 		["fortsätt input", "previous"], ["continue input", "previous"],
 		["ändra input till alltid", MODES.ALWAYS], ["ändra input till via namn", MODES.BYNAME],
 		["ändra input till håll in", MODES.PUSHTOTALK]
@@ -370,18 +370,18 @@ try {
 	check("och skickas aldrig vidare till tjänsten", stubQuiet.requests.length === 1, String(stubQuiet.requests.length));
 	c1.close(); c2.close();
 
-	// ================================================= tråden, Jarvis-sidan
+	// ================================================= tråden, Mike-sidan
 	section("tråden: talet bär med sig att det är tal (R5a.6, PRD 3)");
 	const stubJ = await startWhisperStub([
 		"vad är klockan",                    // utan tilltal, i byname
-		"Jarvis, vad är klockan",            // med tilltal
-		"Hey Jarvis, pausa input.",          // lägeskommando
+		"Mike, vad är klockan",            // med tilltal
+		"Hey Mike, pausa input.",          // lägeskommando
 		"vad är klockan",                    // i pausat läge
 		"Fortsätt input."                    // tillbaka
 	]);
 	stubs.push(stubJ);
-	const jarvis = await startJarvis(stubJ.url, ["--mode", MODES.BYNAME]);
-	const c3 = await connect(jarvis);
+	const mike = await startMike(stubJ.url, ["--mode", MODES.BYNAME]);
+	const c3 = await connect(mike);
 
 	const dropped = await speak(c3, said, { settle: false });
 	const droppedHeard = await c3.waitFor((m) => m.type === "heard", 8000, "heard trots grinden", c3.mark() - dropped.length);
@@ -390,15 +390,15 @@ try {
 		droppedHeard?.text === "vad är klockan", JSON.stringify(droppedHeard));
 	check("men det släpps av grinden, och det sägs också",
 		notHeard?.data?.reason === "unaddressed", JSON.stringify(notHeard?.data));
-	check("ingen tur kördes", !c3.messages.some((m) => m.type === "text" && /jarvis turn/.test(m.text)),
+	check("ingen tur kördes", !c3.messages.some((m) => m.type === "text" && /mike turn/.test(m.text)),
 		JSON.stringify(c3.messages.filter((m) => m.type === "text").map((m) => m.text)));
 	check("det som grinden släppte är flyktigt: det har inget sekvensnummer",
 		droppedHeard?.seq === undefined && notHeard?.seq === undefined,
 		JSON.stringify({ heard: droppedHeard?.seq, notHeard: notHeard?.seq }));
 
 	const addressed = await speak(c3, said);
-	check("med tilltal går samma väg vidare till Jarvis",
-		addressed.some((m) => m.type === "text" && /jarvis turn/.test(m.text)),
+	check("med tilltal går samma väg vidare till Mike",
+		addressed.some((m) => m.type === "text" && /mike turn/.test(m.text)),
 		JSON.stringify(addressed.map((m) => `${m.type}:${(m.text ?? "").slice(0, 30)}`)));
 	const keptHeard = addressed.find((m) => m.type === "heard");
 	check("och det som sades hamnar i samtalet, med sekvensnummer",
@@ -412,7 +412,7 @@ try {
 	check("ett överhört yttrande skrivs aldrig till transkriptet",
 		!heardInHistory.includes("vad är klockan"), JSON.stringify(heardInHistory));
 	check("men det som var till systemet står där",
-		heardInHistory.includes("Jarvis, vad är klockan"), JSON.stringify(heardInHistory));
+		heardInHistory.includes("Mike, vad är klockan"), JSON.stringify(heardInHistory));
 
 	section("talade lägeskommandon (krav 3)");
 	const paused = await speak(c3, said, { settle: false });
@@ -478,8 +478,8 @@ try {
 
 	// ============================================ latens mot riktig tjänst
 	section("latens (R5a.7)");
-	if (process.env.JARVIS_WHISPER_URL) {
-		const url = process.env.JARVIS_WHISPER_URL.replace(/\/+$/, "");
+	if (process.env.MIKE_WHISPER_URL) {
+		const url = process.env.MIKE_WHISPER_URL.replace(/\/+$/, "");
 		const five = fixture("pauses-sv.wav").pcm.subarray(16_000 * 0, 16_000 * 5);
 		const body = Buffer.from(five.buffer, five.byteOffset, five.byteLength);
 		const times = [];
@@ -511,7 +511,7 @@ try {
 		check(`hela vägen till "jag hörde dig" under två sekunder (${wireTimes.join("/")} ms)`, wireMedian < 2000, JSON.stringify(wireTimes));
 		rc.close();
 	} else {
-		console.log("  --   hoppar över latensmätningen: sätt JARVIS_WHISPER_URL till en igång tjänst");
+		console.log("  --   hoppar över latensmätningen: sätt MIKE_WHISPER_URL till en igång tjänst");
 	}
 
 } catch (err) {
@@ -529,7 +529,7 @@ section("mikrofonen går att slå på och av med rösten");
 	// off" leaves the user unable to be heard at all, so the way back must be
 	// reachable — a hold, in every mode, matched before the gate.
 	const said = (text, mode = MODES.BYNAME) => route(text, { mode, worker: "Bosse" });
-	for (const [text, on] of [["slå på mikrofonen", true], ["Hey Jarvis, turn on the mic", true],
+	for (const [text, on] of [["slå på mikrofonen", true], ["Hey Mike, turn on the mic", true],
 		["stäng av micken", false], ["turn the microphone off", false], ["mic off", false]]) {
 		const r = said(text);
 		check(`"${text}" styr mikrofonen`, r.kind === "mic" && r.on === on, JSON.stringify(r));
@@ -546,7 +546,7 @@ section("mikrofonen går att slå på och av med rösten");
 	// Over the wire: the server relays, the client acts. It must be transient —
 	// replaying it on a reconnect would open somebody's microphone hours later.
 	// No transcription needed: the command arrives as text either way.
-	const server = await startJarvis("off");
+	const server = await startMike("off");
 	const c = await connect(server);
 	const since = c.mark();
 	c.send({ type: "say", text: "stäng av mikrofonen", origin: "typed" });

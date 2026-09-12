@@ -104,7 +104,7 @@ export const CONSTRAINTS: MediaStreamConstraints = {
  * messages a second instead of 125, and copies out of the input buffer because
  * the runtime reuses it. */
 const WORKLET_SOURCE = `
-class JarvisCapture extends AudioWorkletProcessor {
+class MikeCapture extends AudioWorkletProcessor {
 	constructor() { super(); this.buffer = []; this.count = 0; this.target = Math.round(sampleRate * 0.02); }
 	process(inputs) {
 		const input = inputs[0];
@@ -121,7 +121,7 @@ class JarvisCapture extends AudioWorkletProcessor {
 		return true;
 	}
 }
-registerProcessor("jarvis-capture", JarvisCapture);
+registerProcessor("mike-capture", MikeCapture);
 `;
 
 export class Microphone {
@@ -268,7 +268,7 @@ export class Microphone {
 			try {
 				url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "text/javascript" }));
 				await ctx.audioWorklet.addModule(url);
-				const node = new AudioWorkletNode(ctx, "jarvis-capture");
+				const node = new AudioWorkletNode(ctx, "mike-capture");
 				node.port.onmessage = (e: MessageEvent) => onAudio(new Float32Array(e.data as ArrayBufferLike));
 				return node;
 			} catch { /* fall through to the ScriptProcessor */ }

@@ -4,7 +4,7 @@ The whole voice pipeline, with the browser's microphone as the source.
 
 ## Goal
 
-Talk to Jarvis and to workers by speaking into a laptop or a phone browser, see
+Talk to Mike and to workers by speaking into a laptop or a phone browser, see
 what was understood, and read the answer — with no glasses involved at all.
 
 ## Why this is its own phase, and first
@@ -30,7 +30,7 @@ browser mic ──► client: resample, VAD, segment
                           │
                           └── PCM segment ──► server: whisper (RTX 5060 Ti)
                                                   │
-                      screen ◄── reply ◄── Jarvis/worker ◄── text
+                      screen ◄── reply ◄── Mike/worker ◄── text
                           ▲
                           └── "heard: ..." so the user sees what was understood
 ```
@@ -95,7 +95,7 @@ specification for all of them; PRD 5b adds only the glasses gesture for
 | mode | what reaches the conversation | mic |
 |---|---|---|
 | **Ignore** | nothing — input is paused | open |
-| **ByName** | only utterances beginning with "Jarvis" or the active worker's name | open |
+| **ByName** | only utterances beginning with "Mike" or the active worker's name | open |
 | **Always** | everything the user says | open |
 | **PushToTalk** | only what is said while the control is held | closed until held |
 
@@ -120,7 +120,7 @@ In this phase the control is a press-and-hold button in the companion view.
 PRD 5b adds the glasses touchpad.
 
 **No prefix is required while held.** Holding the control *is* the address. A
-prefix still overrides, so "Jarvis, …" during a hold reaches him even when a
+prefix still overrides, so "Mike, …" during a hold reaches him even when a
 worker is active.
 
 #### The mode commands are always live
@@ -132,11 +132,11 @@ before the mode gate, never after it.
 
 | said | effect |
 |---|---|
-| "Hey Jarvis, pause input" / "pausa input" | → Ignore |
-| "Hey Jarvis, continue input" / "fortsätt input" | → the mode in use before it was paused |
-| "Hey Jarvis, change input to always" / "ändra input till alltid" | → Always |
-| "Hey Jarvis, change input to by name" / "ändra input till via namn" | → ByName |
-| "Hey Jarvis, change input to push to talk" / "ändra input till håll in" | → PushToTalk |
+| "Hey Mike, pause input" / "pausa input" | → Ignore |
+| "Hey Mike, continue input" / "fortsätt input" | → the mode in use before it was paused |
+| "Hey Mike, change input to always" / "ändra input till alltid" | → Always |
+| "Hey Mike, change input to by name" / "ändra input till via namn" | → ByName |
+| "Hey Mike, change input to push to talk" / "ändra input till håll in" | → PushToTalk |
 | "turn on the mic" / "slå på mikrofonen" | microphone on |
 | "turn off the mic" / "stäng av micken" | microphone off |
 
@@ -171,8 +171,8 @@ the user into an open microphone, which is the one thing that mode prevents.
 #### Matching
 
 The commands arrive through speech recognition, so the matcher must tolerate
-what that produces: casing, trailing punctuation, "Hey Jarvis" / "Hej Jarvis" /
-bare "Jarvis", and the Swedish and English forms of each. Matching happens on
+what that produces: casing, trailing punctuation, "Hey Mike" / "Hej Mike" /
+bare "Mike", and the Swedish and English forms of each. Matching happens on
 the server against the transcribed text, where the whole utterance is available.
 The same commands work when typed, so the desktop and the glasses behave alike.
 
@@ -263,10 +263,10 @@ Small compared to PRD 5b, but not zero.
 
 ## Acceptance criteria
 
-1. With the microphone on in a browser tab, saying "Jarvis, what time is it"
+1. With the microphone on in a browser tab, saying "Mike, what time is it"
    produces an answer on screen without touching anything
 2. What was heard is shown before the answer
-3. "Hey Jarvis, pausa input" stops everything reaching the conversation, and
+3. "Hey Mike, pausa input" stops everything reaching the conversation, and
    "fortsätt input" brings back the mode that was active before — both spoken,
    with nothing touched
 4. Holding the push-to-talk button captures only while held, and the microphone

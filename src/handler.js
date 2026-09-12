@@ -3,7 +3,7 @@
 // PRD 1 owns transport, not conversation, and shipped an echo handler so the
 // transport could be exercised on its own. Both handlers live here now: the
 // echo one is still what the PRD 1 suites pin the transport with (`--handler
-// echo`), and the Jarvis one is the product.
+// echo`), and the Mike one is the product.
 //
 // The contract, unchanged:
 //   onMessage(session, msg, ctx)  — may be async and long-running
@@ -97,7 +97,7 @@ export function createEchoHandler({ log, transcriber, audioMaxBytes }) {
 
 	return {
 		onOpen(session, { resumed }) {
-			if (!resumed) session.emit(msg.text("Jarvis transport online (echo handler).", "system"));
+			if (!resumed) session.emit(msg.text("Mike transport online (echo handler).", "system"));
 		},
 
 		async onMessage(session, m) {
@@ -140,7 +140,7 @@ export function createEchoHandler({ log, transcriber, audioMaxBytes }) {
 
 /** Kept short on purpose: it is the first thing on a fifty-column lens, and it
  *  is a fact about who is listening, not a welcome. */
-const GREETING = "Jarvis here.";
+const GREETING = "Mike here.";
 
 /**
  * How long an utterance waits for the rest of the sentence.
@@ -193,10 +193,10 @@ export const SPEAKING_CAP_MS = 20_000;
 /**
  * The real handler.
  *
- * `jarvis`, `registry` and `engine` are the three things a turn can be about;
+ * `mike`, `registry` and `engine` are the three things a turn can be about;
  * everything else is plumbing this file borrows from the session.
  */
-export function createJarvisHandler({ log, jarvis, registry, engine, classifier, transcriber, audioMaxBytes, holdMs = DEFAULT_HOLD_MS }) {
+export function createMikeHandler({ log, mike, registry, engine, classifier, transcriber, audioMaxBytes, holdMs = DEFAULT_HOLD_MS }) {
 
 	// PRD 5a. Null only when the server was started with no transcription at
 	// all; every other case is the whisper client, which reports its own
@@ -325,7 +325,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 		log?.info(`turn ${turn.id} ${turn.parts.length > 1 ? `merged ${turn.parts.length} parts ` : ""}-> ${turn.to} session=${session.id.slice(0, 8)}`);
 
 		return (async () => {
-			if (!turn.name) return await toJarvis(session, text, turn);
+			if (!turn.name) return await toMike(session, text, turn);
 			// Re-resolved here rather than at routing time: the window is two
 			// seconds long, and a worker can be ended from another device inside it.
 			const w = registry.get(turn.name);
@@ -353,7 +353,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 
 	/** Kill whatever is running, whether the user pressed the button or said the
 	 *  word. Both, because they do not know which of the two is mid-turn and
-	 *  should not have to: the worker they are talking to, and Jarvis.
+	 *  should not have to: the worker they are talking to, and Mike.
 	 *
 	 *  Everything here is transient. Nothing happened in the conversation — a
 	 *  turn stopped — and replaying "Stopped." on a reconnect hours later would
@@ -366,15 +366,15 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 		const held = dropHold(session);
 		const w = activeWorker(session);
 		const stoppedWorker = w ? engine.interrupt(w) : false;
-		const stoppedJarvis = jarvis.interrupt();
-		const stopped = stoppedWorker || stoppedJarvis || !!held;
+		const stoppedMike = mike.interrupt();
+		const stopped = stoppedWorker || stoppedMike || !!held;
 		session.transient(msg.event("interrupted", { stopped }));
 		// Said out loud as well as raised as an event: the lens is showing
 		// progress text from the turn that just died, and without a word it goes
 		// quiet in a way that looks like a hang rather than an obedience.
 		session.transient(msg.text(stopped ? "Stopped." : "Nothing running.", "system"));
 		session.transient(state(session, false));
-		log?.info(`stopped worker=${stoppedWorker} jarvis=${stoppedJarvis} held=${held?.parts.length ?? 0} session=${session.id.slice(0, 8)}`);
+		log?.info(`stopped worker=${stoppedWorker} mike=${stoppedMike} held=${held?.parts.length ?? 0} session=${session.id.slice(0, 8)}`);
 		return stopped;
 	};
 
@@ -410,24 +410,24 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 		else if (p?.kind === "alive") session.transient(msg.event("progress", { ...at, alive: true }));
 	};
 
-	const toJarvis = async (session, text, turn = null) => {
+	const toMike = async (session, text, turn = null) => {
 		session.emit(state(session, true));
 		try {
-			const r = await jarvis.say(session, text, { onProgress: progressTo(session, "jarvis", turn) });
+			const r = await mike.say(session, text, { onProgress: progressTo(session, "mike", turn) });
 			// Before the reply, always: the lens carries the turn while it runs,
 			// and an answer arriving underneath it would not be seen.
 			finishTurn(session, turn);
 			// After the turn, not before: a tool call inside it may have switched
 			// the active worker, and the reply has to be tagged and the state
 			// reported as they are now.
-			if (r.text) session.emit(msg.text(r.text, "jarvis"));
+			if (r.text) session.emit(msg.text(r.text, "mike"));
 		} catch (e) {
 			finishTurn(session, turn);
 			// An interrupted turn is not a failure to report: the user asked for
 			// it and has already been told "Stopped."
-			if (e.kind === "interrupted") log?.info("jarvis turn stopped");
+			if (e.kind === "interrupted") log?.info("mike turn stopped");
 			else {
-				log?.error(`jarvis turn: ${e.stack || e.message}`);
+				log?.error(`mike turn: ${e.stack || e.message}`);
 				session.emit(msg.error(lens(e)));
 			}
 		} finally {
@@ -470,7 +470,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 			}
 		} catch (e) {
 			finishTurn(session, turn);
-			// Interrupted is the user's own doing, same as for Jarvis above.
+			// Interrupted is the user's own doing, same as for Mike above.
 			if (e.kind === "interrupted") log?.info(`worker ${worker.name} turn stopped`);
 			else {
 				log?.error(`worker ${worker.name} turn: ${e.stack || e.message}`);
@@ -571,8 +571,8 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 				log?.info(`dropped (${decision.reason}) session=${session.id.slice(0, 8)} mode=${session.mode}`);
 				return;
 
-			case "jarvis":
-				return await hold(session, "jarvis", null, decision.text, origin);
+			case "mike":
+				return await hold(session, "mike", null, decision.text, origin);
 
 			case "worker":
 				// The name is resolved when the window closes, not here: see flush.
@@ -587,10 +587,10 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 	return {
 		onOpen(session) {
 			// Greet once, on a conversation that has not started yet. R3.1 says
-			// starting a session puts the user in front of Jarvis; saying it again
+			// starting a session puts the user in front of Mike; saying it again
 			// on every reconnect would be noise on a device that reconnects
 			// whenever the phone changes network.
-			if (session.seq === 0) session.emit(msg.text(GREETING, "jarvis"));
+			if (session.seq === 0) session.emit(msg.text(GREETING, "mike"));
 			session.emit(state(session, false));
 		},
 
@@ -661,7 +661,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 			}
 
 			case CONTROL.SWITCH_WORKER: {
-				// The client's own switch, next to Jarvis's `switch_worker` tool.
+				// The client's own switch, next to Mike's `switch_worker` tool.
 				// It exists because a phone has a list and a finger, and asking the
 				// user to speak a sentence to tap a row would be silly.
 				const name = m.args?.name;
@@ -682,7 +682,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 			case CONTROL.WHO_IS: {
 				// "What is the id of the worker I am talking to" — the PC handoff
 				// (`claude --resume <id>`) needs a way to ask that does not cost a
-				// model turn. Jarvis can also be asked in words.
+				// model turn. Mike can also be asked in words.
 				const w = m.args?.name ? registry.get(m.args.name) : activeWorker(session);
 				if (!w) return session.emit(msg.error("no such worker"));
 				return session.emit(msg.event("workerIdentity", {

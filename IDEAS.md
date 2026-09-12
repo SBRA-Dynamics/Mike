@@ -30,7 +30,7 @@ new project can be added without a restart:
 ```json
 { "MyProject": "/home/user/projects/MyProject",
   "MyLibrary": "/home/user/projects/MyLibrary",
-  "Jarvis": "/home/robin/jarvis" }
+  "Mike": "/home/robin/jarvis" }
 ```
 
 Resolved in `workers.js` `#checkCwd`, so it applies to every path argument
@@ -38,7 +38,7 @@ rather than only to `spawn_worker`, and so an unknown name fails the same way an
 unknown model does: an error that names the valid ones, short enough to read on
 a lens.
 
-**The part that needs thought.** Jarvis has to *know* the names, or he will keep
+**The part that needs thought.** Mike has to *know* the names, or he will keep
 guessing at absolute paths. The cheapest way is to list them in the
 `spawn_worker` schema description, which is rebuilt per `tools/list` and
 therefore always current — the same mechanism that already makes the model list
@@ -51,7 +51,7 @@ always be missing whatever is needed today.
 moment it is written, which is why the absolute path has to keep working — but
 it also means a list that can only be edited by hand will always be one project
 behind. So when a worker is started with an absolute path that has no name,
-Jarvis can ask: *"should I call that one MyFilesystem?"* A yes writes the
+Mike can ask: *"should I call that one MyFilesystem?"* A yes writes the
 entry. The list then grows by being used instead of by being maintained, and the
 question costs nothing when the answer is no.
 
@@ -63,14 +63,14 @@ is the one part that deserves a guard: a suggested name goes through the same
 folding and validation as a worker's, and nothing outside the map is touched.
 
 **Natural extension, not required.** The same map is what would let "the folder
-we are talking about" resolve without Jarvis reading it out of context — though
+we are talking about" resolve without Mike reading it out of context — though
 that already works, which is a good argument for keeping this small.
 
 ---
 
 ## A room, rather than one active worker
 
-Several workers present at once, with Robin and Jarvis, all hearing each other.
+Several workers present at once, with Robin and Mike, all hearing each other.
 
 **The plumbing is nearly there.** Replies already land in one shared session, and
 the background-notice work is half of showing several voices at once.
@@ -79,7 +79,7 @@ the background-notice work is half of showing several voices at once.
 unambiguous, but in a room "can you look at that" has to be given to somebody,
 and deciding that per utterance is exactly the classifier in the hot path that
 PRD 3 rejected for being slow and occasionally wrong. The likely answer is a
-chair who hands out the floor — which is what Jarvis already is.
+chair who hands out the floor — which is what Mike already is.
 
 Raised 2026-09-11; a weekend project at most.
 

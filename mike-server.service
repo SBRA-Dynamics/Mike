@@ -1,8 +1,8 @@
 [Unit]
 # PRD 1 R1.8. Install:
-#   sudo cp ~/jarvis/jarvis-server.service /etc/systemd/system/
-#   sudo systemctl daemon-reload && sudo systemctl enable --now jarvis-server
-Description=Jarvis server (transport, sessions, client hosting)
+#   sudo cp ~/mike/mike-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now mike-server
+Description=Mike server (transport, sessions, client hosting)
 After=network-online.target
 Wants=network-online.target
 
@@ -21,9 +21,9 @@ EnvironmentFile=/etc/jarvis.env
 # PRD 2's MCP tool surface binds its own listener on 127.0.0.1 with an
 # ephemeral port. Nothing outside the process needs to find it — each Claude
 # Code invocation is handed the URL in its grant — so no port is opened for it.
-# PRD 3 drives a real `claude` per turn. The defaults are opus for Jarvis,
+# PRD 3 drives a real `claude` per turn. The defaults are opus for Mike,
 # sonnet for a worker, and this WorkingDirectory for both; add
-#   --worker-cwd /home/user/projects --jarvis-cwd /home/user/projects
+#   --worker-cwd /home/user/projects --mike-cwd /home/user/projects
 # to start workers somewhere worth working. `--engine stub` keeps the whole
 # thing alive without spending money, which is the safe way to run it while
 # something else is being debugged.
@@ -41,7 +41,7 @@ ExecStart=/home/robin/.nvm/versions/node/v24.16.0/bin/node /home/robin/jarvis/se
   --port 3455 --host 0.0.0.0 \
   --cert /etc/letsencrypt/live/kontoret.onvo.se/fullchain.pem \
   --key /etc/letsencrypt/live/kontoret.onvo.se/privkey.pem \
-  --worker-cwd /home/user/projects --jarvis-cwd /home/user/projects \
+  --worker-cwd /home/user/projects --mike-cwd /home/user/projects \
   --worker-perms full
 Restart=always
 # The server reaps its own `claude` children on SIGTERM; this is the backstop

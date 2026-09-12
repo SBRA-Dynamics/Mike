@@ -20,7 +20,7 @@ export type Settings = {
 	sessionId: string;
 };
 
-const KEY = "jarvis.settings";
+const KEY = "mike.settings";
 
 export const EMPTY: Settings = { token: "", server: "", sessionId: "" };
 

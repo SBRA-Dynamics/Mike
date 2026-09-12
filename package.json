@@ -1,9 +1,9 @@
 {
-  "name": "jarvis-server",
+  "name": "mike-server",
   "version": "0.3.4",
   "private": true,
   "type": "module",
-  "description": "Jarvis \u2014 transport and sessions (PRD 1), MCP tool surface (PRD 2), Jarvis and workers (PRD 3), Even Hub client (PRD 4), voice from the browser (PRD 5a), voice from the glasses (PRD 5b)",
+  "description": "Mike \u2014 transport and sessions (PRD 1), MCP tool surface (PRD 2), Mike and workers (PRD 3), Even Hub client (PRD 4), voice from the browser (PRD 5a), voice from the glasses (PRD 5b)",
   "scripts": {
     "start": "node server.js",
     "build:client": "npm --prefix client install && npm --prefix client run build",

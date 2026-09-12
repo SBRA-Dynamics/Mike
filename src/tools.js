@@ -3,7 +3,7 @@
 // Each tool is a name, a description the model reads, a JSON schema, and a run
 // function. They are declared here and served by mcp.js, which owns the
 // transport, the auth and the event/log side effects — so this file stays
-// readable as "what Jarvis can do".
+// readable as "what Mike can do".
 //
 // Two rules shape every handler:
 //
@@ -14,7 +14,7 @@
 //  * Nothing is a filesystem path except `cwd`, which workers.js validates.
 //    Names are matched, never joined onto a directory.
 //
-// Deliberately absent: a shell tool. Jarvis is a Claude Code session and has
+// Deliberately absent: a shell tool. Mike is a Claude Code session and has
 // Bash already; a second path to the same capability only creates ambiguity
 // about which one he should reach for (PRD 2, "Tools").
 
@@ -23,7 +23,7 @@ import { msg } from "./protocol.js";
 import { ToolError } from "./workers.js";
 
 /** Largest transcript read_worker will return, whatever it is asked for.
- *  The cost of this lands in Jarvis's context, not in a log file. */
+ *  The cost of this lands in Mike's context, not in a log file. */
 const MAX_READ_TURNS = 20;
 const DEFAULT_READ_TURNS = 6;
 
@@ -49,7 +49,7 @@ const optInt = (v, field) => {
 };
 
 // ------------------------------------------------------------------ rendering
-// These strings are what Jarvis reads and then paraphrases onto the lens, so
+// These strings are what Mike reads and then paraphrases onto the lens, so
 // they are written as short facts rather than sentences.
 
 const ago = (t) => {
@@ -151,7 +151,7 @@ export function createToolset({ registry, engine, log, dirs }) {
 					prompt: { type: "string", description: "An optional first message, said to it once and then gone, like any other message. This is where a briefing goes — the state of play, what was just found, what to start on. Use it when the user wants work to begin now. Standing facts about what it IS belong in `systemPrompt`; put them here and they scroll out of reach." }
 				},
 				// `systemPrompt` is required, and that is a measured decision
-				// rather than a taste one. With it optional, Jarvis wrote the
+				// rather than a taste one. With it optional, Mike wrote the
 				// instructions he had been told to write — and put them in
 				// `prompt` every single time, because "what it is" and "what to
 				// do first" read as the same sentence from where he stands. The
@@ -219,19 +219,19 @@ export function createToolset({ registry, engine, log, dirs }) {
 			inputSchema: { type: "object", properties: {}, additionalProperties: false },
 			run: (_args, { session }) => {
 				// Not an error when there is nobody to leave. The user asking to
-				// come back to Jarvis while already with him has got what they
+				// come back to Mike while already with him has got what they
 				// asked for, and a refusal would read as a fault they have to
 				// understand before they can go on.
 				const left = session.worker;
 				if (!left) {
-					return { kind: "workerSwitched", text: "You are already talking to Jarvis.", data: { active: null, left: null } };
+					return { kind: "workerSwitched", text: "You are already talking to Mike.", data: { active: null, left: null } };
 				}
 				setActive(session, null);
 				// Deliberately only this session. Another device talking to that
 				// worker is having its own conversation and did not ask to leave.
 				return {
 					kind: "workerSwitched",
-					text: `Left ${left}. It keeps running. You are back with Jarvis.`,
+					text: `Left ${left}. It keeps running. You are back with Mike.`,
 					data: { active: null, left }
 				};
 			}
@@ -252,14 +252,14 @@ export function createToolset({ registry, engine, log, dirs }) {
 				registry.remove(worker.name);
 
 				// Ending the worker you were talking to puts you back in front of
-				// Jarvis rather than silently in front of somebody else.
+				// Mike rather than silently in front of somebody else.
 				let active = session.worker;
 				if (active && active === worker.name) active = setActive(session, null);
 				retarget(session, worker.name, null);
 
 				return {
 					kind: "workerEnded",
-					text: `${worker.name} has ended.${active ? "" : " You are back with Jarvis."}`,
+					text: `${worker.name} has ended.${active ? "" : " You are back with Mike."}`,
 					data: { worker: publicWorker(worker), active }
 				};
 			}

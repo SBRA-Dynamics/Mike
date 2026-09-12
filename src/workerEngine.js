@@ -23,7 +23,7 @@
 //
 //   transcript(worker, turns)        -> [{ role, text, at }]
 //        The last `turns` exchanges, newest last. `read_worker` quotes these
-//        into Jarvis's context, so it must be cheap and bounded.
+//        into Mike's context, so it must be cheap and bounded.
 //
 //   async stop(worker)               -> void
 //        End the session. The transcript is kept (PRD 3 "end: explicit;
@@ -43,7 +43,7 @@
 // is the whole point of the seam.
 
 /** How much transcript any one engine keeps per worker. Bounded because
- *  read_worker's cost is paid out of Jarvis's context window. */
+ *  read_worker's cost is paid out of Mike's context window. */
 const TRANSCRIPT_DEPTH = 60;
 
 /**
@@ -114,7 +114,7 @@ export function createStubWorkerEngine({ log } = {}) {
 // Two things the stub could pretend about and this cannot:
 //
 //  * `engineSessionId`. It is generated here and handed back to the registry so
-//    a restart can `--resume` it and so Jarvis can read it out for the PC
+//    a restart can `--resume` it and so Mike can read it out for the PC
 //    handoff. It is OUR uuid, passed to `--session-id` on the first turn — not
 //    something parsed out of the CLI afterwards, because a worker must have an
 //    id the moment it exists, before it has said anything.
@@ -144,7 +144,7 @@ import { createClaudeRunner, ChildTracker } from "./claudeCli.js";
 const MEMORY_DEPTH = TRANSCRIPT_DEPTH;
 
 /** How much of a worker's turn we are willing to quote. A worker that answers
- *  with a 40 kB file listing must not blow out Jarvis's context when he is
+ *  with a 40 kB file listing must not blow out Mike's context when he is
  *  asked what it is doing. */
 const MAX_QUOTED_CHARS = 4000;
 
@@ -166,7 +166,7 @@ export function createClaudeWorkerEngine({
 	if (!dataDir) throw new Error("createClaudeWorkerEngine needs a dataDir for transcripts");
 	// The template every worker's system prompt is built from. Re-read when it
 	// changes, so an edit reaches the next turn of every worker at once — the
-	// same contract Jarvis's own prompt has.
+	// same contract Mike's own prompt has.
 	//
 	// It is applied on EVERY turn, not just the first, and always with
 	// --system-prompt-snapshot off. Claude Code otherwise replays the prompt
@@ -340,9 +340,9 @@ export function createClaudeWorkerEngine({
 					return { text: r.text };
 				} catch (e) {
 					// The failure goes in the transcript too. A worker whose turn
-					// died and left no trace reads, next time Jarvis quotes it, as
+					// died and left no trace reads, next time Mike quotes it, as
 					// a worker that was never asked. An interrupt is recorded as
-					// what it was: Jarvis reading "(no answer: stopped)" back would
+					// what it was: Mike reading "(no answer: stopped)" back would
 					// have him apologising for something the user chose.
 					append(worker, "assistant", e.kind === "interrupted" ? "(stopped by the user)" : `(no answer: ${e.message})`);
 					throw e;
@@ -352,7 +352,7 @@ export function createClaudeWorkerEngine({
 
 		transcript(worker, turns = 6) {
 			// Bookkeeping entries are ours, not the conversation's: quoting
-			// "session-created" back to Jarvis would be noise he has to reason
+			// "session-created" back to Mike would be noise he has to reason
 			// about, and read_worker's cost is paid in his context.
 			const t = thread(worker).filter((e) => e.role !== "meta");
 			return t.slice(-Math.max(1, turns) * 2);

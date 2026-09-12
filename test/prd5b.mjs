@@ -824,7 +824,7 @@ try {
 		check("de två segmenten är samma bytes innan de skickas",
 			pcmBase64(browserSeg.pcm) === pcmBase64(glassesSeg.pcm), "olika bytes");
 
-		const stub = await startWhisperStub(["Jarvis, vad är klockan"]);
+		const stub = await startWhisperStub(["Mike, vad är klockan"]);
 		stubs.push(stub);
 		const server = await startServer(["--handler", "echo", "--whisper", stub.url]);
 		servers.push(server);
@@ -864,7 +864,7 @@ try {
 			route("vad tycker du om det", { mode: MODES.BYNAME, worker: null, origin: "voice" }).kind === "dropped",
 			JSON.stringify(route("vad tycker du om det", { mode: MODES.BYNAME, worker: null, origin: "voice" })));
 		check("medan ett tilltal går fram",
-			route("Jarvis, vad är klockan", { mode: MODES.BYNAME, worker: null, origin: "voice" }).kind === "jarvis");
+			route("Mike, vad är klockan", { mode: MODES.BYNAME, worker: null, origin: "voice" }).kind === "mike");
 	}
 
 	section("tystnad genom glasögonen kostar ingenting (krav 5 i PRD 5a)");

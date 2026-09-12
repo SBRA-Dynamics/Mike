@@ -41,7 +41,7 @@ try {
 	check("punkt och versal viks ihop", normalizeName("Bosse.") === normalizeName("bosse"));
 	check("diakriter viks ihop", normalizeName("Måns") === normalizeName("Mans"));
 	check("visningsnamnet behåller versalen", displayName("Bosse.") === "Bosse");
-	check("jarvis är reserverat", checkName("Jarvis").ok === false);
+	check("mike är reserverat", checkName("Mike").ok === false);
 	check("tomt namn avvisas", checkName("   ").ok === false);
 
 	// ------------------------------------------------------------------ transport
@@ -52,16 +52,16 @@ try {
 
 	const grant = await grantTools(c1);
 	check("grant pekar på loopback", /^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(grant.url), grant.url);
-	check("grant är en http-mcp-config", grant.parsedConfig.mcpServers.jarvis.type === "http");
+	check("grant är en http-mcp-config", grant.parsedConfig.mcpServers.mike.type === "http");
 	check("grant räknar upp verktygsnamnen claude ska tillåta",
-		grant.allowedTools.includes("mcp__jarvis__spawn_worker"), JSON.stringify(grant.allowedTools));
+		grant.allowedTools.includes("mcp__mike__spawn_worker"), JSON.stringify(grant.allowedTools));
 	check("grant-token skrivs inte in i transkriptet",
 		!JSON.stringify(c1.messages.filter((m) => m.seq !== undefined)).includes(grant.token));
 
 	const mcp = new McpClient(grant);
 	const init = await mcp.initialize();
 	check("initialize svarar med samma protokollversion", init.result.protocolVersion === "2025-11-25", JSON.stringify(init));
-	check("servern presenterar sig", init.result.serverInfo.name === "jarvis");
+	check("servern presenterar sig", init.result.serverInfo.name === "mike");
 	check("okänd metod ger -32601, inte en krasch", (await mcp.rpc("server/discover")).error.code === -32601);
 	check("notifikation utan id besvaras med 202",
 		(await mcp.raw({ jsonrpc: "2.0", method: "notifications/initialized" })).status === 202);
@@ -133,7 +133,7 @@ try {
 	check("fortfarande bara en arbetare",
 		(await (await fetch(`${server.base}/healthz`)).json()).workers === 1);
 
-	refused("reserverat namn", await mcp.call("spawn_worker", { name: "Jarvis", systemPrompt: "Du sköter en uppgift i testriggen." }));
+	refused("reserverat namn", await mcp.call("spawn_worker", { name: "Mike", systemPrompt: "Du sköter en uppgift i testriggen." }));
 	refused("namnlös", await mcp.call("spawn_worker", {}));
 	refused("okänd arbetare", await mcp.call("switch_worker", { name: "finns inte" }));
 	refused("okänt verktyg", await mcp.call("spawn_helicopter", { name: "x" }));
@@ -172,7 +172,7 @@ try {
 	const sinceEnd = c1.mark();
 	const ended = await mcp.call("end_worker", { name: "Berit" });
 	check("end lyckas", ended.isError === false, ended.text);
-	check("end lämnar tillbaka samtalet till Jarvis", /back with Jarvis/.test(ended.text), ended.text);
+	check("end lämnar tillbaka samtalet till Mike", /back with Mike/.test(ended.text), ended.text);
 	const endEv = await c1.waitFor((m) => m.type === "event" && m.kind === "workerEnded", 5000, "workerEnded", sinceEnd);
 	check("aktiv arbetare är ingen efteråt", endEv.data.active === null, JSON.stringify(endEv.data));
 	check("namnet är ledigt igen", (await mcp.call("spawn_worker", { name: "Berit", systemPrompt: "Du sköter en uppgift i testriggen." })).isError === false);
@@ -226,7 +226,7 @@ try {
 		const sinceEnd = other.mark();
 		await mcp.call("end_worker", { name: "Dora" });
 		const ended = await other.waitFor((m) => m.type === "state" && m.worker !== undefined, 5000, "state efter avslut", sinceEnd);
-		check("den andra sessionen släpps tillbaka till Jarvis", ended.worker === null, JSON.stringify(ended));
+		check("den andra sessionen släpps tillbaka till Mike", ended.worker === null, JSON.stringify(ended));
 
 		const back = await connect(server, { sessionId: other.readyMsg.sessionId });
 		check("ready namnger aldrig en arbetare som inte finns",
@@ -237,7 +237,7 @@ try {
 
 	// -------------------------------------------------------------- persistence
 	// Leaving is not ending. The distinction is the whole point of the tool: a
-	// user with their hands busy who wants to come back to Jarvis must not have
+	// user with their hands busy who wants to come back to Mike must not have
 	// to destroy the conversation they were in to do it.
 	section("att lämna en arbetare är inte att avsluta den");
 	{
@@ -255,7 +255,7 @@ try {
 		reattached.close();
 
 		const again = await mcp.call("leave_worker", {});
-		check("att lämna när man redan är hos Jarvis är inget fel", again.isError === false, JSON.stringify(again));
+		check("att lämna när man redan är hos Mike är inget fel", again.isError === false, JSON.stringify(again));
 
 		const back = await mcp.call("switch_worker", { name: "Ester" });
 		check("man kan växla tillbaka till den", back.isError === false, JSON.stringify(back));

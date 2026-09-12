@@ -35,8 +35,8 @@ import { Companion } from "./ui/companion.ts";
 
 /** Stamped into the bundle at build time (vite.config.ts). Not read from a
  *  file at runtime: the question it answers is which BUILD this is. */
-declare const __JARVIS_VERSION__: string;
-const VERSION = typeof __JARVIS_VERSION__ === "string" ? __JARVIS_VERSION__ : "dev";
+declare const __MIKE_VERSION__: string;
+const VERSION = typeof __MIKE_VERSION__ === "string" ? __MIKE_VERSION__ : "dev";
 
 const store = new Store();
 let connection: Connection | null = null;
@@ -123,7 +123,7 @@ const report = (what: string, e: unknown): void => {
 	// log never means a quiet page.
 	const text = reportsSuppressed ? `${line} (+${reportsSuppressed} suppressed)` : line;
 	reportsSuppressed = 0;
-	console.error(`[jarvis] ${text}`);
+	console.error(`[mike] ${text}`);
 	// Best effort, and never able to throw on its own account: the thing being
 	// reported may well be the socket.
 	try { connection?.control(CONTROL.CLIENT_LOG, { level: "error", text }); } catch { }
@@ -131,7 +131,7 @@ const report = (what: string, e: unknown): void => {
 
 globalThis.addEventListener?.("error", (ev) => report("uncaught", (ev as ErrorEvent).error ?? (ev as ErrorEvent).message));
 globalThis.addEventListener?.("unhandledrejection", (ev) => report("unhandled rejection", (ev as PromiseRejectionEvent).reason));
-let frame: LensFrame = renderLens({ from: "Jarvis", text: "Connecting…", page: 0 });
+let frame: LensFrame = renderLens({ from: "Mike", text: "Connecting…", page: 0 });
 
 const root = document.getElementById("app")!;
 
@@ -351,7 +351,7 @@ store.subscribe(() => repaint());
 /**
  * One line, every time the microphone changes what it is doing — PRD 5b.
  *
- * The browser suite reads `globalThis.jarvis`; a WebView on somebody's phone
+ * The browser suite reads `globalThis.mike`; a WebView on somebody's phone
  * has no such reader, and the numbers PRD 5b's risk table asks for (the open
  * cost and lead-in of R5b.3, the byte rate of R5b.4, the speaker-role ratio of
  * R5b.2) are measurable only while the glasses are actually on a face. So they
@@ -374,7 +374,7 @@ store.subscribe((s) => {
 	if (key === lastMicKey) return;
 	lastMicKey = key;
 	const g = stats;
-	console.log(`[jarvis] mic ${v.mic} ${v.device} held=${v.held} live=${v.live} tracks=${voice.source.liveTracks} sent=${v.sent}`
+	console.log(`[mike] mic ${v.mic} ${v.device} held=${v.held} live=${v.live} tracks=${voice.source.liveTracks} sent=${v.sent}`
 		+ (g ? ` frames=${g.frames} bytes=${g.bytes} openMs=${g.openMs} leadInMs=${g.leadInMs} roles=${g.self}/${g.other}/${g.unknown} dropped=${g.dropped}` : ""));
 });
 
@@ -526,7 +526,7 @@ const start = async (): Promise<void> => {
 	// "native" is the claim timers.ts makes; on a phone this line is the only
 	// place it can be checked. (Node's timers are JavaScript and print as not
 	// native there, which is expected and meaningless.)
-	console.log(`[jarvis] client up ${VERSION} — glasses ${attached ? "attached" : "absent"}, timers ${looksNative(natives.setTimeout) ? "native" : "not native"}`);
+	console.log(`[mike] client up ${VERSION} — glasses ${attached ? "attached" : "absent"}, timers ${looksNative(natives.setTimeout) ? "native" : "not native"}`);
 
 	// R4.7: the SDK's storage is the only one that survives an app restart on
 	// the phone; the browser copy is the development fallback and the desktop's
@@ -554,7 +554,7 @@ const start = async (): Promise<void> => {
  * asserted it from a button's colour would pass with the microphone on. Reading
  * only, and nothing here changes anything.
  */
-(globalThis as unknown as { jarvis: unknown }).jarvis = {
+(globalThis as unknown as { mike: unknown }).mike = {
 	state: () => store.state,
 	listening: () => store.listening(),
 	voice: () => voice.status,

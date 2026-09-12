@@ -16,7 +16,7 @@
 // | mode       | what is admitted                                          |
 // |------------|-----------------------------------------------------------|
 // | ignore     | nothing but the mode commands (spoken input; see ORIGIN)   |
-// | byname     | utterances starting with "Jarvis" or the active worker's name |
+// | byname     | utterances starting with "Mike" or the active worker's name |
 // | always     | everything                                                 |
 // | pushtotalk | everything — but the microphone is only open while held    |
 //
@@ -28,8 +28,8 @@
 // second-guess it. A prefix still overrides during a hold, because stripAddress
 // runs before the verbatim fallthrough for every mode.
 //
-// and an admitted utterance goes to Jarvis if it named him, otherwise to the
-// active worker, otherwise to Jarvis (PRD 3's three rules).
+// and an admitted utterance goes to Mike if it named him, otherwise to the
+// active worker, otherwise to Mike (PRD 3's three rules).
 //
 // Reading note, because the two PRDs can be read against each other here:
 // PRD 3's rule 3 says an unaddressed utterance "goes to the active worker
@@ -53,8 +53,8 @@ export const MODES = { IGNORE: "ignore", BYNAME: "byname", ALWAYS: "always", PUS
  *  Two consequences worth stating plainly:
  *   * Ignore pauses LISTENING, not the keyboard. The lens still reads "paused",
  *     which is the truth about the microphone.
- *   * Addressing still works when typed: "Jarvis, ..." from a keyboard reaches
- *     Jarvis and the prefix is stripped, exactly as when spoken. What typing
+ *   * Addressing still works when typed: "Mike, ..." from a keyboard reaches
+ *     Mike and the prefix is stripped, exactly as when spoken. What typing
  *     skips is the REQUIREMENT to address, not the ability to.
  *
  *  `voice` is the default for anything that does not say, so a client that
@@ -74,9 +74,9 @@ export const MODE_LABEL = {
 	[MODES.PUSHTOTALK]: "hold to talk"
 };
 
-/** The name Jarvis answers to. Folded once, here, so the rest of the file can
+/** The name Mike answers to. Folded once, here, so the rest of the file can
  *  compare keys and never strings. */
-export const JARVIS_NAME = "Jarvis";
+export const MIKE_NAME = "Mike";
 
 // ---------------------------------------------------------------- folding
 //
@@ -118,8 +118,8 @@ const GREETING = "(?:hey|hi|hej|halla|hallo|ok|okej|okay|yo|so|sa)";
  * If `text` is addressed to `name`, return the text with the address removed.
  * Returns null when it is not addressed to that name.
  *
- * Dictation variants are the whole job: "Jarvis." / "Jarvis," / "jarvis" /
- * "Hey Jarvis" / "Hej Jarvis:" all count, and they count because the check runs
+ * Dictation variants are the whole job: "Mike." / "Mike," / "mike" /
+ * "Hey Mike" / "Hej Mike:" all count, and they count because the check runs
  * on the same folded form the rest of the system matches names with.
  */
 export function stripAddress(text, name) {
@@ -129,8 +129,8 @@ export function stripAddress(text, name) {
 	if (!f.folded) return null;
 
 	const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	// The name must be followed by a word boundary, or "Jarvis" would swallow
-	// the first half of a worker called "Jarvisson".
+	// The name must be followed by a word boundary, or "Mike" would swallow
+	// the first half of a worker called "Mikeson".
 	const m = f.folded.match(new RegExp(`^(?:${GREETING} )?${escaped}(?= |$)`));
 	if (!m) return null;
 
@@ -161,7 +161,7 @@ const GO = `(?:${VERB}|go|ga|byt|vaxla|switch|set|satt|stall)`;
 
 // A trailing particle is allowed, and only these: "always ON", "alltid PÅ" is
 // how the mode is actually said out loud. Measured — Robin said "ändra mode
-// till always on" and the command fell through to Jarvis, who explained the
+// till always on" and the command fell through to Mike, who explained the
 // exact word that did not match. The alternative, allowing any trailing word,
 // would throw away the anchoring that keeps "byt till alltid när du felsöker"
 // out of the command path, and that anchoring is worth more than reach.
@@ -243,12 +243,12 @@ const STOP_COMMANDS = [
 
 /** Match a stop command. Returns true or false; there is nothing to carry.
  *
- *  Addressed forms count too ("Jarvis, stopp"), for the same reason the other
+ *  Addressed forms count too ("Mike, stopp"), for the same reason the other
  *  commands accept them: the user who is interrupting has no idea whether the
- *  thing that will not shut up is Jarvis or the worker, and should not have to. */
+ *  thing that will not shut up is Mike or the worker, and should not have to. */
 export function matchStopCommand(text) {
 	const candidates = [text];
-	const bare = stripAddress(text, JARVIS_NAME);
+	const bare = stripAddress(text, MIKE_NAME);
 	if (bare !== null) candidates.push(bare);
 
 	for (const c of candidates) {
@@ -263,7 +263,7 @@ export function matchStopCommand(text) {
  *  { on } or null. */
 export function matchMicCommand(text) {
 	const candidates = [text];
-	const bare = stripAddress(text, JARVIS_NAME);
+	const bare = stripAddress(text, MIKE_NAME);
 	if (bare !== null) candidates.push(bare);
 
 	for (const c of candidates) {
@@ -275,8 +275,8 @@ export function matchMicCommand(text) {
 }
 
 /**
- * Match a mode command. `text` may or may not be addressed to Jarvis: R5a.4
- * writes every command as "Hey Jarvis, ..." but a bare "pausa input" has to
+ * Match a mode command. `text` may or may not be addressed to Mike: R5a.4
+ * writes every command as "Hey Mike, ..." but a bare "pausa input" has to
  * work too, because the user who is paused has just learned that nothing they
  * say is getting through and will start dropping words.
  *
@@ -284,7 +284,7 @@ export function matchMicCommand(text) {
  */
 export function matchModeCommand(text) {
 	const candidates = [text];
-	const bare = stripAddress(text, JARVIS_NAME);
+	const bare = stripAddress(text, MIKE_NAME);
 	if (bare !== null) candidates.push(bare);
 
 	for (const c of candidates) {
@@ -307,7 +307,7 @@ export function matchModeCommand(text) {
  *   { kind: "mode", to }                     — a mode command, always first
  *   { kind: "mic", on }                      — the microphone switch, likewise
  *   { kind: "stop" }                         — kill whatever turn is running
- *   { kind: "jarvis", text }                 — address stripped
+ *   { kind: "mike", text }                 — address stripped
  *   { kind: "worker", name, text }           — address stripped if there was one
  *   { kind: "dropped", reason: "paused" | "unaddressed" }
  *
@@ -337,12 +337,12 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 	const gated = origin !== ORIGIN.TYPED;
 	if (gated && mode === MODES.IGNORE) return { kind: "dropped", reason: "paused" };
 
-	const toJarvis = stripAddress(raw, JARVIS_NAME);
-	if (toJarvis !== null) {
-		// "Jarvis" on its own is an address with nothing after it. Sending the
+	const toMike = stripAddress(raw, MIKE_NAME);
+	if (toMike !== null) {
+		// "Mike" on its own is an address with nothing after it. Sending the
 		// empty string to a model asks it to invent what was wanted; sending his
 		// own name back gets "yes?", which is the right answer to being called.
-		return { kind: "jarvis", text: toJarvis || JARVIS_NAME };
+		return { kind: "mike", text: toMike || MIKE_NAME };
 	}
 
 	const toWorker = worker ? stripAddress(raw, worker) : null;
@@ -355,10 +355,10 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 
 	if (gated && mode === MODES.BYNAME) return { kind: "dropped", reason: "unaddressed" };
 
-	// 3. Always: unaddressed goes to the active worker verbatim, or to Jarvis
+	// 3. Always: unaddressed goes to the active worker verbatim, or to Mike
 	//    when there is none — which is also what "starting a session means
-	//    talking to Jarvis" means (R3.1).
-	return worker ? { kind: "worker", name: worker, text: raw } : { kind: "jarvis", text: raw };
+	//    talking to Mike" means (R3.1).
+	return worker ? { kind: "worker", name: worker, text: raw } : { kind: "mike", text: raw };
 }
 
 /** Apply a mode command to a session's mode. Returns { mode, previous }.

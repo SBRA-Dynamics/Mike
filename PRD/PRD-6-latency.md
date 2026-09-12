@@ -41,7 +41,7 @@ inte innan 1 och 2 är gjorda och mätta — de kan visa sig räcka.
 
 **1 är byggd** (7c6984b). `--output-format stream-json`, samma en process per
 tur, men strömmen läses medan den skrivs: verktygsnamnet och svarets första
-mening går som `progress`-händelser genom jarvis.say och engine.send ut till
+mening går som `progress`-händelser genom mike.say och engine.send ut till
 klienten. Mätt mot riktiga CLI:t: "Read" på linsen efter 2,3 s i en tur som
 tog 4,5 s. Det partiella hamnar på linsen men inte i transkriptet — det
 färdiga svaret kommer ändå och ska vara sista ordet.

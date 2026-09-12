@@ -99,7 +99,7 @@ export class WorkerRegistry {
 			model: resolved.label,
 			modelId: resolved.id,
 			cwd: dir,
-			// The worker-specific half of its system prompt, written by Jarvis at
+			// The worker-specific half of its system prompt, written by Mike at
 			// spawn time and folded into the template on every turn. Kept on the
 			// record so a restart does not quietly change who it is.
 			systemPrompt: typeof systemPrompt === "string" ? systemPrompt.slice(0, 2000).trim() : "",
@@ -149,7 +149,7 @@ export class WorkerRegistry {
 
 	/** A working directory is the one tool argument that names something on the
 	 *  filesystem, so it is the one that gets checked. It is not confined to a
-	 *  root: Jarvis has Bash and can already reach anywhere, so a jail here
+	 *  root: Mike has Bash and can already reach anywhere, so a jail here
 	 *  would be theatre. What it must not be is a relative path or a directory
 	 *  that is not there — both fail later, inside a spawn, where the error is
 	 *  unreadable.

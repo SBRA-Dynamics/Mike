@@ -6,14 +6,14 @@
 // so this suite does exactly that: headless Chrome with a WAV file wired to
 // getUserMedia in place of a microphone (--use-file-for-fake-audio-capture),
 // the client's own capture and segmentation, the real whisper service on the
-// GPU, and a Jarvis server with the Claude Code stand-in behind it. Nothing in
+// GPU, and a Mike server with the Claude Code stand-in behind it. Nothing in
 // the speech path is mocked; the only stand-in is the model that answers.
 //
 // It runs headless. A browser window on the developer's desktop steals focus
 // every run, and everything read here comes over the DevTools protocol.
 //
 // The service takes about fifteen seconds to load a model, so this is not part
-// of `npm test`. Set JARVIS_WHISPER_URL to a service that is already running
+// of `npm test`. Set MIKE_WHISPER_URL to a service that is already running
 // and it will use that one instead.
 
 import { existsSync } from "node:fs";
@@ -70,8 +70,8 @@ try {
 
 	// ------------------------------------------------------------- tjänsten
 	section("transkriberingstjänsten");
-	if (process.env.JARVIS_WHISPER_URL) {
-		service = { url: process.env.JARVIS_WHISPER_URL.replace(/\/+$/, ""), stop() { }, log: () => "(extern)" };
+	if (process.env.MIKE_WHISPER_URL) {
+		service = { url: process.env.MIKE_WHISPER_URL.replace(/\/+$/, ""), stop() { }, log: () => "(extern)" };
 		console.log(`  --   använder tjänsten som redan kör: ${service.url}`);
 	} else {
 		check("tjänstens python finns", whisperInstalled(), `${WHISPER_PYTHON} — se services/whisper/serve.py`);
@@ -83,7 +83,7 @@ try {
 	check("den lyssnar bara på loopback", /^http:\/\/127\.0\.0\.1:/.test(service.url), service.url);
 
 	const server = await startServer(
-		["--claude-bin", FAKE, "--worker-cwd", "/tmp", "--jarvis-cwd", "/tmp", "--whisper", service.url, "--mode", MODES.BYNAME],
+		["--claude-bin", FAKE, "--worker-cwd", "/tmp", "--mike-cwd", "/tmp", "--whisper", service.url, "--mode", MODES.BYNAME],
 		{ env: { FAKE_CLAUDE_DIR: newFakeDir() } });
 	servers.push(server);
 
@@ -94,55 +94,55 @@ try {
 	// R5a.1: ingen mikrofon innan användaren ber om den. Sidan har varit uppe i
 	// flera sekunder vid det här laget.
 	check("sidan öppnar ingen mikrofon av sig själv (R5a.1)",
-		(await talker.evaluate(`jarvis.tracks()`)) === 0 && (await talker.evaluate(`jarvis.mic().opens`)) === 0,
-		JSON.stringify(await talker.evaluate(`jarvis.mic()`)));
+		(await talker.evaluate(`mike.tracks()`)) === 0 && (await talker.evaluate(`mike.mic().opens`)) === 0,
+		JSON.stringify(await talker.evaluate(`mike.mic()`)));
 	check("och säger att den är av", (await talker.evaluate(`document.querySelector(".voice button.mic").textContent`)) === "Microphone off");
 
 	await talker.click(".voice button.mic");
-	await talker.waitFor(`jarvis.voice().live === true`, 10_000, "att mikrofonen öppnas");
-	check("ett klick på knappen öppnar den", (await talker.evaluate(`jarvis.tracks()`)) === 1, String(await talker.evaluate(`jarvis.tracks()`)));
+	await talker.waitFor(`mike.voice().live === true`, 10_000, "att mikrofonen öppnas");
+	check("ett klick på knappen öppnar den", (await talker.evaluate(`mike.tracks()`)) === 1, String(await talker.evaluate(`mike.tracks()`)));
 	check("och indikatorn säger att den lyssnar (R5a.8)",
 		/listening|heard/.test(await talker.evaluate(`document.querySelector(".chip.listening").textContent`)),
 		await talker.evaluate(`document.querySelector(".chip.listening").textContent`));
 
-	// "Jarvis, vad är klockan?" — inspelat tal, genom segmenteraren, tråden och
+	// "Mike, vad är klockan?" — inspelat tal, genom segmenteraren, tråden och
 	// whisper. Inget rörs medan det händer.
 	await talker.waitFor(`document.querySelector(".transcript").textContent.toLowerCase().includes("klockan")`, 30_000, "att den hör frågan");
 	const heardText = await talker.evaluate(`[...document.querySelectorAll(".transcript .entry.said .what")].map((e) => e.textContent).join(" | ")`);
 	check("det som sades hörs och visas (krav 2)", /klockan/i.test(heardText), heardText);
-	check("och det tilltalet plockades upp", /jarvis/i.test(heardText), heardText);
+	check("och det tilltalet plockades upp", /mike/i.test(heardText), heardText);
 
-	await talker.waitFor(`document.querySelector(".transcript").textContent.includes("jarvis turn")`, 30_000, "svaret");
+	await talker.waitFor(`document.querySelector(".transcript").textContent.includes("mike turn")`, 30_000, "svaret");
 	const order = await transcript(talker);
 	const heardAt = order.findIndex((e) => e.startsWith("said|") && /klockan/i.test(e));
-	const replyAt = order.findIndex((e) => e.includes("jarvis turn"));
+	const replyAt = order.findIndex((e) => e.includes("mike turn"));
 	check("frågan får ett svar på skärmen, utan att något rörts (krav 1)", replyAt >= 0, JSON.stringify(order));
 	check("och det som hördes stod där före svaret (krav 2, R5a.8)", heardAt >= 0 && heardAt < replyAt, JSON.stringify(order));
-	check("svaret bär vad Jarvis faktiskt fick — tilltalet bortklippt",
+	check("svaret bär vad Mike faktiskt fick — tilltalet bortklippt",
 		/vad är klockan/i.test(order[replyAt] ?? ""), order[replyAt]);
 
-	// Krav 3: "Hey Jarvis, pausa input" och sedan "Fortsätt input", båda talade.
+	// Krav 3: "Hey Mike, pausa input" och sedan "Fortsätt input", båda talade.
 	section("skrivbordet: talade lägeskommandon (krav 3)");
-	await talker.waitFor(`jarvis.state().mode === ${JSON.stringify(MODES.IGNORE)}`, 30_000, "att input pausas av ett talat kommando");
+	await talker.waitFor(`mike.state().mode === ${JSON.stringify(MODES.IGNORE)}`, 30_000, "att input pausas av ett talat kommando");
 	check("ett talat \"pausa input\" pausar allt som når samtalet (krav 3)",
-		(await talker.evaluate(`jarvis.state().mode`)) === MODES.IGNORE);
+		(await talker.evaluate(`mike.state().mode`)) === MODES.IGNORE);
 	check("och lägesväljaren följer med utan att någon rört den",
 		(await talker.evaluate(`document.querySelector(".settings select.modeselect").value`)) === MODES.IGNORE);
 	check("mikrofonen är fortfarande öppen i pausat läge — annars går det inte att prata sig ur",
-		(await talker.evaluate(`jarvis.tracks()`)) === 1);
+		(await talker.evaluate(`mike.tracks()`)) === 1);
 
-	await talker.waitFor(`jarvis.state().mode === ${JSON.stringify(MODES.BYNAME)}`, 30_000, "att \"fortsätt input\" tar tillbaka läget");
+	await talker.waitFor(`mike.state().mode === ${JSON.stringify(MODES.BYNAME)}`, 30_000, "att \"fortsätt input\" tar tillbaka läget");
 	check("och ett talat \"fortsätt input\" tar tillbaka läget som gällde innan (krav 3)",
-		(await talker.evaluate(`jarvis.state().mode`)) === MODES.BYNAME);
+		(await talker.evaluate(`mike.state().mode`)) === MODES.BYNAME);
 
 	// Krav 5: när filen är slut matar Chrome tystnad. Ingenting mer får hända.
 	section("tystnad kostar ingenting (krav 5)");
-	const sentAfterSpeech = await talker.evaluate(`jarvis.voice().sent`);
+	const sentAfterSpeech = await talker.evaluate(`mike.voice().sent`);
 	const entriesAfterSpeech = (await transcript(talker)).length;
 	await sleep(6000);
 	check("tystnad ger inga fler segment på tråden",
-		(await talker.evaluate(`jarvis.voice().sent`)) === sentAfterSpeech,
-		`${sentAfterSpeech} -> ${await talker.evaluate(`jarvis.voice().sent`)}`);
+		(await talker.evaluate(`mike.voice().sent`)) === sentAfterSpeech,
+		`${sentAfterSpeech} -> ${await talker.evaluate(`mike.voice().sent`)}`);
 	check("och ingen ny rad i samtalet", (await transcript(talker)).length === entriesAfterSpeech);
 	check("tre yttranden i filen blev tre segment på tråden", sentAfterSpeech === 3, String(sentAfterSpeech));
 	check("inga fel i konsolen under hela varvet", talker.consoleErrors.length === 0, JSON.stringify(talker.consoleErrors.slice(0, 3)));
@@ -158,22 +158,22 @@ try {
 		s.dispatchEvent(new Event("change"));
 		return true;
 	})()`);
-	await holder.waitFor(`jarvis.state().mode === ${JSON.stringify(MODES.PUSHTOTALK)}`, 10_000, "läget håll in");
+	await holder.waitFor(`mike.state().mode === ${JSON.stringify(MODES.PUSHTOTALK)}`, 10_000, "läget håll in");
 
 	// Och mikrofonbrytaren PÅ: i det här läget ska den ändå inte öppna något.
 	await holder.click(".voice button.mic");
 	await sleep(4000);
 	check("med läget håll in är mikrofonen av trots att brytaren är på (krav 4)",
-		(await holder.evaluate(`jarvis.tracks()`)) === 0, JSON.stringify(await holder.evaluate(`jarvis.voice()`)));
+		(await holder.evaluate(`mike.tracks()`)) === 0, JSON.stringify(await holder.evaluate(`mike.voice()`)));
 	check("ingenting har skickats medan någon talat rakt in i den",
-		(await holder.evaluate(`jarvis.voice().sent`)) === 0);
+		(await holder.evaluate(`mike.voice().sent`)) === 0);
 	check("och klienten säger varför", /hold to talk/i.test(await holder.evaluate(`document.querySelector(".voicenote").textContent`)),
 		await holder.evaluate(`document.querySelector(".voicenote").textContent`));
 
 	const heldFrom = Date.now();
 	await holder.mouse(".voice button.talk", "mousePressed");
-	await holder.waitFor(`jarvis.tracks() === 1`, 8000, "att hållet öppnar mikrofonen");
-	check("ett håll öppnar den (krav 4)", (await holder.evaluate(`jarvis.voice().held`)) === true);
+	await holder.waitFor(`mike.tracks() === 1`, 8000, "att hållet öppnar mikrofonen");
+	check("ett håll öppnar den (krav 4)", (await holder.evaluate(`mike.voice().held`)) === true);
 	check("och det syns att den spelar in just nu (R5a.4)",
 		/capturing while held/i.test(await holder.evaluate(`document.querySelector(".voicenote").textContent`)),
 		await holder.evaluate(`document.querySelector(".voicenote").textContent`));
@@ -181,13 +181,13 @@ try {
 	await holder.mouse(".voice button.talk", "mouseReleased");
 	const heldMs = Date.now() - heldFrom;
 
-	await holder.waitFor(`jarvis.tracks() === 0`, 5000, "att släppet stänger mikrofonen");
+	await holder.waitFor(`mike.tracks() === 0`, 5000, "att släppet stänger mikrofonen");
 	check("släppet stänger den igen — noll spår, inte en paus (krav 4)",
-		(await holder.evaluate(`jarvis.tracks()`)) === 0 && (await holder.evaluate(`jarvis.voice().live`)) === false);
+		(await holder.evaluate(`mike.tracks()`)) === 0 && (await holder.evaluate(`mike.voice().live`)) === false);
 
-	await holder.waitFor(`jarvis.voice().sent > 0`, 8000, "segmentet från hållet");
-	const lastMs = await holder.evaluate(`jarvis.voice().lastSegmentMs`);
-	check("hållet gav exakt ett yttrande", (await holder.evaluate(`jarvis.voice().sent`)) === 1, String(await holder.evaluate(`jarvis.voice().sent`)));
+	await holder.waitFor(`mike.voice().sent > 0`, 8000, "segmentet från hållet");
+	const lastMs = await holder.evaluate(`mike.voice().lastSegmentMs`);
+	check("hållet gav exakt ett yttrande", (await holder.evaluate(`mike.voice().sent`)) === 1, String(await holder.evaluate(`mike.voice().sent`)));
 	check("och det är inte längre än hållet varade (krav 4)", lastMs <= heldMs, `${lastMs} ms mot ${heldMs} ms hållet`);
 	check("men det innehåller det som sades under hållet", lastMs > 500, `${lastMs} ms`);
 
@@ -203,14 +203,14 @@ try {
 	await holder.mouse(".voice button.talk", "mouseReleased");
 	await sleep(2500);
 	check("en snabb tryckning lämnar ingen mikrofon öppen (krav 4)",
-		(await holder.evaluate(`jarvis.tracks()`)) === 0 && (await holder.evaluate(`jarvis.voice().live`)) === false,
-		JSON.stringify(await holder.evaluate(`jarvis.voice()`)));
+		(await holder.evaluate(`mike.tracks()`)) === 0 && (await holder.evaluate(`mike.voice().live`)) === false,
+		JSON.stringify(await holder.evaluate(`mike.voice()`)));
 
-	const sentAfterHold = await holder.evaluate(`jarvis.voice().sent`);
+	const sentAfterHold = await holder.evaluate(`mike.voice().sent`);
 	await sleep(4000);
 	check("efter släppet skickas ingenting mer, hur mycket som än sägs i rummet (krav 4)",
-		(await holder.evaluate(`jarvis.voice().sent`)) === sentAfterHold,
-		`${sentAfterHold} -> ${await holder.evaluate(`jarvis.voice().sent`)}`);
+		(await holder.evaluate(`mike.voice().sent`)) === sentAfterHold,
+		`${sentAfterHold} -> ${await holder.evaluate(`mike.voice().sent`)}`);
 	check("inga fel i konsolen", holder.consoleErrors.length === 0, JSON.stringify(holder.consoleErrors.slice(0, 3)));
 
 	section("servern");

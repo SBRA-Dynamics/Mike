@@ -52,7 +52,7 @@ const removeProfile = (dir) => {
 export async function launchChrome(url, { args = [], timeoutMs = 20_000 } = {}) {
 	if (!CHROME) throw new Error("ingen Chrome installerad — det här testet behöver en riktig webbläsare");
 
-	const profile = mkdtempSync(join(tmpdir(), "jarvis-chrome-"));
+	const profile = mkdtempSync(join(tmpdir(), "mike-chrome-"));
 	// Its own process group, so close() can kill the whole tree. Chrome's
 	// zygotes, renderers and GPU process are its children, and SIGKILL on the
 	// browser process alone orphans them: nine processes per run survived into

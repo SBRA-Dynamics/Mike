@@ -38,14 +38,14 @@ process.on("uncaughtException", (e) => { killAll(); console.error(e); process.ex
  *  server's `claude` at the stand-in binary: the path is a flag, but the
  *  stand-in's state directory has to be per-run or two suites share one. */
 export async function startServer(extraArgs = [], { env: extraEnv = {} } = {}) {
-	const dataDir = mkdtempSync(join(tmpdir(), "jarvis-test-"));
+	const dataDir = mkdtempSync(join(tmpdir(), "mike-test-"));
 	const token = "test-token-" + Math.random().toString(16).slice(2, 10);
 	// The hold window (PRD 6) is off unless a suite asks for it. Every test
 	// here sends one whole utterance and waits for the answer, which is the one
 	// shape the window is not for — leaving it on would add two seconds to every
 	// one of a few hundred turns and assert nothing. The suite that tests the
 	// merging turns it back on.
-	const env = { JARVIS_HOLD_MS: "0", ...process.env, ...extraEnv };
+	const env = { MIKE_HOLD_MS: "0", ...process.env, ...extraEnv };
 
 	// Port 0: the OS hands out one that is free, and tells us which.
 	//
@@ -68,10 +68,10 @@ export async function startServer(extraArgs = [], { env: extraEnv = {} } = {}) {
 	// than probing a port we guessed, means we can only ever reach our own.
 	let port = 0;
 	for (let i = 0; i < 100 && !port; i++) {
-		// Anchored on "jarvis-server": the MCP listener logs its own
+		// Anchored on "mike-server": the MCP listener logs its own
 		// "on http://127.0.0.1:PORT/mcp" line first, and matching that one sent
 		// the whole suite at the tool surface instead of the server.
-		const m = logText.match(/jarvis-server \S+ protocol \S+ on https?:\/\/127\.0\.0\.1:(\d+)/);
+		const m = logText.match(/mike-server \S+ protocol \S+ on https?:\/\/127\.0\.0\.1:(\d+)/);
 		if (m) port = Number(m[1]);
 		else if (proc.exitCode !== null) break;
 		else await sleep(100);
@@ -193,12 +193,12 @@ export class TestClient {
  * `--mcp-config` string — parsed rather than passed separately, so every test
  * that uses it also proves the config claude is handed is well formed.
  */
-export async function grantTools(client, role = "jarvis") {
+export async function grantTools(client, role = "mike") {
 	const since = client.mark();
 	client.send({ type: "control", action: "mcpGrant", args: { role } });
 	const ev = await client.waitFor((m) => m.type === "event" && m.kind === "mcpGrant", 5000, "mcpGrant", since);
 	const parsed = JSON.parse(ev.data.config);
-	const server = parsed.mcpServers.jarvis;
+	const server = parsed.mcpServers.mike;
 	return { ...ev.data, parsedConfig: parsed, token: server.headers.Authorization.replace(/^Bearer /, "") };
 }
 

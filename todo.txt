@@ -1,0 +1,7 @@
+# Todo
+
+- Mikrofonens läge syns inte medan "thinking <t>s" visas: slår man på eller av
+  micken då byter statusraden inte ord, så man vet inte om den är igång. Lägg
+  i stället en mikrofon-emoji längst till höger på namnraden, oberoende av
+  statusordet. Kolla först att glyfen finns i firmwarefonten (pretext
+  getTextWidth > 0), annars ett annat tecken — ✓ saknas till exempel.

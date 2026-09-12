@@ -166,9 +166,9 @@ a `state{busy:false}` from `c1`'s earlier turn:
 
 ```
 c2 ready: {"cursor":4,"resumed":false,"missed":4,"gap":false}
-c2 messages:  1 text "Jarvis transport online"   2 state true
+c2 messages:  1 text "Mike transport online"   2 state true
               3 text "echo: hej"                 4 state false   ← replayed
-              5 text "Jarvis transport online"   ← greeting emitted AGAIN
+              5 text "Mike transport online"   ← greeting emitted AGAIN
 ```
 
 Line 74's `waitFor(m => m.type === "state" && m.busy === false)` uses `Array.find` over the

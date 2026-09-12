@@ -1,4 +1,4 @@
-# Jarvis
+# Mike
 
 Talk to Claude Code from a pair of Even Realities G2 glasses — or from a browser
 tab — without holding a button and without a phone app in the way.
@@ -9,13 +9,13 @@ and certificate rather than somebody's tunnel. What does not: the conversation
 itself, because the thing doing the work is Claude Code, and every turn goes to
 Anthropic like any other.
 
-One long-lived agent, **Jarvis**, is who you reach. He delegates real work to
+One long-lived agent, **Mike**, is who you reach. He delegates real work to
 **workers**: named Claude Code sessions with their own model, directory and
 transcript. You switch between them by speaking. He can see what they are doing
 and act on it.
 
 ```
-glasses / browser ──ws──► server ──► Jarvis (opus) ──MCP──► spawn/switch/leave/end workers
+glasses / browser ──ws──► server ──► Mike (opus) ──MCP──► spawn/switch/leave/end workers
                              │                                      │
                              ├── whisper on the GPU                 └── workers (claude -p)
                              └── sessions, transcripts, replay
@@ -27,7 +27,7 @@ glasses / browser ──ws──► server ──► Jarvis (opus) ──MCP─�
 |---|---|---|
 | **1** | Server: TLS, HTTP, WebSocket, sessions, replay, auth | built, running |
 | **2** | MCP tool surface in the same process | built, running |
-| **3** | Jarvis + workers, routing, context injection, handoff | built, running |
+| **3** | Mike + workers, routing, context injection, handoff | built, running |
 | **4** | Even Hub client: lens view + companion view | built, running |
 | **5a** | Voice from the browser: VAD, segments, whisper, addressing modes | built, running |
 | **5b** | Voice from the glasses' own microphones | built; needs a hardware session |
@@ -68,8 +68,8 @@ rather than refusing to run.
 Two systemd units, both included:
 
 ```bash
-sudo cp jarvis-server.service services/whisper/jarvis-whisper.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now jarvis-whisper jarvis-server
+sudo cp mike-server.service services/whisper/mike-whisper.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now mike-whisper mike-server
 ```
 
 The server reads its bearer token from `/etc/jarvis.env` (root-only, never on the
@@ -107,9 +107,9 @@ Two conventions worth keeping:
   `--aid alsa:null`, simulator 0.9.5 sends audio at ~170× real time, and
   `audioControl(false)` does not always stop it. When it doesn't, the
   simulator grows by ~700 MB/s until the kernel kills it. When a worker
-  starts it, it runs in jarvis-server's cgroup, so the kernel took the
+  starts it, it runs in mike-server's cgroup, so the kernel took the
   whole service down with it, three times on 2026-09-12, turn and all. This
-  was reproduced with a 40-line page that has no Jarvis code, so it is not
+  was reproduced with a 40-line page that has no Mike code, so it is not
   the client, and nothing on our side fixes it. The glasses microphone is
   tested on the glasses, and in the unit suites against a stand-in bridge.
   `test/prd5b-lens.mjs` still opens it and must not be run until that part
@@ -197,16 +197,16 @@ src/
   sessions.js        durable sessions, JSONL transcripts, replay
   connection.js      one socket: handshake, auth, resume, keepalive
   handler.js         the conversation: routing, turns, notices
-  jarvis.js          his identity, prompt and worker-context injection
+  mike.js          his identity, prompt and worker-context injection
   workers.js         the registry; workerEngine.js drives real sessions
-  mcp.js tools.js    the tool surface Jarvis acts through
+  mcp.js tools.js    the tool surface Mike acts through
   routing.js         who an utterance is for, and the addressing modes
   whisper.js audio.js  transcription client and audio intake
 client/              the Even Hub plugin: lens + companion, one build
   src/audio/segment.ts   PCM in, utterances out — no browser, no clock, no SDK
   src/audio/capture.ts   the browser's microphone; glasses.ts the glasses'
   src/audio/voice.ts     the addressing modes, with either microphone behind them
-prompts/             Jarvis's system prompt and the worker template, editable live
+prompts/             Mike's system prompt and the worker template, editable live
 services/whisper/    the transcription service
 PRD/                 why any of it is shaped the way it is
 ```
@@ -228,7 +228,7 @@ thirty seconds of captured audio, so a session is "wear them, hold the touchpad,
 read the log":
 
 ```
-[jarvis] mic listening glasses held=true live=true tracks=1 sent=0 \
+[mike] mic listening glasses held=true live=true tracks=1 sent=0 \
          frames=300 bytes=960000 openMs=181 leadInMs=184 roles=0/0/300 dropped=0
 ```
 

@@ -85,7 +85,7 @@ try {
 	// for a moment the header still says "thinking"; the frame compared is the
 	// one after that moment, or the comparison measures the race and not the
 	// preview.
-	await waitFor(`jarvis.listening() !== "thinking"`, 5_000, "turen är över");
+	await waitFor(`mike.listening() !== "thinking"`, 5_000, "turen är över");
 	const rows = await evaluate(`[...document.querySelectorAll(".lens .row")].map(r => r.textContent.replace(/\\u00a0/g, ""))`);
 	const expected = renderLens({ from: "echo", text: `echo: ${SAID}`, status: null, page: 0 }).lines;
 	check("förhandsvisningen är exakt den ram glasögonen skulle få (krav 3)",
@@ -153,7 +153,7 @@ try {
 	// rapporter i sekunden.
 	await sleep(1000);
 
-	const reports = await evaluate(`jarvis.reports()`);
+	const reports = await evaluate(`mike.reports()`);
 	const calls = await evaluate(`globalThis.__consoleCalls`);
 	check("sidan svarar fortfarande", (await evaluate(`1 + 1`)) === 2);
 	check("rapporterna slutar växa", reports.total <= 5, JSON.stringify(reports));

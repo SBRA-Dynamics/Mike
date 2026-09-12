@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Jarvis server — PRD 1.
+ * Mike server — PRD 1.
  *
  * One process: TLS, static hosting of the client, one WebSocket per connection,
  * a durable session store, and the operations surface.
@@ -28,7 +28,7 @@ import { WebSocketServer } from "ws";
 import { log } from "./src/log.js";
 import { SessionStore } from "./src/sessions.js";
 import { attachConnection } from "./src/connection.js";
-import { createEchoHandler, createJarvisHandler, DEFAULT_HOLD_MS } from "./src/handler.js";
+import { createEchoHandler, createMikeHandler, DEFAULT_HOLD_MS } from "./src/handler.js";
 import { PROTOCOL_VERSION } from "./src/protocol.js";
 import { WorkerRegistry } from "./src/workers.js";
 import { NamedDirs } from "./src/namedDirs.js";
@@ -38,7 +38,7 @@ import { createClassifier } from "./src/classify.js";
 import { createClaudeRunner } from "./src/claudeCli.js";
 import { createMcpServer } from "./src/mcp.js";
 import { isKnownModel, MODEL_LIST, resolveModel } from "./src/models.js";
-import { createJarvis, DEFAULT_CONTEXT_TURNS, DEFAULT_CONTEXT_BUDGET_TOKENS } from "./src/jarvis.js";
+import { createMike, DEFAULT_CONTEXT_TURNS, DEFAULT_CONTEXT_BUDGET_TOKENS } from "./src/mike.js";
 import { DEFAULT_MODE, isMode, MODES } from "./src/routing.js";
 import { createWhisperClient, createNullTranscriber } from "./src/whisper.js";
 import { DEFAULT_MAX_AUDIO_BYTES } from "./src/audio.js";
@@ -51,11 +51,11 @@ const flag = (n, d) => { const i = argv.indexOf("--" + n); return i >= 0 && argv
 const has = (n) => argv.includes("--" + n);
 
 if (has("help")) {
-	console.log(`jarvis-server ${VERSION} (protocol ${PROTOCOL_VERSION})
+	console.log(`mike-server ${VERSION} (protocol ${PROTOCOL_VERSION})
 
   --port <n>           listen port (default 3460)
   --host <addr>        bind address (default 0.0.0.0)
-  --token <hex>        auth token (default $JARVIS_TOKEN, else generated)
+  --token <hex>        auth token (default $MIKE_TOKEN, else generated)
   --cert <file>        TLS chain; with --key, serves HTTPS
   --key <file>         TLS private key
   --static <dir>       directory to serve the client from (default ./public)
@@ -66,15 +66,15 @@ if (has("help")) {
   --worker-model <m>   default model for a new worker (default sonnet)
   --worker-cwd <dir>   default working directory for a new worker
   --dirs <file>        spoken names for directories, e.g. "MyProject" (default ./dirs.json)
-  --handler <h>        jarvis (default) or echo, which pins PRD 1's transport
+  --handler <h>        mike (default) or echo, which pins PRD 1's transport
   --engine <e>         claude (default) or stub, which spends no money
   --claude-bin <path>  the Claude Code binary to drive (default: claude)
   --worker-perms <p>   readonly (default), edits, or full — what a worker may do
   --worker-prompt <f>  the worker system prompt template (default ./prompts/worker.md)
-  --jarvis-model <m>   the model Jarvis runs (default opus)
-  --jarvis-cwd <dir>   where Jarvis's own Bash runs (default: --worker-cwd)
-  --jarvis-prompt <f>  his system prompt file (default ./prompts/jarvis.md)
-  --context-turns <n>  worker turns quoted to Jarvis when addressed (default 6)
+  --mike-model <m>   the model Mike runs (default opus)
+  --mike-cwd <dir>   where Mike's own Bash runs (default: --worker-cwd)
+  --mike-prompt <f>  his system prompt file (default ./prompts/mike.md)
+  --context-turns <n>  worker turns quoted to Mike when addressed (default 6)
   --context-budget <n> token budget for that quote (default 1200)
   --turn-timeout <ms>  how long one model turn may take (default 600000)
   --mode <m>           addressing mode for a fresh session (default byname)
@@ -89,63 +89,63 @@ if (has("help")) {
 }
 
 const config = {
-	port: parseInt(flag("port", process.env.JARVIS_PORT ?? "3460"), 10),
+	port: parseInt(flag("port", process.env.MIKE_PORT ?? "3460"), 10),
 	host: flag("host", "0.0.0.0"),
-	token: flag("token", process.env.JARVIS_TOKEN || randomBytes(16).toString("hex")),
-	cert: flag("cert", process.env.JARVIS_CERT),
-	key: flag("key", process.env.JARVIS_KEY),
+	token: flag("token", process.env.MIKE_TOKEN || randomBytes(16).toString("hex")),
+	cert: flag("cert", process.env.MIKE_CERT),
+	key: flag("key", process.env.MIKE_KEY),
 	staticDir: path.resolve(flag("static", path.join(HERE, "public"))),
-	devProxy: flag("dev-proxy", process.env.JARVIS_DEV_PROXY || null),
-	dataDir: flag("data", process.env.JARVIS_DATA || path.join(homedir(), ".local", "share", "jarvis")),
+	devProxy: flag("dev-proxy", process.env.MIKE_DEV_PROXY || null),
+	dataDir: flag("data", process.env.MIKE_DATA || path.join(homedir(), ".local", "share", "mike")),
 	pingIntervalMs: parseInt(flag("ping", "20000"), 10),
 	// The MCP listener is loopback-only and its port is not a contract: the
 	// grant handed to each Claude Code invocation carries the URL. A fixed port
 	// is only useful when something outside has to be pointed at it by hand.
-	mcpPort: parseInt(flag("mcp-port", process.env.JARVIS_MCP_PORT ?? "0"), 10),
+	mcpPort: parseInt(flag("mcp-port", process.env.MIKE_MCP_PORT ?? "0"), 10),
 	// What a worker gets when the user does not name a model. Named here rather
-	// than buried in the registry because it is a product decision: Jarvis is
+	// than buried in the registry because it is a product decision: Mike is
 	// the expensive one, workers are many and long-lived.
-	workerModel: flag("worker-model", process.env.JARVIS_WORKER_MODEL || "sonnet"),
-	workerCwd: flag("worker-cwd", process.env.JARVIS_WORKER_CWD || process.cwd()),
-	dirsFile: path.resolve(flag("dirs", process.env.JARVIS_DIRS || path.join(HERE, "dirs.json"))),
+	workerModel: flag("worker-model", process.env.MIKE_WORKER_MODEL || "sonnet"),
+	workerCwd: flag("worker-cwd", process.env.MIKE_WORKER_CWD || process.cwd()),
+	dirsFile: path.resolve(flag("dirs", process.env.MIKE_DIRS || path.join(HERE, "dirs.json"))),
 	// What a worker turn may do. `full` means --dangerously-skip-permissions,
 	// and since this server is reachable from the internet behind one bearer
 	// token, that makes the token the ability to run code here. Deliberate
 	// setting, made in the unit file, never a default.
-	workerPerms: flag("worker-perms", process.env.JARVIS_WORKER_PERMS ?? "readonly"),
+	workerPerms: flag("worker-perms", process.env.MIKE_WORKER_PERMS ?? "readonly"),
 	workerPrompt: flag("worker-prompt", null),
 
 	// PRD 3. Two seams, both named on the command line rather than inferred:
 	// `--handler echo` is how the PRD 1 suites still pin the transport without a
 	// model in the path, and `--engine stub` is how everything above the engine
 	// is tested without spending money. Production is the default of both.
-	handler: flag("handler", process.env.JARVIS_HANDLER || "jarvis"),
-	engine: flag("engine", process.env.JARVIS_ENGINE || "claude"),
-	claudeBin: flag("claude-bin", process.env.JARVIS_CLAUDE_BIN || "claude"),
-	jarvisModel: flag("jarvis-model", process.env.JARVIS_MODEL || "opus"),
-	jarvisCwd: flag("jarvis-cwd", process.env.JARVIS_CWD || null),
-	jarvisPrompt: flag("jarvis-prompt", process.env.JARVIS_PROMPT || path.join(HERE, "prompts", "jarvis.md")),
-	contextTurns: parseInt(flag("context-turns", process.env.JARVIS_CONTEXT_TURNS ?? String(DEFAULT_CONTEXT_TURNS)), 10),
-	contextBudget: parseInt(flag("context-budget", process.env.JARVIS_CONTEXT_BUDGET ?? String(DEFAULT_CONTEXT_BUDGET_TOKENS)), 10),
-	turnTimeoutMs: parseInt(flag("turn-timeout", process.env.JARVIS_TURN_TIMEOUT ?? "600000"), 10),
-	defaultMode: flag("mode", process.env.JARVIS_MODE || DEFAULT_MODE),
+	handler: flag("handler", process.env.MIKE_HANDLER || "mike"),
+	engine: flag("engine", process.env.MIKE_ENGINE || "claude"),
+	claudeBin: flag("claude-bin", process.env.MIKE_CLAUDE_BIN || "claude"),
+	mikeModel: flag("mike-model", process.env.MIKE_MODEL || "opus"),
+	mikeCwd: flag("mike-cwd", process.env.MIKE_CWD || null),
+	mikePrompt: flag("mike-prompt", process.env.MIKE_PROMPT || path.join(HERE, "prompts", "mike.md")),
+	contextTurns: parseInt(flag("context-turns", process.env.MIKE_CONTEXT_TURNS ?? String(DEFAULT_CONTEXT_TURNS)), 10),
+	contextBudget: parseInt(flag("context-budget", process.env.MIKE_CONTEXT_BUDGET ?? String(DEFAULT_CONTEXT_BUDGET_TOKENS)), 10),
+	turnTimeoutMs: parseInt(flag("turn-timeout", process.env.MIKE_TURN_TIMEOUT ?? "600000"), 10),
+	defaultMode: flag("mode", process.env.MIKE_MODE || DEFAULT_MODE),
 	// PRD 6. Dictation arrives in fragments; this is how long one waits for the
 	// rest of itself. Tunable because the right number is a fact about how the
 	// person speaks, not about the software.
-	holdMs: parseInt(flag("hold", process.env.JARVIS_HOLD_MS ?? String(DEFAULT_HOLD_MS)), 10),
+	holdMs: parseInt(flag("hold", process.env.MIKE_HOLD_MS ?? String(DEFAULT_HOLD_MS)), 10),
 
 	// PRD 5a. The service is a separate process on loopback (see
 	// services/whisper/serve.py); this is where it is, not something this
 	// process starts. `off` is a real configuration: a server with no GPU
 	// behind it should still run, and say plainly that it cannot hear.
-	whisper: flag("whisper", process.env.JARVIS_WHISPER || "http://127.0.0.1:3461"),
-	whisperTimeoutMs: parseInt(flag("whisper-timeout", process.env.JARVIS_WHISPER_TIMEOUT ?? "20000"), 10),
-	audioMaxBytes: parseInt(flag("audio-max-bytes", process.env.JARVIS_AUDIO_MAX_BYTES ?? String(DEFAULT_MAX_AUDIO_BYTES)), 10),
+	whisper: flag("whisper", process.env.MIKE_WHISPER || "http://127.0.0.1:3461"),
+	whisperTimeoutMs: parseInt(flag("whisper-timeout", process.env.MIKE_WHISPER_TIMEOUT ?? "20000"), 10),
+	audioMaxBytes: parseInt(flag("audio-max-bytes", process.env.MIKE_AUDIO_MAX_BYTES ?? String(DEFAULT_MAX_AUDIO_BYTES)), 10),
 	version: VERSION
 };
-config.jarvisCwd = config.jarvisCwd || config.workerCwd;
+config.mikeCwd = config.mikeCwd || config.workerCwd;
 
-const tokenWasGenerated = !flag("token", null) && !process.env.JARVIS_TOKEN;
+const tokenWasGenerated = !flag("token", null) && !process.env.MIKE_TOKEN;
 
 if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) { log.error(`--port must be a number, got "${flag("port", "")}"`); process.exit(1); }
 if (!Number.isInteger(config.pingIntervalMs) || config.pingIntervalMs < 1000) { log.error(`--ping must be at least 1000 ms`); process.exit(1); }
@@ -155,9 +155,9 @@ if (!["readonly", "edits", "full"].includes(config.workerPerms)) { log.error(`--
 // Checked at startup, not at the first spawn_worker, because at the first
 // spawn the user is waiting on a lens for an answer about their own typo.
 if (!isKnownModel(config.workerModel)) { log.error(`--worker-model "${config.workerModel}" is unknown; use ${MODEL_LIST}`); process.exit(1); }
-if (!isKnownModel(config.jarvisModel)) { log.error(`--jarvis-model "${config.jarvisModel}" is unknown; use ${MODEL_LIST}`); process.exit(1); }
+if (!isKnownModel(config.mikeModel)) { log.error(`--mike-model "${config.mikeModel}" is unknown; use ${MODEL_LIST}`); process.exit(1); }
 if (!isMode(config.defaultMode)) { log.error(`--mode must be one of ${Object.values(MODES).join(", ")}`); process.exit(1); }
-if (!["jarvis", "echo"].includes(config.handler)) { log.error(`--handler must be jarvis or echo`); process.exit(1); }
+if (!["mike", "echo"].includes(config.handler)) { log.error(`--handler must be mike or echo`); process.exit(1); }
 if (!["claude", "stub"].includes(config.engine)) { log.error(`--engine must be claude or stub`); process.exit(1); }
 if (config.whisper !== "off" && !/^https?:\/\//.test(config.whisper)) { log.error(`--whisper must be a URL or "off", got "${config.whisper}"`); process.exit(1); }
 for (const [name, v] of [["--context-turns", config.contextTurns], ["--context-budget", config.contextBudget], ["--turn-timeout", config.turnTimeoutMs],
@@ -182,19 +182,19 @@ const engine = config.engine === "stub"
 const toolset = createToolset({ registry, engine, log, dirs });
 const mcp = createMcpServer({ store, toolset, registry, log });
 
-// ------------------------------------------------------------------- jarvis
+// ------------------------------------------------------------------- mike
 // PRD 3. He is built even when `--handler echo` pins the transport, because
 // building him is what proves his identity file survived the restart, and it
 // costs nothing until something says a word to him.
-const jarvis = createJarvis({
+const mike = createMike({
 	log, dataDir: config.dataDir, mcp, registry, engine,
 	bin: config.claudeBin,
 	// The resolved id, not the spoken label. models.js pins full model names on
 	// purpose — an alias silently follows whatever is promoted to "latest", and
-	// Jarvis's model should not change under him between two restarts.
-	model: resolveModel(config.jarvisModel).id,
-	cwd: config.jarvisCwd,
-	promptFile: config.jarvisPrompt,
+	// Mike's model should not change under him between two restarts.
+	model: resolveModel(config.mikeModel).id,
+	cwd: config.mikeCwd,
+	promptFile: config.mikePrompt,
 	contextTurns: config.contextTurns,
 	contextBudgetTokens: config.contextBudget,
 	timeoutMs: config.turnTimeoutMs
@@ -217,7 +217,7 @@ const transcriber = config.whisper === "off"
 
 const handler = config.handler === "echo"
 	? createEchoHandler({ log, transcriber, audioMaxBytes: config.audioMaxBytes })
-	: createJarvisHandler({ classifier, log, jarvis, registry, engine, transcriber, audioMaxBytes: config.audioMaxBytes, holdMs: config.holdMs });
+	: createMikeHandler({ classifier, log, mike, registry, engine, transcriber, audioMaxBytes: config.audioMaxBytes, holdMs: config.holdMs });
 
 // ----------------------------------------------------------------- TLS certs
 // Re-read on mtime change so a certbot renewal lands without a restart
@@ -310,12 +310,12 @@ const onRequest = (req, res) => {
 			connections: [...store.sessions.values()].reduce((n, s) => n + s.connectionCount, 0),
 			workers: registry.size, mcpPort: mcp.port,
 			// Enough to tell, from outside, which build is running and whether
-			// Jarvis is the same conversation he was before the restart (R3.7).
+			// Mike is the same conversation he was before the restart (R3.7).
 			handler: config.handler, engine: engine.name,
 			// Enough for an operator to tell "it cannot hear" from "it did not
 			// understand" without reading the log.
 			transcription: { service: transcriber.name, url: transcriber.url, maxBytes: config.audioMaxBytes },
-			jarvis: { sessionId: jarvis.sessionId, model: jarvis.model, turns: jarvis.turns }
+			mike: { sessionId: mike.sessionId, model: mike.model, turns: mike.turns }
 		});
 		res.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) });
 		return res.end(body);
@@ -362,7 +362,7 @@ server.on("error", (e) => {
 try {
 	await mcp.listen(config.mcpPort);
 } catch (e) {
-	// Without the tool surface Jarvis can answer but not act, which is a
+	// Without the tool surface Mike can answer but not act, which is a
 	// half-working system that looks whole. Refuse to start instead.
 	log.error(`could not bind the MCP listener on 127.0.0.1:${config.mcpPort}: ${e.message}`);
 	process.exit(1);
@@ -373,13 +373,13 @@ server.listen(config.port, config.host, () => {
 	// The bound port, not the requested one: --port 0 asks the OS to pick, and a
 	// log line claiming port 0 is useless to anything trying to connect.
 	config.port = server.address().port;
-	log.info(`jarvis-server ${VERSION} protocol ${PROTOCOL_VERSION} on ${scheme}://${config.host}:${config.port}`);
+	log.info(`mike-server ${VERSION} protocol ${PROTOCOL_VERSION} on ${scheme}://${config.host}:${config.port}`);
 	log.info(`ws ${scheme === "https" ? "wss" : "ws"}://${config.host}:${config.port}/ws`);
 	log.info(`client: ${config.devProxy ? `dev proxy ${config.devProxy}` : config.staticDir}`);
 	log.info(`sessions: ${store.sessions.size} loaded from ${config.dataDir}`);
 	log.info(`workers: default model ${config.workerModel}, default cwd ${config.workerCwd}`);
-	log.info(`handler ${config.handler}, engine ${engine.name} (${config.claudeBin}), jarvis ${config.jarvisModel} session ${jarvis.sessionId.slice(0, 8)} cwd ${config.jarvisCwd}`);
-	log.info(`routing: default mode ${config.defaultMode}, ${config.contextTurns} worker turns quoted to Jarvis`);
+	log.info(`handler ${config.handler}, engine ${engine.name} (${config.claudeBin}), mike ${config.mikeModel} session ${mike.sessionId.slice(0, 8)} cwd ${config.mikeCwd}`);
+	log.info(`routing: default mode ${config.defaultMode}, ${config.contextTurns} worker turns quoted to Mike`);
 	// Said out loud because it is the one setting whose right value is a fact
 	// about how the person speaks, and the first thing to reach for when turns
 	// feel slow or sentences arrive in halves.
@@ -405,7 +405,7 @@ const shutdown = (signal) => {
 	for (const client of wss.clients) { try { client.close(4004, "server restarting"); } catch { } }
 	// Before the listener, not after: a `claude` child outliving this process is
 	// a model session nobody is reading and, on a restart loop, money.
-	try { jarvis.dispose(); } catch { }
+	try { mike.dispose(); } catch { }
 	try { engine.dispose?.(); } catch { }
 	mcp.close();
 	server.close(() => process.exit(0));
@@ -418,4 +418,4 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("uncaughtException", (e) => log.error(`UNCAUGHT: ${e.stack || e.message}`));
 process.on("unhandledRejection", (r) => log.error(`UNHANDLED REJECTION: ${r?.stack || r}`));
 
-export { config, store, wss, server, registry, mcp, jarvis, engine };
+export { config, store, wss, server, registry, mcp, mike, engine };

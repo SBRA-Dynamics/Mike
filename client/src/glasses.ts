@@ -20,7 +20,7 @@ import type { Timer } from "./timers.ts";
 /** One container, full lens. R4.2: a nicer layout needs rebuildPageContainer,
  *  which flickers and costs a measured round trip, and ten rows have no space
  *  for chrome anyway. */
-const CONTAINER = { id: 1, name: "jarvis" } as const;
+const CONTAINER = { id: 1, name: "mike" } as const;
 
 /** A single BLE hop has been measured at ~61 ms warm and ~211 ms for a full
  *  1800-character replace, but a flaky one can hang for tens of seconds. Past

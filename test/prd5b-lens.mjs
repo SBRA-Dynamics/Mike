@@ -79,11 +79,11 @@ const consoleMark = async () => Math.max(0, ...(await consoleEntries()).map((e) 
  * reason, and because the same line is what makes a hardware session readable.
  */
 const micLines = async (sinceId) => (await consoleEntries(sinceId))
-	.filter((e) => e.message.includes("[jarvis] mic "))
+	.filter((e) => e.message.includes("[mike] mic "))
 	.map((e) => {
 		const out = { id: e.id, raw: e.message };
 		for (const [, k, v] of e.message.matchAll(/(\w+)=(\S+)/g)) out[k] = /^\d+$/.test(v) ? Number(v) : v;
-		const head = e.message.match(/\[jarvis\] mic (\S+) (\S+)/);
+		const head = e.message.match(/\[mike\] mic (\S+) (\S+)/);
 		if (head) { out.state = head[1]; out.device = head[2]; }
 		return out;
 	});
@@ -192,8 +192,8 @@ try {
 	// DO NOT RUN. We do not open the microphone in the simulator (README,
 	// Testing). On this device, simulator 0.9.5 sometimes keeps streaming after
 	// audioControl(false) and grows by ~700 MB/s until the OOM killer arrives.
-	// From inside jarvis-server's cgroup, that killer took the whole service
-	// down. Reproduced without any Jarvis code. This suite opens it anyway,
+	// From inside mike-server's cgroup, that killer took the whole service
+	// down. Reproduced without any Mike code. This suite opens it anyway,
 	// and stays unrun until that part is taken out.
 	sim = spawn("evenhub-simulator", ["--automation-port", String(automationPort), "--aid", "alsa:null", url], {
 		env: { ...process.env, DISPLAY },
@@ -213,7 +213,7 @@ try {
 	}
 	check("simulatorn svarar på sitt automations-API", pong === true);
 
-	const ready = await waitUntil(async () => (await consoleEntries()).find((e) => e.message.includes("[jarvis] client up")), 40_000, "klientens startrad");
+	const ready = await waitUntil(async () => (await consoleEntries()).find((e) => e.message.includes("[mike] client up")), 40_000, "klientens startrad");
 	check("klienten startar och ser att den har glasögon", /glasses attached/.test(ready.message), ready.message);
 
 	// The session the simulator created is the one that is not ours.

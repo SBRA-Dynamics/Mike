@@ -4,7 +4,7 @@ One plugin, two faces: the lens and the companion view.
 
 ## Goal
 
-A single Even Hub plugin, served by the Jarvis server, that works on a desktop
+A single Even Hub plugin, served by the Mike server, that works on a desktop
 browser, on the phone alone, and on the phone with glasses attached — without
 separate builds or a development mode that drifts from the real thing.
 
@@ -29,7 +29,7 @@ said.
 
 ### R4.1 — Same origin, no configuration
 
-The client is served by the Jarvis server (PRD 1 R1.2), so it knows its own
+The client is served by the Mike server (PRD 1 R1.2), so it knows its own
 server address. No URL field, no token to paste in normal use. A settings panel
 exists for development and for pointing at another host.
 
@@ -42,7 +42,7 @@ One full-lens text container, updated with `textContainerUpgrade`.
 - Wrapped to 50 columns in the client, so what the user sees on the desktop
   preview is exactly what the firmware will render.
 - Overflow is indicated, never silently cut: the user must know there is more.
-- A short header line shows **who is speaking** — Jarvis or the worker's name.
+- A short header line shows **who is speaking** — Mike or the worker's name.
   With ten rows, this is one row spent on the most important thing.
 
 Deliberately a single text container: a nicer layout needs
@@ -64,7 +64,7 @@ lens has no room for chrome anyway.
 - Text input for typing what you would say — the development and fallback path
 - A **lens preview**: the real 50 × 10 box, rendered on the phone and the
   desktop. This is how layout problems are found without wearing anything
-- Current worker, connection state, and what Jarvis last did (`event` messages)
+- Current worker, connection state, and what Mike last did (`event` messages)
 - Settings behind a control, not in the way
 
 ### R4.5 — Connection

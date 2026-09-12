@@ -128,7 +128,7 @@ const rpc = async (method, params) => {
 };
 
 const callTool = async (name, args) => {
-	assistant([{ type: "tool_use", name: `mcp__jarvis__${name}`, input: args }]);
+	assistant([{ type: "tool_use", name: `mcp__mike__${name}`, input: args }]);
 	if (!mcp) return { isError: true, text: "no tools configured" };
 	const r = await rpc("tools/call", { name, arguments: args });
 	if (r?.error) return { isError: true, text: r.error.message };
@@ -151,7 +151,7 @@ const END = R(`(?:end|stop|avsluta|stoppa)\\s+(?:the\\s+)?(?:worker\\s+)?${NAME}
 const LIST_FILES = R("(?:list|show|lista|visa)\\s+(?:the\\s+|de\\s+)?(?:files|filerna|filer)");
 
 /** The bracketed block PRD 3 injects. Reading the working directory out of it
- *  is exactly what R3.4 asks a real Jarvis to do, so the double does it the
+ *  is exactly what R3.4 asks a real Mike to do, so the double does it the
  *  same way rather than being told the answer. */
 const contextCwd = (text) => {
 	const m = text.match(/^\[The user is currently talking to worker "[^"]+" \([^,]+, ([^)]+)\)\./m);
@@ -207,7 +207,7 @@ const answer = async () => {
 		} catch (e) { return `Cannot read ${cwd}: ${e.code}`; }
 	}
 	// Anything else: a short answer that proves what he was given.
-	return `jarvis turn ${state.turns.length + 1}${contextWorker(prompt) ? ` [context:${contextWorker(prompt)}]` : ""}: ${said.slice(0, 120)}`;
+	return `mike turn ${state.turns.length + 1}${contextWorker(prompt) ? ` [context:${contextWorker(prompt)}]` : ""}: ${said.slice(0, 120)}`;
 };
 
 let result;

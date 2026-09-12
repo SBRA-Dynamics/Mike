@@ -12,7 +12,7 @@ import pkg from "./package.json";
  *  anything when a crash is being chased. */
 const VERSION = pkg.version;
 
-// R4.1 and PRD 1 R1.2: the Jarvis server serves the built client from `--static`,
+// R4.1 and PRD 1 R1.2: the Mike server serves the built client from `--static`,
 // which defaults to <repo>/public. Building straight into it means there is no
 // copy step to forget and no second place a stale build can hide.
 //
@@ -29,5 +29,5 @@ export default defineConfig({
 		sourcemap: true
 	},
 	server: { host: true, port: 5190, strictPort: true },
-	define: { __JARVIS_VERSION__: JSON.stringify(VERSION) }
+	define: { __MIKE_VERSION__: JSON.stringify(VERSION) }
 });

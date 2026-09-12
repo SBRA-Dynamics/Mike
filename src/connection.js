@@ -145,13 +145,13 @@ export function attachConnection({ ws, req, store, config, handler, log, registr
 				// attached device and write it into the durable transcript, where it
 				// would outlive its hour by months.
 				//
-				// Any holder of the bearer token may ask for a "jarvis" grant,
+				// Any holder of the bearer token may ask for a "mike" grant,
 				// because R1.7 makes that token the one credential in the system.
 				// The "worker" role exists so the server can mint a grant that sees
 				// no tools at all (R2.4) — in PRD 3 the server mints these itself
 				// and a worker is never handed one.
 				if (!mcp) { send(msg.error("tools are not available")); return true; }
-				const role = m.args?.role === "worker" ? "worker" : "jarvis";
+				const role = m.args?.role === "worker" ? "worker" : "mike";
 				const grant = mcp.mintGrant({ sessionId: session.id, role });
 				send(msg.event("mcpGrant", {
 					role: grant.role, url: grant.url, config: grant.config,

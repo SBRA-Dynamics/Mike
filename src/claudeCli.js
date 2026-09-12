@@ -85,7 +85,7 @@ const short = (s, n = 40) => {
 	return (space > n * 0.6 ? cut.slice(0, space) : cut).trimEnd() + "…";
 };
 
-/** "spawn_worker" -> "Spawn worker", "mcp__jarvis__read_worker" -> "Read
+/** "spawn_worker" -> "Spawn worker", "mcp__mike__read_worker" -> "Read
  *  worker". The fallback for every tool this does not know by name, which is
  *  most of them and all of the future ones. */
 const humanize = (name) => {
@@ -167,7 +167,7 @@ export function createClaudeRunner({
 		// A prompt file the user edits between turns is only honoured when the
 		// CLI is told not to snapshot: `--system-prompt-snapshot` defaults to
 		// `on`, which records the prompt on the conversation's first request and
-		// replays that recording on every later resume. Jarvis's prompt is a
+		// replays that recording on every later resume. Mike's prompt is a
 		// product surface that ships as an editable file (PRD 3), so a recording
 		// made at his first ever turn would outlive every edit until someone
 		// deleted his session.
@@ -327,7 +327,7 @@ export function createClaudeRunner({
 
 			// `is_error` is the CLI saying the turn itself failed (an API error,
 			// a refused model) while still exiting 0. Treating it as success
-			// would put an error string in the transcript as if Jarvis had said
+			// would put an error string in the transcript as if Mike had said
 			// it, which is how a bad model name becomes a personality.
 			if (parsed?.is_error) {
 				return finish({ ok: false, kind: "model", error: errTail(parsed.result) || "the model could not answer", durationMs, sessionId: parsed.session_id });

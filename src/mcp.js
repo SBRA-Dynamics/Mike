@@ -18,7 +18,7 @@
 //
 // Authentication is a per-invocation grant rather than the shared bearer token.
 // A grant binds a token to one session and one role, which is what makes
-// PRD 2 R2.4 enforceable: Jarvis gets a "jarvis" grant and sees the tools, a
+// PRD 2 R2.4 enforceable: Mike gets a "mike" grant and sees the tools, a
 // worker would get a "worker" grant and sees none. The server mints grants; a
 // worker is never handed one, and could not use it if it were.
 
@@ -32,7 +32,7 @@ import { ToolError } from "./workers.js";
  *  2.1.268 asks for 2025-11-25 and we echo whatever it asks. */
 const DEFAULT_PROTOCOL = "2025-11-25";
 
-/** A grant lives for one Jarvis invocation. An hour is generous for a turn and
+/** A grant lives for one Mike invocation. An hour is generous for a turn and
  *  short enough that a leaked config file is not a standing key. */
 const GRANT_TTL_MS = 60 * 60 * 1000;
 const MAX_GRANTS = 64;
@@ -41,9 +41,9 @@ const MAX_GRANTS = 64;
  *  either a bug or someone probing. */
 const MAX_BODY = 256 * 1024;
 
-/** The name the server is configured under, so tools reach Jarvis as
- *  `mcp__jarvis__spawn_worker`. Changing it changes every --allowedTools entry. */
-export const MCP_SERVER_NAME = "jarvis";
+/** The name the server is configured under, so tools reach Mike as
+ *  `mcp__mike__spawn_worker`. Changing it changes every --allowedTools entry. */
+export const MCP_SERVER_NAME = "mike";
 
 /** One line, no newlines, short enough to survive a 50x10 lens with room for
  *  the words around it. Applied at the boundary so no handler has to remember. */
@@ -74,21 +74,21 @@ export function createMcpServer({ store, toolset, registry, log }) {
 
 	/**
 	 * Mint a grant for one Claude Code invocation.
-	 * `role` is "jarvis" (sees the tools) or "worker" (sees none).
+	 * `role` is "mike" (sees the tools) or "worker" (sees none).
 	 * Returns { token, url, config, expiresAt } where `config` is the exact
 	 * string to hand to `claude --mcp-config`.
 	 */
-	const mintGrant = ({ sessionId, role = "jarvis", ttlMs = GRANT_TTL_MS }) => {
+	const mintGrant = ({ sessionId, role = "mike", ttlMs = GRANT_TTL_MS }) => {
 		sweep();
 		if (grants.size >= MAX_GRANTS) {
-			// Drop the oldest rather than refuse: a refusal here means Jarvis
+			// Drop the oldest rather than refuse: a refusal here means Mike
 			// cannot act at all, which is worse than evicting a stale grant.
 			const oldest = [...grants.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt)[0];
 			if (oldest) grants.delete(oldest[0]);
 		}
 		const token = randomBytes(32).toString("hex");
 		const expiresAt = Date.now() + ttlMs;
-		grants.set(token, { sessionId, role: role === "worker" ? "worker" : "jarvis", expiresAt, calls: 0 });
+		grants.set(token, { sessionId, role: role === "worker" ? "worker" : "mike", expiresAt, calls: 0 });
 
 		const url = `http://127.0.0.1:${boundPort}/mcp`;
 		const config = JSON.stringify({
@@ -101,7 +101,7 @@ export function createMcpServer({ store, toolset, registry, log }) {
 	};
 
 	/** Every tool name a grant of this role may call, for --allowedTools. */
-	const allowedToolNames = (role = "jarvis") =>
+	const allowedToolNames = (role = "mike") =>
 		role === "worker" ? [] : toolset.definitions().map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`);
 
 	// ------------------------------------------------------------------ dispatch
@@ -112,7 +112,7 @@ export function createMcpServer({ store, toolset, registry, log }) {
 
 		// R2.4. A worker holds no tools, so this is the same answer it would get
 		// for a tool that does not exist — there is nothing here to discover.
-		if (grant.role !== "jarvis") {
+		if (grant.role !== "mike") {
 			log?.warn(`mcp tool refused for role=${grant.role}: ${name}`);
 			return { isError: true, text: "that is not something this session can do" };
 		}
@@ -125,7 +125,7 @@ export function createMcpServer({ store, toolset, registry, log }) {
 			const out = await toolset.run(name, args, { session, registry, log });
 
 			// R2.3 — logged with arguments and result, and surfaced to every
-			// attached client as an `event` so the user sees what Jarvis did and
+			// attached client as an `event` so the user sees what Mike did and
 			// not only what he said. emit(), not send(): this one IS for
 			// everybody on the session and belongs in the transcript.
 			session.emit(msg.event(out.kind, {
@@ -154,13 +154,13 @@ export function createMcpServer({ store, toolset, registry, log }) {
 				return rpcResult(m.id, {
 					protocolVersion: typeof m.params?.protocolVersion === "string" ? m.params.protocolVersion : DEFAULT_PROTOCOL,
 					capabilities: { tools: { listChanged: false } },
-					serverInfo: { name: "jarvis", title: "Jarvis", version: "1" }
+					serverInfo: { name: "mike", title: "Mike", version: "1" }
 				});
 
 			case "tools/list":
 				// The role gate is here as well as in callTool. A worker must not
 				// even be able to enumerate what it is not allowed to do.
-				return rpcResult(m.id, { tools: grant.role === "jarvis" ? toolset.definitions() : [] });
+				return rpcResult(m.id, { tools: grant.role === "mike" ? toolset.definitions() : [] });
 
 			case "tools/call": {
 				const r = await callTool(grant, m.params);

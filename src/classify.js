@@ -8,7 +8,7 @@
 // writing "I can do A or B, tell me which" is asking, with no question mark
 // anywhere, and that is the exact case a heuristic gets wrong.
 //
-// Deliberately NOT Jarvis. PRD 3 keeps worker turns out of his session on
+// Deliberately NOT Mike. PRD 3 keeps worker turns out of his session on
 // purpose — he is fed context when addressed, not fed every turn as it happens.
 // Routing every background reply through him would undo that, fill his context
 // with work he is not doing, and cost an opus turn for a one-word judgement.

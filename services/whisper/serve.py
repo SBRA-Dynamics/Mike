@@ -2,7 +2,7 @@
 """Transcription service — PRD 5a R5a.5.
 
 Whisper on the GPU, loaded once and kept warm, behind the smallest HTTP surface
-that does the job. The Jarvis server talks to it over loopback (src/whisper.js);
+that does the job. The Mike server talks to it over loopback (src/whisper.js);
 nothing else may reach it, which is why it binds 127.0.0.1 and has no auth: a
 port that only this machine can open needs no password, and a password in a unit
 file is one more thing to leak.
@@ -25,7 +25,7 @@ driver 595.84, Python 3.12):
     # once, to fetch the weights (~1.6 GB for large-v3-turbo) into ~/.cache/huggingface
     ~/.local/share/jarvis/venv/bin/python services/whisper/serve.py --warm-only
 
-    # normal run: the port the Jarvis server defaults to
+    # normal run: the port the Mike server defaults to
     ~/.local/share/jarvis/venv/bin/python services/whisper/serve.py --port 3461
 
 faster-whisper (CTranslate2) rather than openai-whisper or transformers: no
@@ -103,14 +103,14 @@ NO_SPEECH_MAX = 0.6
 AVG_LOGPROB_MIN = -1.0
 
 # A short hotword list, handed to the decoder as the text that preceded this
-# utterance. "Jarvis" is not a Swedish word and the mode commands are two-word
+# utterance. "Mike" is not a Swedish word and the mode commands are two-word
 # fragments with no sentence around them, which is the case whisper is worst at:
-# without this, "Hey Jarvis, pausa input" came back as "I arvise pausa input"
+# without this, "Hey Mike, pausa input" came back as "I arvise pausa input"
 # and "Fortsätt input" as "Foset inputte", and R5a.4's commands then cannot be
 # matched however good the matcher is. With it, both are transcribed exactly.
 # Kept to the vocabulary, with no instructions in it: a longer prompt starts
 # appearing in the output of unrelated speech.
-DEFAULT_HINT = "Jarvis. Pausa input. Fortsätt input. Ändra input till alltid, via namn eller håll in."
+DEFAULT_HINT = "Mike. Pausa input. Fortsätt input. Ändra input till alltid, via namn eller håll in."
 
 
 class Transcriber:
@@ -266,16 +266,16 @@ def make_handler(t, quiet):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Jarvis transcription service (PRD 5a)")
-    ap.add_argument("--model", default=os.environ.get("JARVIS_WHISPER_MODEL", "large-v3-turbo"),
+    ap = argparse.ArgumentParser(description="Mike transcription service (PRD 5a)")
+    ap.add_argument("--model", default=os.environ.get("MIKE_WHISPER_MODEL", "large-v3-turbo"),
                     help="faster-whisper model name (default large-v3-turbo)")
-    ap.add_argument("--device", default=os.environ.get("JARVIS_WHISPER_DEVICE", "cuda"))
-    ap.add_argument("--compute-type", default=os.environ.get("JARVIS_WHISPER_COMPUTE", "float16"))
+    ap.add_argument("--device", default=os.environ.get("MIKE_WHISPER_DEVICE", "cuda"))
+    ap.add_argument("--compute-type", default=os.environ.get("MIKE_WHISPER_COMPUTE", "float16"))
     ap.add_argument("--host", default="127.0.0.1", help="loopback only; there is no auth")
     ap.add_argument("--port", type=int, default=3461, help="0 asks the OS for a free one")
     ap.add_argument("--port-file", default=None, help="write the bound port here, for a supervisor to read")
     ap.add_argument("--languages", default="sv,en", help="what the log calls unexpected; detection is not restricted")
-    ap.add_argument("--hint", default=os.environ.get("JARVIS_WHISPER_HINT", DEFAULT_HINT),
+    ap.add_argument("--hint", default=os.environ.get("MIKE_WHISPER_HINT", DEFAULT_HINT),
                     help="vocabulary hint given to the decoder; empty string turns it off")
     ap.add_argument("--warm-only", action="store_true", help="load the model, warm it, and exit")
     ap.add_argument("--quiet", action="store_true")
@@ -295,7 +295,7 @@ def main():
     if args.port_file:
         with open(args.port_file, "w") as f:
             f.write(str(port))
-    # The line the Jarvis server's operator and the test harness both read. On
+    # The line the Mike server's operator and the test harness both read. On
     # stdout and flushed, because a buffered "I am ready" is the same as not
     # being ready.
     print(f"whisper-service listening on http://{args.host}:{port}", flush=True)

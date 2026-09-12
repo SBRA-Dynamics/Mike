@@ -1,6 +1,6 @@
 // A prompt that lives in a file and is re-read when it changes.
 //
-// Both Jarvis (PRD 3) and the workers load their prompts through this, for the
+// Both Mike (PRD 3) and the workers load their prompts through this, for the
 // same reason: a prompt is a product surface, and editing one must change
 // behaviour on the next turn without a restart and without a rebuild.
 //
