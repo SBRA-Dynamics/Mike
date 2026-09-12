@@ -26,7 +26,7 @@ import { stdin, stdout } from "node:process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { homedir, userInfo } from "node:os";
+import { homedir, userInfo, networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -156,6 +156,15 @@ say("\nTLS is optional. With a certificate and key the server speaks HTTPS, whic
 say("the Even app needs to reach it from a phone that is not on your LAN.");
 const cert = await ask("TLS certificate chain (blank for plain HTTP)", previous.MIKE_CERT ?? "");
 const key = cert ? await ask("TLS private key", previous.MIKE_KEY ?? "") : "";
+
+// The address the PHONE uses, which is not the bind address: a router that
+// forwards an outside port, a hostname with a certificate, or just this
+// machine's LAN address. It goes into the pairing link and nowhere else.
+const lanIp = Object.values(networkInterfaces()).flat().find((i) => i && i.family === "IPv4" && !i.internal)?.address ?? "localhost";
+say("\nThe public URL is what the phone connects to — through a router, a");
+say("hostname, or straight to this machine on the LAN. It goes into the pairing link.");
+const publicUrl = (await ask("Public URL", previous.MIKE_PUBLIC_URL ?? `https://${lanIp}:3456`)).replace(/\/+$/, "");
+if (publicUrl.startsWith("https://") && !cert) say(`  (https, but no certificate: something in front of the server has to terminate TLS, or the phone will not connect)`);
 const token = previous.MIKE_TOKEN || randomBytes(16).toString("hex");
 if (previous.MIKE_TOKEN) say("\nKeeping the existing token from ~/.config/mike/env.");
 
@@ -184,6 +193,7 @@ const env = {
 	MIKE_PORT: port,
 	MIKE_HOST: host,
 	...(cert ? { MIKE_CERT: cert, MIKE_KEY: key } : {}),
+	MIKE_PUBLIC_URL: publicUrl,
 	MIKE_CLAUDE_BIN: claudeBin,
 	MIKE_WORKER_CWD: workerCwd,
 	MIKE_CWD: mikeCwd,
@@ -288,14 +298,17 @@ if (wantSystemd) {
 // ------------------------------------------------------------------- done
 
 head("Done");
-const scheme = cert ? "https" : "http";
-const shownHost = host === "0.0.0.0" ? "<this machine's address>" : host;
-say(`Pairing link (scan it from the app, or open it once in a browser):`);
-say(`\n  ${scheme}://${shownHost}:${port}/?token=${token}\n`);
-if (which("qrencode")) {
-	const r = spawnSync("qrencode", ["-t", "ANSIUTF8", `${scheme}://${host === "0.0.0.0" ? "localhost" : host}:${port}/?token=${token}`], { encoding: "utf8" });
-	if (r.status === 0) say(r.stdout);
-} else say("(install qrencode to get the link as a QR code in the terminal)");
+const link = `${publicUrl}/?token=${token}`;
+say("Scan this from the Mike app on the phone (Scan QR), or open the link once in a browser:");
+say(`\n  ${link}\n`);
+// A QR in the terminal, from the one dependency this script has; it is
+// installed by `npm install`, and a clone that skipped that gets the link.
+try {
+	const { default: qr } = await import("qrcode-terminal");
+	qr.generate(link, { small: true }, (code) => say(code));
+} catch {
+	say("(npm install first, and the link comes as a QR code here too)");
+}
 if (!wantSystemd) {
 	say("To run by hand:");
 	say("  npm start                     # the server, reading ~/.config/mike/env");

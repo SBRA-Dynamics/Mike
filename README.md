@@ -56,8 +56,10 @@ Run it again to change something — the token is kept. `npm run setup --
 --defaults` answers everything without asking (no voice, no autostart), and
 `--dry-run` shows what would be written.
 
-At the end it prints the pairing link with the token — scan it from the app
-(`qrencode` gets you a QR in the terminal) or open it once in a browser.
+It also asks for the public URL the phone reaches the server at — by default
+`https://<this machine's LAN address>:3456` — and ends by showing the pairing
+link with the token as a QR code in the terminal: scan it with the app's
+Scan QR button, or open the link once in a browser.
 
 Voice needs the transcription service running as well:
 
