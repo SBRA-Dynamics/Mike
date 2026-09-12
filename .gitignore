@@ -4,3 +4,4 @@ public/
 test/out/
 mike.ehpk
 dirs.json
+*.swp
