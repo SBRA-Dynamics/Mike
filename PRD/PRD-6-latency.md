@@ -37,6 +37,25 @@ process per worker är vägen, men T1 avvisade långlivade processer av ett skä
 som står kvar: två drivare av samma session grenar transkriptet tyst. Tas
 inte innan 1 och 2 är gjorda och mätta — de kan visa sig räcka.
 
+## Vad som är gjort
+
+**1 är byggd** (7c6984b). `--output-format stream-json`, samma en process per
+tur, men strömmen läses medan den skrivs: verktygsnamnet och svarets första
+mening går som `progress`-händelser genom jarvis.say och engine.send ut till
+klienten. Mätt mot riktiga CLI:t: "Read" på linsen efter 2,3 s i en tur som
+tog 4,5 s. Det partiella hamnar på linsen men inte i transkriptet — det
+färdiga svaret kommer ändå och ska vara sista ordet.
+
+**2 följde med samma ändring**: statusraden säger verktygets namn i stället
+för "thinking" så fort den vet ett, och det gäller glasögonen lika mycket som
+telefonen — det är samma statusrad.
+
+**Öppet: en tydligare konfirmation.** Statusraden är det som bekräftar att
+något togs emot, och den är diskret av design. Frågan som står kvar är om det
+behövs något mer påtagligt på linsen i det ögonblick en tur startar — en egen
+rad som blinkar till, snarare än ett ord som byts ut. Inte byggd; noterad
+2026-09-12 för att den kom upp och inte ska behöva komma upp igen.
+
 ## Mätpunkt
 
 Innan något byggs: logga tiden till första token och total tid per tur, så
