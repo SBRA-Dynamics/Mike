@@ -116,6 +116,16 @@ export function attachConnection({ ws, req, store, config, handler, log, registr
 	/** Control actions the transport owns (PRD 1 R1.5). Returns true when handled. */
 	function handleTransportControl(m) {
 		switch (m.action) {
+			case CONTROL.CLIENT_LOG: {
+				// Bounded, and never emitted back: it is a log line, not a fact
+				// about the conversation, and a client that decided to send a
+				// megabyte of them must not be able to fill a disk with them.
+				const text = String(m.args?.text ?? "").replace(/\s+/g, " ").slice(0, 500);
+				const level = m.args?.level === "error" ? "error" : "info";
+				if (text) log[level](`client ${session?.id.slice(0, 8) ?? "?"}: ${text}`);
+				return true;
+			}
+
 			case CONTROL.LIST_SESSIONS:
 				send(msg.event("sessions", { sessions: store.list(Number(m.args?.limit) || 50) }));
 				return true;

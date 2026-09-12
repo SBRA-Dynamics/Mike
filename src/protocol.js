@@ -25,6 +25,13 @@ export const CONTROL = {
 	// surface, so a Claude Code invocation bound to this session can act on it.
 	MCP_GRANT: "mcpGrant",
 
+	// A client saying something went wrong inside itself. It exists because the
+	// client that most needs to be debugged is the one with no console: a
+	// WebView inside the Even App on a phone, which can die without leaving a
+	// single line anywhere a developer can read. This puts that line in the
+	// server's log, next to the session it happened in.
+	CLIENT_LOG: "clientLog",
+
 	// PRD 3. These are conversation-level, so the transport passes them through
 	// to the handler rather than answering them itself — but they live here
 	// because R1.6 says one shared schema file, and the client imports this one.

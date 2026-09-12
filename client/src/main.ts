@@ -32,6 +32,34 @@ import { Companion } from "./ui/companion.ts";
 
 const store = new Store();
 let connection: Connection | null = null;
+
+/**
+ * The black box — because the client that most needs a console has none.
+ *
+ * In the Even App the page is a WebView on a phone: when it dies it takes every
+ * line it ever printed with it, and what the user sees is the app closing.
+ * Restarting shows the reply that was arriving when it went, which says the
+ * death is somewhere between a message landing and the frame reaching the
+ * glasses — and says nothing at all about where.
+ *
+ * So the last thing that was attempted is kept in a variable, and anything
+ * thrown is sent to the server, which has a log file that survives. Bounded to
+ * one short string: this is a breadcrumb, not telemetry.
+ */
+let step = "boot";
+const mark = (s: string): void => { step = s; };
+
+const report = (what: string, e: unknown): void => {
+	const detail = e instanceof Error ? `${e.message} ${(e.stack ?? "").split("\n")[1] ?? ""}` : String(e);
+	const line = `${what} at "${step}": ${detail}`;
+	console.error(`[jarvis] ${line}`);
+	// Best effort, and never able to throw on its own account: the thing being
+	// reported may well be the socket.
+	try { connection?.control(CONTROL.CLIENT_LOG, { level: "error", text: line }); } catch { }
+};
+
+globalThis.addEventListener?.("error", (ev) => report("uncaught", (ev as ErrorEvent).error ?? (ev as ErrorEvent).message));
+globalThis.addEventListener?.("unhandledrejection", (ev) => report("unhandled rejection", (ev as PromiseRejectionEvent).reason));
 let frame: LensFrame = renderLens({ from: "Jarvis", text: "Connecting…", page: 0 });
 
 const root = document.getElementById("app")!;
@@ -200,10 +228,14 @@ let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
 const paint = (): void => {
 	const s = store.state;
+	mark("render");
 	const view = store.lensView();
 	frame = renderLens({ from: view.from, text: view.text, status: store.lensStatus(), page: view.page });
+	mark("companion");
 	companion.render(s, frame, store.listening());
+	mark(`glasses ${frame.content.length}c`);
 	glasses.show(frame.content);
+	mark("painted");
 
 	if (expiryTimer) { clearTimeout(expiryTimer); expiryTimer = null; }
 	// Two things fade on their own now: a background notice and "heard". The
@@ -283,8 +315,11 @@ const openConnection = (): void => {
 				// a new start (PRD 1 R1.5).
 				if (ready.sessionId !== settingsStore.value.sessionId) void settingsStore.save({ sessionId: ready.sessionId });
 			},
-			onHistory: (messages) => store.applyHistory(messages),
-			onMessage: (m) => store.apply(m)
+			onHistory: (messages) => { mark(`history ${messages.length}`); store.applyHistory(messages); },
+			// Named before it is applied, so a breadcrumb says which message the
+			// client was holding when it went — the whole question here is which
+			// one of them it cannot survive.
+			onMessage: (m) => { mark(`${m.type}${(m as { kind?: string }).kind ? `:${(m as { kind?: string }).kind}` : ""}`); store.apply(m); }
 		}
 	});
 	connection.start();
