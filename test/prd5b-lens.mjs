@@ -163,8 +163,12 @@ try {
 	// R5b.1: the permission has to be declared, or audioControl(true) is refused
 	// on the hardware however right the code is.
 	const app = JSON.parse(spawnSync("cat", [join(ROOT, "client", "app.json")], { encoding: "utf8" }).stdout);
-	check("app.json begär glasögonens mikrofon (R5b.1)", (app.permissions ?? []).includes("g2-microphone"), JSON.stringify(app.permissions));
-	check("och telefonens, som är reserven", (app.permissions ?? []).includes("phone-microphone"), JSON.stringify(app.permissions));
+	// A permission is `{ name, desc }` — it grew a sentence the Even App shows
+	// the user when it asks. The bare-string form is still accepted here so the
+	// check is about what is REQUESTED and not about how it is spelled.
+	const asks = (name) => (app.permissions ?? []).some((p) => (typeof p === "string" ? p : p?.name) === name);
+	check("app.json begär glasögonens mikrofon (R5b.1)", asks("g2-microphone"), JSON.stringify(app.permissions));
+	check("och telefonens, som är reserven", asks("phone-microphone"), JSON.stringify(app.permissions));
 
 	// ----------------------------------------------------------------- server
 	const server = await startServer(["--handler", "echo", "--mode", MODES.PUSHTOTALK]);

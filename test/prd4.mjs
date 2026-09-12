@@ -27,7 +27,7 @@ import { Connection, wsUrlFrom } from "../client/src/connection.ts";
 import { Store, NOTICE_MS, STALE_MS, MARK_WAITING, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
 import { settingsFromScan, decodeFrame } from "../client/src/qr.ts";
 import { readUrlSettings, SettingsStore } from "../client/src/settings.ts";
-import { Glasses, hasHostChannel } from "../client/src/glasses.ts";
+import { Glasses, hasHostChannel, isAudioChatter } from "../client/src/glasses.ts";
 import { getTextWidth } from "../client/node_modules/@evenrealities/pretext/dist/font_measure.js";
 
 const QUICK = process.argv.includes("--quick");
@@ -736,6 +736,32 @@ try {
 	}
 
 	// =============================================================== adress
+	section("glasögonen: SDK:ns ljudprat når aldrig konsolen (PRD 5b)");
+	{
+		// The exact call 0.0.15 makes, ten times a second while a microphone is
+		// open: a short prefix and the event OBJECT. In a WebView the console is
+		// bridged to the native host, so letting this through means serialising
+		// a PCM array and shipping it across — which is a hot phone and a page
+		// that stops keeping up.
+		//
+		// The first filter looked for "audioPcm" inside the prefix, which is a
+		// string that never contains it. It matched nothing for as long as it
+		// existed. This test is pinned to the SHAPE so that cannot recur.
+		const event = { audioEvent: { audioPcm: new Uint8Array(1600), audioSeq: 3 } };
+		check("ett ljudpaket känns igen på var nyttolasten sitter",
+			isAudioChatter(["[EvenAppBridge] EvenHub event:", event]) === true);
+		check("och prefixet ensamt räcker inte för att tysta något",
+			isAudioChatter(["[EvenAppBridge] EvenHub event:", { textEvent: { text: "hej" } }]) === false);
+		check("systemhändelser får fortfarande synas",
+			isAudioChatter(["[EvenAppBridge] EvenHub event:", { sysEvent: { sysType: 9 } }]) === false);
+		check("och allt annat i konsolen är orört",
+			isAudioChatter(["[jarvis] client up 0.3.2"]) === false
+			&& isAudioChatter(["something", { audioEvent: {} }]) === false);
+		// The old shape, so nobody "simplifies" back to it.
+		check("den gamla formen var aldrig sann",
+			"[EvenAppBridge] EvenHub event:".includes("audioPcm") === false);
+	}
+
 	section("adressen: klienten vet var servern finns utan konfiguration (R4.1)");
 	check("https blir wss", wsUrlFrom("https://jarvis.example.se/") === "wss://jarvis.example.se/ws");
 	check("http blir ws och porten följer med", wsUrlFrom("http://127.0.0.1:3460/x?y=1") === "ws://127.0.0.1:3460/ws");

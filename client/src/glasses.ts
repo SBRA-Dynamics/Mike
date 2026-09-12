@@ -73,19 +73,52 @@ export const hasHostChannel = (): boolean =>
 	typeof (globalThis as any).flutter_inappwebview?.callHandler === "function";
 
 /**
+ * Is this console call the SDK narrating one audio frame?
+ *
+ * The shape is the whole of it, and getting the shape wrong is how this went
+ * unnoticed. 0.0.15 logs every EvenHub event as
+ *
+ *     console.log("[EvenAppBridge] EvenHub event:", event)
+ *
+ * — a short PREFIX and the event OBJECT, two arguments, with the PCM hanging
+ * off `event.audioEvent.audioPcm`. The first version of this filter looked for
+ * "audioPcm" in the first argument, which is a string that never contains it,
+ * so it matched nothing and every frame went through.
+ *
+ * Exported so the suite can hold it to the shape rather than to a description
+ * of the shape.
+ */
+export const isAudioChatter = (args: unknown[]): boolean => {
+	const first = args[0];
+	if (typeof first !== "string" || !first.startsWith("[EvenAppBridge]")) return false;
+	for (let i = 1; i < args.length; i++) {
+		const v = args[i] as Record<string, unknown> | null;
+		if (v && typeof v === "object" && (v.audioEvent != null || v.audioPcm != null)) return true;
+	}
+	return false;
+};
+
+/**
  * Stop the SDK narrating every audio frame — PRD 5b.
  *
- * 0.0.15 logs EVERY EvenHub event to the console, audio included, as a string
- * with the whole PCM array serialised into it. With a microphone open that is
- * ten of them a second, for as long as the user is listening: in the simulator
- * it fills the automation API's 2000-entry console buffer in about two seconds,
- * and in a WebView on a phone it is an hour-long session's worth of retained
- * strings. There is no switch for it in the SDK.
+ * With a microphone open that is ten events a second for as long as the user is
+ * listening, and in a WebView each one is paid for twice: the console is
+ * bridged to the native host, so logging an object means serialising it and
+ * shipping it across, and the object is a PCM array.
  *
- * Only those lines are dropped — the prefix AND the audio payload have to both
- * be there — so every other thing the SDK says still reaches the console, which
- * is the only debugging channel a phone has. The serialisation itself happens
- * before this and cannot be prevented from a plugin.
+ * Measured from the outside before this was understood: the phone gets hot, the
+ * page stops keeping up, and it dies without throwing anything — a reply
+ * arrives and is never drawn, and restarting shows it waiting in the history.
+ * Every one of those sessions had a microphone open in Always.
+ *
+ * The serialisation happens INSIDE console.log, in the host's bridge, not
+ * before it. That is what makes this fixable from a plugin at all: dropping the
+ * call drops the whole cost. (An earlier note here said the opposite. It was
+ * wrong, and it was wrong because the filter above never fired, so nothing ever
+ * contradicted it.)
+ *
+ * Only audio lines are dropped — everything else the SDK says still reaches the
+ * console, which is the only debugging channel a phone has.
  *
  * Installed at most once. Two of these stacked would each wrap the other, and a
  * hot reload would then cost a chain of them — the classic way a filter becomes
@@ -97,8 +130,7 @@ const quietenAudioLogging = (): void => {
 	quietened = true;
 	const real = console.log.bind(console);
 	console.log = (...args: unknown[]) => {
-		const first = args[0];
-		if (typeof first === "string" && first.startsWith("[EvenAppBridge]") && first.includes("audioPcm")) return;
+		if (isAudioChatter(args)) return;
 		real(...args);
 	};
 };
