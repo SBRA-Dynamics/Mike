@@ -131,18 +131,61 @@ andra varv blir därmed dess sista. `test/prd4-browser.mjs` bygger samma brygga
 i en riktig webbläsare — en console.error som avvisar ett löfte varje gång —
 och släpper in ett enda fel; utan spärren återvänder det testet aldrig.
 
-Två saker som föll ut på vägen och inte är avslutade:
+Två saker föll ut på vägen. Den första visade sig vara spåret till hängningen.
 
-**Pulsen förökar sig.** Samma logg visar `beat` en halv sekund isär, var och
+**Pulsen förökade sig.** Samma logg visar `beat` en halv sekund isär, var och
 en med `late=-15000ms`, alla med samma `beatAt` och samma bildräknare — alltså
-en sida med många kedjor, inte många sidor. Den växer med ungefär hälften per
-intervall. Varifrån de extra kedjorna kommer är inte utrett; att de inte kan
-samlas på hög är det, för den väntande timern avbeställs innan nästa beställs.
+en sida med många kedjor, inte många sidor. Den växte med ungefär hälften per
+intervall. Varifrån de extra kedjorna kom står i nästa avsnitt.
 
 **Räknaren i rubriken** byter fortfarande text varje sekund, och varje ändrad
 ram är ett BLE-hopp. En tur på tre minuter är ~180 hopp. Ingen av dem är dyr
 mätt en och en, och nu när kraschen har ett namn är det inte längre en
 misstanke om den utan bara en kostnad.
+
+## Hängningen var SDK:ns timers
+
+Rapportloopen var verklig och är stängd, men appen hängde sig ändå och
+telefonen blev varm — alltid efter första meningen, när linsen visat `√`. I
+serverloggen ser varje sida likadan ut: en avvisning från bryggan
+(`postMessage: The object does not support the operation or argument`), en
+halv sekund senare stängs socketen med 1001 (sidan går bort), och nästa sida
+som startar bär ett `user-script`-nummer femton steg högre.
+
+`@evenrealities/even_hub_sdk` 0.0.15 byter vid import ut `window.setTimeout`,
+`clearTimeout`, `setInterval` och `clearInterval` mot "skuggtimers": varje
+timer läggs i en Map bredvid en riktig, och värden kan driva kartan själv
+genom `window.__tickShadowTimers(elapsedMs)` — för det fall där en
+bakgrundslagd WebViews egna timers står stilla. Tre egenskaper hos det lagret,
+mätta mot den levererade SDK:n i `test/prd6-timers.mjs`:
+
+* En timer som ticket avfyrar tas bort ur kartan, men dess riktiga tvilling
+  avbeställs inte. En engångstimer avfyras två gånger. Det är pulsens
+  förökning: en kedja som armar om sig vid varje avfyrning fördubblas.
+* Ticket itererar kartan medan callbacks körs, och en Map besöker poster som
+  läggs till under iterationen. En callback som armar om sig själv med en
+  fördröjning kortare än tickets `elapsedMs` besöks, avfyras, armas om, besöks
+  igen — inuti ETT anrop, som aldrig återvänder. Linsen ritas om en gång i
+  sekunden så länge en tur pågår (räknaren i rubriken, 048a77f), så kedjan
+  finns från det ögonblick en mening hörts, och första värdticket därefter kom
+  aldrig tillbaka. Det är därför det började i samma veva som PRD 6, därför
+  telefonen blev varm, och därför socketen stängdes med 1001: sidan dödades.
+* `clearTimeout(id)` för ett id som inte längre finns i kartan faller igenom
+  till den riktiga `clearTimeout` med skugg-id:t — ett litet heltal räknat
+  från 1, precis som riktiga id:n — och kan alltså avbeställa någon annans
+  timer.
+
+Rättat i 0.3.5: klienten rör inte `window.setTimeout` alls. `client/src/timers.ts`
+tar de riktiga funktionerna vid modulutvärdering, före SDK:n importeras, och
+allt i klienten går genom dem. Det som ges upp är tickets enda tjänst —
+timers som går medan värden fryst sidan — och ingenting här vill ha den:
+målningen har inget att måla medan appen är borta, och anslutningen petas när
+den kommer tillbaka (R4.5). Testet håller SDK:n till beskrivningen (kedjan är
+en loop på dess timers och tar ett anrop på klientens) och klienten till
+löftet (ingen fil utom timers.ts anropar de globala).
+
+Inte verifierat på glasögonen än. Raden `client up 0.3.5 … timers native` i
+serverloggen är kvittot på att bygget som kör är det här.
 
 ## Mätpunkt
 

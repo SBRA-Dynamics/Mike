@@ -15,6 +15,8 @@ import jsQR from "jsqr";
 
 import { wsUrlFrom } from "./connection.ts";
 import type { Settings } from "./settings.ts";
+import { after, cancel } from "./timers.ts";
+import type { Timer } from "./timers.ts";
 
 export type ScanResult =
 	| { ok: true; settings: Partial<Settings>; host: string }
@@ -116,7 +118,7 @@ export type ScannerOptions = {
 export class Scanner {
 	#opts: ScannerOptions;
 	#stream: MediaStream | null = null;
-	#timer: ReturnType<typeof setTimeout> | null = null;
+	#timer: Timer | null = null;
 	#generation = 0;
 
 	constructor(opts: ScannerOptions) { this.#opts = opts; }
@@ -152,7 +154,8 @@ export class Scanner {
 
 	stop(): void {
 		this.#generation++;
-		if (this.#timer) { clearTimeout(this.#timer); this.#timer = null; }
+		cancel(this.#timer);
+		this.#timer = null;
 		if (this.#stream) { stopTracks(this.#stream); this.#stream = null; }
 		const v = this.#opts.video;
 		try { v.pause(); } catch { }
@@ -177,7 +180,7 @@ export class Scanner {
 		// Not requestAnimationFrame: a backgrounded WebView stops calling it, and
 		// a scanner that silently stops when the phone locks is worse than one
 		// that costs a few timer wakeups.
-		this.#timer = setTimeout(() => this.#tick(generation), 120);
+		this.#timer = after(() => this.#tick(generation), 120);
 	}
 }
 

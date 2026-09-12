@@ -80,6 +80,12 @@ try {
 	// Acceptance 3, on the desktop half: the preview is not an approximation of
 	// what the lens shows, it is the same frame — so comparing it against what
 	// renderLens produces here is comparing it against what the glasses get.
+	//
+	// The reply lands one message before the `state` that ends the turn, so
+	// for a moment the header still says "thinking"; the frame compared is the
+	// one after that moment, or the comparison measures the race and not the
+	// preview.
+	await waitFor(`jarvis.listening() !== "thinking"`, 5_000, "turen är över");
 	const rows = await evaluate(`[...document.querySelectorAll(".lens .row")].map(r => r.textContent.replace(/\\u00a0/g, ""))`);
 	const expected = renderLens({ from: "echo", text: `echo: ${SAID}`, status: null, page: 0 }).lines;
 	check("förhandsvisningen är exakt den ram glasögonen skulle få (krav 3)",

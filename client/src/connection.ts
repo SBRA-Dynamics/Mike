@@ -14,6 +14,8 @@
 
 import { C2S, CONTROL, CLOSE, PROTOCOL_VERSION } from "./protocol.ts";
 import type { Origin, ReadyMsg, SeqMsg, ServerMsg } from "./protocol.ts";
+import { after, cancel } from "./timers.ts";
+import type { Timer } from "./timers.ts";
 
 export type ConnectionStatus = "idle" | "connecting" | "online" | "offline" | "fatal";
 
@@ -74,8 +76,8 @@ export class Connection {
 
 	#ws: WebSocket | null = null;
 	#attempt = 0;
-	#timer: ReturnType<typeof setTimeout> | null = null;
-	#openTimer: ReturnType<typeof setTimeout> | null = null;
+	#timer: Timer | null = null;
+	#openTimer: Timer | null = null;
 	#stopped = true;
 	#backoff: number[];
 
@@ -181,7 +183,7 @@ export class Connection {
 		}
 		this.#ws = ws;
 
-		this.#openTimer = setTimeout(() => {
+		this.#openTimer = after(() => {
 			if (this.#ws !== ws) return;
 			// A socket stuck in CONNECTING never fires close, so nothing would
 			// ever schedule the retry.
@@ -300,16 +302,18 @@ export class Connection {
 		// Jitter, because a phone and a desktop that lost the same wifi would
 		// otherwise reconnect in lockstep forever.
 		const wait = Math.round(step * (0.8 + Math.random() * 0.4));
-		this.#timer = setTimeout(() => this.#open(), wait);
+		this.#timer = after(() => this.#open(), wait);
 	}
 
 	#clearOpenTimer(): void {
-		if (this.#openTimer) { clearTimeout(this.#openTimer); this.#openTimer = null; }
+		cancel(this.#openTimer);
+		this.#openTimer = null;
 	}
 
 	#clearTimers(): void {
 		this.#clearOpenTimer();
-		if (this.#timer) { clearTimeout(this.#timer); this.#timer = null; }
+		cancel(this.#timer);
+		this.#timer = null;
 	}
 
 	#setStatus(status: ConnectionStatus, detail: string): void {

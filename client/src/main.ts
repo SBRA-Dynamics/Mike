@@ -26,6 +26,8 @@ import { Glasses, hasHostChannel } from "./glasses.ts";
 import { renderLens } from "./lens/render.ts";
 import type { LensFrame } from "./lens/render.ts";
 import { Store } from "./state.ts";
+import { after, cancel, looksNative, natives } from "./timers.ts";
+import type { Timer } from "./timers.ts";
 import { CONTROL } from "./protocol.ts";
 import { SettingsStore, browserStorage, bridgeStorage, readUrlSettings, scrubUrl } from "./settings.ts";
 import { Companion } from "./ui/companion.ts";
@@ -75,6 +77,10 @@ let connection: Connection | null = null;
  * least of all — because staying quiet is the entire mechanism: the loop's
  * second turn produces a line identical to its first, is counted instead of
  * said, and there is no third.
+ *
+ * That loop was real, and closing it was not the end of the hang. The hang was
+ * a second loop, inside the timers the SDK puts in place of the browser's, and
+ * it is described in timers.ts. The heartbeat below is what pointed there.
  */
 let step = "boot";
 const mark = (s: string): void => { step = s; };
@@ -288,7 +294,7 @@ const repaint = (immediate = false): void => {
 /** A fading notice has to disappear on its own, so a repaint is scheduled for
  *  the moment it expires rather than polled for. Identical frames are not
  *  re-sent to the glasses, so an extra repaint costs nothing over BLE. */
-let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+let expiryTimer: Timer | null = null;
 
 const paint = (): void => {
 	const s = store.state;
@@ -301,12 +307,18 @@ const paint = (): void => {
 	glasses.show(frame.content);
 	mark("painted");
 
-	if (expiryTimer) { clearTimeout(expiryTimer); expiryTimer = null; }
+	cancel(expiryTimer);
+	expiryTimer = null;
 	// Two things fade on their own now: a background notice and "heard". The
 	// nearer of the two decides when to repaint, so neither is left on screen
 	// after it stopped being true.
+	//
+	// This is the chain that hung the page: once a second for as long as a
+	// turn runs, re-armed from inside its own callback. On the SDK's shadow
+	// timers that shape is a loop that never returns (timers.ts); on the
+	// host's own it is a timer.
 	const due = [store.nextNoticeExpiry(), store.nextListeningExpiry()].filter((v): v is number => v !== null);
-	if (due.length) expiryTimer = setTimeout(() => { expiryTimer = null; paint(); }, Math.min(...due) + 50);
+	if (due.length) expiryTimer = after(() => { expiryTimer = null; paint(); }, Math.min(...due) + 50);
 };
 
 store.subscribe(() => repaint());
@@ -364,26 +376,25 @@ store.subscribe((s) => {
  */
 const HEARTBEAT_MS = 15_000;
 let beatAt = Date.now();
-let beatTimer: ReturnType<typeof setTimeout> | null = null;
+let beatTimer: Timer | null = null;
 
 /**
  * One chain, however many times this is armed.
  *
- * The log the crash came out of has the heartbeat multiplying: beats half a
+ * The log the crash came out of had the heartbeat multiplying: beats half a
  * second apart, each saying it woke a full interval early, all of them sharing
- * one `beatAt` and one set of frame counters — so one page with many chains,
- * not many pages with one each. It grows by roughly half again every interval,
- * and by the end there are dozens.
+ * one `beatAt` and one set of frame counters — one page with many chains. It
+ * grew by roughly half again every interval, and by the end there were dozens.
  *
- * Where the extra chains come from is NOT settled. What can be settled here is
- * that they cannot accumulate: the pending one is cancelled before the next is
- * armed, so a page that somehow arms twice still only ever has one outstanding.
- * Written down rather than quietly fixed, because a guard that hides a cause is
- * worth less than one that admits to it.
+ * That was the breadcrumb, and timers.ts is where it led: the SDK's shadow
+ * timers fire a one-shot twice, once from the host's tick and once natively,
+ * and a chain that re-arms on every firing doubles. The heartbeat now runs on
+ * the host's own timers and fires once. The cancel is kept as the belt to
+ * that brace — a page that somehow arms twice still only has one outstanding.
  */
 const armBeat = (): void => {
-	if (beatTimer) clearTimeout(beatTimer);
-	beatTimer = setTimeout(beat, HEARTBEAT_MS);
+	cancel(beatTimer);
+	beatTimer = after(beat, HEARTBEAT_MS);
 };
 
 const beat = (): void => {
@@ -487,7 +498,10 @@ const start = async (): Promise<void> => {
 	if (!attached) companion.note(`No glasses attached — companion only (${glasses.error ?? "no host"}).`);
 	// One line, at startup. On a phone this is the only way to see which half of
 	// the app came up, and it is what the simulator test waits for.
-	console.log(`[jarvis] client up ${VERSION} — glasses ${attached ? "attached" : "absent"}`);
+	// "native" is the claim timers.ts makes; on a phone this line is the only
+	// place it can be checked. (Node's timers are JavaScript and print as not
+	// native there, which is expected and meaningless.)
+	console.log(`[jarvis] client up ${VERSION} — glasses ${attached ? "attached" : "absent"}, timers ${looksNative(natives.setTimeout) ? "native" : "not native"}`);
 
 	// R4.7: the SDK's storage is the only one that survives an app restart on
 	// the phone; the browser copy is the development fallback and the desktop's

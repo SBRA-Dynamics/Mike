@@ -13,6 +13,7 @@ import type { LensFrame } from "../lens/render.ts";
 import { MODES, MODE_LABEL } from "../../../src/routing.js";
 import type { AppState, ListeningState } from "../state.ts";
 import { thinkingText } from "../state.ts";
+import { after } from "../timers.ts";
 
 export type CompanionActions = {
 	say: (text: string) => boolean;
@@ -248,10 +249,10 @@ export class Companion {
 		// into the middle of what is left is the whole fix.
 		const keepVisible = (e: Event) => {
 			const t = e.target as HTMLElement | null;
-			setTimeout(() => t?.scrollIntoView({ block: "center", behavior: "smooth" }), 250);
+			after(() => t?.scrollIntoView({ block: "center", behavior: "smooth" }), 250);
 		};
 		d.addEventListener("focusin", keepVisible);
-		d.addEventListener("toggle", () => { if (d.open) setTimeout(() => d.scrollIntoView({ block: "end", behavior: "smooth" }), 50); });
+		d.addEventListener("toggle", () => { if (d.open) after(() => d.scrollIntoView({ block: "end", behavior: "smooth" }), 50); });
 		const summary = el("summary", "", "Settings");
 		const body = el("div", "body");
 

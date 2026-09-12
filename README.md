@@ -143,11 +143,22 @@ Two conventions worth keeping:
   `callHandler`; that returns a promise, nothing awaits it, and when it rejects
   the rejection is unhandled — which calls the handler, which logs, which
   rejects. Counted in the server's log at 588 identical reports in one second,
-  three separate times, each ending in a dead socket. That was the whole of "the
-  app hangs when a reply lands": the page does not die, it spins, and the black
-  box meant to explain the crash was causing it. The report path now rate limits
-  itself before it touches the console, and `test/prd4-browser.mjs` builds the
-  same bridge in a real browser so it cannot come back (PRD 6).
+  three separate times, each ending in a dead socket. The report path now rate
+  limits itself before it touches the console, and `test/prd4-browser.mjs`
+  builds the same bridge in a real browser so it cannot come back (PRD 6).
+
+- **The SDK's timers are not the browser's, and a chain that re-arms itself is
+  an infinite loop on them.** `@evenrealities/even_hub_sdk` 0.0.15 replaces
+  `window.setTimeout` and friends with "shadow timers" the host ticks through
+  `__tickShadowTimers`. The tick iterates a Map while callbacks run, a Map
+  visits entries added during iteration, so a callback that re-arms itself
+  with a delay shorter than the tick's elapsed time is fired, re-armed and
+  fired again inside one call that never returns. The lens repaints once a
+  second while a turn runs, so this was "the app hangs after the first
+  sentence, and the phone gets hot". The same layer fires one-shots twice,
+  which is where the multiplying heartbeat came from. The client now keeps
+  its own handles on the host's timers (`client/src/timers.ts`) and
+  `test/prd6-timers.mjs` holds the shipped SDK to that description (PRD 6).
 
 ## Layout
 

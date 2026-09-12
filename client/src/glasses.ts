@@ -14,6 +14,8 @@
 // injects the same object, which is why it is a faithful test of this path.
 
 import type { GlassesAudioFrame } from "./audio/glasses.ts";
+import { after, cancel } from "./timers.ts";
+import type { Timer } from "./timers.ts";
 
 /** One container, full lens. R4.2: a nicer layout needs rebuildPageContainer,
  *  which flickers and costs a measured round trip, and ten rows have no space
@@ -65,7 +67,7 @@ export const waitForHost = async (timeoutMs = 2000, step = 50): Promise<boolean>
 	for (;;) {
 		if (hasHostChannel()) return true;
 		if (Date.now() >= until) return false;
-		await new Promise((r) => setTimeout(r, step));
+		await new Promise<void>((r) => after(r, step));
 	}
 };
 
@@ -245,15 +247,15 @@ export class Glasses {
 	/** Every bridge call gets a deadline: one flaky BLE hop otherwise hangs the
 	 *  update loop for as long as the host is willing to wait. */
 	#call<T>(p: Promise<T>): Promise<T> {
-		let timer: ReturnType<typeof setTimeout>;
+		let timer: Timer = null;
 		return Promise.race([
 			p,
 			new Promise<T>((_, reject) => {
-				timer = setTimeout(() => reject(new Error("glasses call timed out")), this.opts.callTimeoutMs ?? CALL_TIMEOUT_MS);
+				timer = after(() => reject(new Error("glasses call timed out")), this.opts.callTimeoutMs ?? CALL_TIMEOUT_MS);
 			})
 		// The loser of the race still holds a timer; without this a long-lived
 		// page accumulates one per update.
-		]).finally(() => clearTimeout(timer));
+		]).finally(() => cancel(timer));
 	}
 
 	/**
