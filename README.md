@@ -41,22 +41,36 @@ obvious alternative was tried and measured.
 ## Running it
 
 ```bash
-npm install
-npm run build:client          # the Even Hub client, built into ./public
-npm start                     # http://localhost:3460, token printed on first run
+npm install                   # server and client dependencies; builds the client into ./public
+npm run setup                 # the wizard: token, Claude Code, voice, autostart
+npm start                     # the server, reading ~/.config/mike/env
 ```
 
-Voice also needs the transcription service:
+`npm run setup` asks about everything a fresh clone cannot know: where
+Claude Code is and where workers should work, what a worker may do, port and
+TLS, whether to install the transcription service (a Python venv with
+faster-whisper, about 2.5 GB with the CUDA libraries), and whether to install
+two systemd units so it all starts at boot. Every answer has a default; the
+answers land in `~/.config/mike/env`, which `npm start` and the units read.
+Run it again to change something — the token is kept. `npm run setup --
+--defaults` answers everything without asking (no voice, no autostart), and
+`--dry-run` shows what would be written.
+
+At the end it prints the pairing link with the token — scan it from the app
+(`qrencode` gets you a QR in the terminal) or open it once in a browser.
+
+Voice needs the transcription service running as well:
 
 ```bash
-npm run whisper               # faster-whisper large-v3-turbo on the GPU, loopback 3461
+npm run whisper               # faster-whisper large-v3-turbo, loopback 3461
 ```
 
 The two do not start each other. The model takes a second to load and should
 outlive a server restart, and a server whose ears are down says so in one line
 rather than refusing to run.
 
-`node server.js --help` lists every flag. The ones that matter most:
+`node server.js --help` lists every flag; each has a `MIKE_*` environment
+variable, which is how the env file sets them. The ones that matter most:
 
 - `--engine stub` — run the whole system without spending money
 - `--handler echo` — pin the transport without a model at all
@@ -65,16 +79,14 @@ rather than refusing to run.
 
 ## Deployment
 
-Two systemd units, both included:
+The wizard writes two systemd units to `~/.config/mike/systemd/` and, if you
+say yes, installs and starts them with sudo. `mike-server.service` and
+`services/whisper/mike-whisper.service` in the repository are the reference
+deployment on kontoret, with TLS and `--worker-perms full`.
 
-```bash
-sudo cp mike-server.service services/whisper/mike-whisper.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now mike-whisper mike-server
-```
-
-The server reads its bearer token from `/etc/mike.env` (root-only, never on the
-command line where `ps` would show it) and serves the client from `./public` over
-TLS. The client is handed the token once, in a link, and keeps it in SDK storage.
+The server reads its bearer token from the env file (mode 600, never on the
+command line where `ps` would show it) and serves the client from `./public`.
+The client is handed the token once, in a link, and keeps it in SDK storage.
 
 **`--worker-perms full` is the riskiest line in the unit file.** It runs worker
 turns with `--dangerously-skip-permissions`, so on an internet-facing listener the

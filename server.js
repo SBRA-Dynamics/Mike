@@ -90,7 +90,7 @@ if (has("help")) {
 
 const config = {
 	port: parseInt(flag("port", process.env.MIKE_PORT ?? "3460"), 10),
-	host: flag("host", "0.0.0.0"),
+	host: flag("host", process.env.MIKE_HOST || "0.0.0.0"),
 	token: flag("token", process.env.MIKE_TOKEN || randomBytes(16).toString("hex")),
 	cert: flag("cert", process.env.MIKE_CERT),
 	key: flag("key", process.env.MIKE_KEY),

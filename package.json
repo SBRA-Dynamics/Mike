@@ -3,15 +3,17 @@
   "version": "0.3.4",
   "private": true,
   "type": "module",
-  "description": "Mike \u2014 transport and sessions (PRD 1), MCP tool surface (PRD 2), Mike and workers (PRD 3), Even Hub client (PRD 4), voice from the browser (PRD 5a), voice from the glasses (PRD 5b)",
+  "description": "Mike — transport and sessions (PRD 1), MCP tool surface (PRD 2), Mike and workers (PRD 3), Even Hub client (PRD 4), voice from the browser (PRD 5a), voice from the glasses (PRD 5b)",
   "scripts": {
-    "start": "node server.js",
+    "start": "node --env-file-if-exists=$HOME/.config/mike/env server.js",
     "build:client": "npm --prefix client install && npm --prefix client run build",
     "test": "node test/run.mjs && node test/crash-recovery.mjs && node test/mcp.mjs && node test/prd3.mjs && node test/prd4.mjs && node test/prd5a.mjs && node test/prd5b.mjs && node test/prd6-timers.mjs",
     "test:lens": "node test/prd4-lens.mjs",
     "test:live": "node test/mcp-live.mjs && node test/e2e-live.mjs",
     "test:browser": "node test/prd4-browser.mjs && node test/prd5a-browser.mjs",
-    "whisper": "$HOME/.local/share/mike/venv/bin/python services/whisper/serve.py --port 3461"
+    "whisper": "$HOME/.local/share/mike/venv/bin/python services/whisper/serve.py --port 3461",
+    "postinstall": "node scripts/postinstall.mjs",
+    "setup": "node scripts/setup.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"
