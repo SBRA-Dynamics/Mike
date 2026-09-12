@@ -18,8 +18,17 @@
 // (measured, haiku, trivial prompt). That is the number to beat if this is ever
 // revisited — and the way to beat it is `--input-format stream-json`, not a
 // resident process per worker.
+//
+// The OUTPUT is stream-json (PRD 6): the same one process per turn, but its
+// answer is read as it is written rather than when it exits. Nothing here gets
+// faster; what changes is that the lens can say the first sentence, and the
+// tool the turn is running, instead of standing on "thinking" for the whole
+// turn. The last event of the stream is the same `result` object that
+// `--output-format json` used to print in one piece, so everything downstream
+// of `run` sees exactly what it saw before.
 
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 /** A turn that never comes back must not wedge the worker forever. Ten minutes
  *  is longer than any answer and shorter than a lost afternoon. */
@@ -28,6 +37,11 @@ export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
 /** What we keep of a run that failed, for the log. Full stderr from a crashed
  *  CLI can be megabytes of stack. */
 const errTail = (s) => String(s ?? "").trim().split("\n").slice(-4).join(" ").slice(0, 400);
+
+/** How much of the raw stream is kept. Only the tail is ever used — for an
+ *  error message, or for a CLI that printed one object instead of a stream —
+ *  and a turn that calls tools writes far more than anyone wants in memory. */
+const OUT_KEEP = 64 * 1024;
 
 /**
  * The set of live child processes, so a shutdown (or a test suite that throws)
@@ -69,9 +83,11 @@ export function createClaudeRunner({
 	const run = ({
 		prompt, cwd, model, sessionId, resume,
 		appendSystemPrompt, systemPrompt, mcpConfig, allowedTools = [], permissions = "readonly", effort,
-		extraArgs = [], timeoutMs: perCall, onSpawn
+		extraArgs = [], timeoutMs: perCall, onSpawn, onProgress
 	}) => new Promise((resolve) => {
-		const args = ["-p", "--output-format", "json"];
+		// --verbose is not optional here: the CLI refuses stream-json in -p
+		// without it, and refuses it before a single line is printed.
+		const args = ["-p", "--output-format", "stream-json", "--verbose"];
 
 		if (sessionId && resume) throw new Error("claudeCli: pass sessionId or resume, not both");
 		if (sessionId) args.push("--session-id", sessionId);
@@ -140,6 +156,38 @@ export function createClaudeRunner({
 		let out = "";
 		let err = "";
 		let settled = false;
+
+		// The last `result` event, which is the whole of what the caller gets.
+		// Kept as it arrives rather than re-found at close, because the stream
+		// may carry anything after it (a rate-limit notice does).
+		let result = null;
+		let pending = "";
+
+		/** One event of the stream. Only two shapes matter to a lens: words the
+		 *  model has written, and the name of a tool it is running. Everything
+		 *  else — init, token estimates, rate limits — is bookkeeping. */
+		const event = (v) => {
+			if (v?.type === "result") { result = v; return; }
+			if (v?.type !== "assistant" || !onProgress) return;
+			for (const block of v.message?.content ?? []) {
+				// A thinking block is not an answer, and putting it on the lens
+				// would be quoting the model's notes to itself as if it had said
+				// them out loud.
+				if (block?.type === "text" && block.text) onProgress({ kind: "text", text: String(block.text) });
+				else if (block?.type === "tool_use" && block.name) onProgress({ kind: "tool", tool: String(block.name) });
+			}
+		};
+
+		const consume = (chunk, last = false) => {
+			pending += chunk;
+			const lines = pending.split("\n");
+			pending = last ? "" : lines.pop() ?? "";
+			for (const line of lines) {
+				if (!line.trim()) continue;
+				try { event(JSON.parse(line)); }
+				catch { /* a half-written line, or a CLI that said something in prose */ }
+			}
+		};
 		const finish = (v) => { if (!settled) { settled = true; clearTimeout(killer); resolve(v); } };
 
 		const killer = setTimeout(() => {
@@ -147,7 +195,20 @@ export function createClaudeRunner({
 			finish({ ok: false, kind: "timeout", error: `no answer in ${Math.round((perCall ?? timeoutMs) / 1000)}s`, durationMs: Date.now() - started });
 		}, perCall ?? timeoutMs);
 
-		child.stdout.on("data", (d) => { out += d.toString(); });
+		// A decoder rather than d.toString(): the stream is split on buffer
+		// boundaries, and a chunk that ends mid-character would otherwise put a
+		// replacement character in the middle of a word — or in the middle of
+		// the JSON line carrying it.
+		const decoder = new StringDecoder("utf8");
+		child.stdout.on("data", (d) => {
+			const chunk = decoder.write(d);
+			// Only the tail is ever read again (errTail, and the one-object
+			// fallback below), and a turn with tool calls streams megabytes.
+			out = (out + chunk).slice(-OUT_KEEP);
+			// A progress callback must never be able to kill the turn it is
+			// reporting on.
+			try { consume(chunk); } catch (e) { log?.warn(`claude stream: ${e.message}`); }
+		});
 		child.stderr.on("data", (d) => { err += d.toString(); });
 		child.on("error", (e) => finish({ ok: false, kind: "spawn", error: e.message }));
 
@@ -157,9 +218,15 @@ export function createClaudeRunner({
 				log?.warn(`claude exited ${code} in ${durationMs}ms: ${errTail(err) || errTail(out)}`);
 				return finish({ ok: false, kind: "exit", code, error: errTail(err) || errTail(out) || `claude exited ${code}`, durationMs });
 			}
-			let parsed;
-			try { parsed = JSON.parse(out); }
-			catch { return finish({ ok: false, kind: "parse", error: `unreadable answer: ${errTail(out)}`, durationMs }); }
+			try { consume("", true); } catch { /* the last line was torn; `result` decides below */ }
+
+			// A CLI that ignored --output-format, or printed its answer in one
+			// piece, still parses: one JSON object is a stream of length one.
+			let parsed = result;
+			if (!parsed) {
+				try { parsed = JSON.parse(out); }
+				catch { return finish({ ok: false, kind: "parse", error: `unreadable answer: ${errTail(out)}`, durationMs }); }
+			}
 
 			// `is_error` is the CLI saying the turn itself failed (an API error,
 			// a refused model) while still exiting 0. Treating it as success

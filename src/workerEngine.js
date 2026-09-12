@@ -82,7 +82,7 @@ export function createStubWorkerEngine({ log } = {}) {
 			return { engineSessionId: null };
 		},
 
-		async send(worker, text) {
+		async send(worker, text, { onProgress } = {}) {
 			append(worker, "user", text);
 			const reply = `(stub ${worker.model}) ${text}`;
 			append(worker, "assistant", reply);
@@ -259,7 +259,7 @@ export function createClaudeWorkerEngine({
 	const sessionExists = (worker) => worker.sessionCreated === true
 		|| thread(worker).some((e) => e.role === "meta" && e.text === "session-created");
 
-	const turn = async (worker, text) => {
+	const turn = async (worker, text, onProgress) => {
 		const first = !sessionExists(worker);
 		const id = worker.engineSessionId;
 		if (!id) throw new Error(`worker ${worker.name} has no session id`);
@@ -271,7 +271,10 @@ export function createClaudeWorkerEngine({
 			permissions,
 			appendSystemPrompt: promptFor(worker),
 			...(first ? { sessionId: id } : { resume: id }),
-			onSpawn: (child) => inflight.set(worker.id, child)
+			onSpawn: (child) => inflight.set(worker.id, child),
+			// PRD 6: partial answers and tool names, while the turn is still
+			// running. The caller decides whether anyone is listening.
+			onProgress
 		});
 		inflight.delete(worker.id);
 
@@ -320,7 +323,7 @@ export function createClaudeWorkerEngine({
 			return { engineSessionId };
 		},
 
-		async send(worker, text) {
+		async send(worker, text, { onProgress } = {}) {
 			// A record written by the stub engine (or by a build before PRD 3)
 			// has no session id. Minting one here rather than refusing means a
 			// data directory survives the engine being switched; the registry
@@ -332,7 +335,7 @@ export function createClaudeWorkerEngine({
 			return enqueue(worker, async () => {
 				append(worker, "user", text);
 				try {
-					const r = await turn(worker, text);
+					const r = await turn(worker, text, onProgress);
 					append(worker, "assistant", r.text);
 					return { text: r.text };
 				} catch (e) {

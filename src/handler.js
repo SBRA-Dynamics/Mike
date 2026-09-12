@@ -184,10 +184,21 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 		return null;
 	};
 
+	/** What a turn is doing, while it is doing it (PRD 6). A turn is one CLI
+	 *  process whose answer used to arrive only when it exited, so the lens
+	 *  stood on "thinking" for the whole of it — long enough that a slow turn
+	 *  and a hung one looked the same. The events are advisory: nothing is
+	 *  recorded in the transcript from here, because the turn's real answer
+	 *  still arrives at the end and would be said twice. */
+	const progressTo = (session, from) => (p) => {
+		if (p?.kind === "tool" && p.tool) session.emit(msg.event("progress", { from, tool: p.tool }));
+		else if (p?.kind === "text" && p.text) session.emit(msg.event("progress", { from, text: p.text }));
+	};
+
 	const toJarvis = async (session, text) => {
 		session.emit(state(session, true));
 		try {
-			const r = await jarvis.say(session, text);
+			const r = await jarvis.say(session, text, { onProgress: progressTo(session, "jarvis") });
 			// After the turn, not before: a tool call inside it may have switched
 			// the active worker, and the reply has to be tagged and the state
 			// reported as they are now.
@@ -204,7 +215,7 @@ export function createJarvisHandler({ log, jarvis, registry, engine, classifier,
 		registry.touch(worker, { busy: true });
 		session.emit(state(session, true));
 		try {
-			const r = await engine.send(worker, text);
+			const r = await engine.send(worker, text, { onProgress: progressTo(session, worker.name) });
 
 			// A reply from somebody the user is no longer talking to must not take
 			// over the lens — they switched away on purpose, and a long job

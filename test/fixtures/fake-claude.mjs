@@ -7,6 +7,11 @@
 //
 //   * `-p --output-format json` prints one JSON object with `result`,
 //     `session_id`, `is_error`, `total_cost_usd`
+//   * `-p --output-format stream-json --verbose` prints one JSON object per
+//     line — `assistant` events as the turn runs, then that same result object
+//     last. PRD 6 reads the turn off this stream, so the double has to have
+//     one: a tool call announces itself before it is made, and the answer is
+//     announced before the result line.
 //   * `--session-id <uuid>` creates a conversation, and fails if it exists
 //   * `--resume <uuid>` continues one, and fails if it does not exist
 //   * the conversation accumulates: turn N sees turns 1..N-1
@@ -49,6 +54,12 @@ for (let i = 0; i < argv.length; i++) {
 	positional.push(a);
 }
 const prompt = positional[positional.length - 1] ?? "";
+
+const streaming = argv.includes("stream-json");
+const emit = (v) => process.stdout.write(JSON.stringify(v) + "\n");
+/** An assistant event the way the real CLI frames one: the content blocks are
+ *  what PRD 6 reads, and everything else on the message is ignored by it. */
+const assistant = (content) => { if (streaming) emit({ type: "assistant", message: { role: "assistant", content }, session_id: id }); };
 
 const die = (msg, code = 1) => { process.stderr.write(msg + "\n"); process.exit(code); };
 
@@ -117,6 +128,7 @@ const rpc = async (method, params) => {
 };
 
 const callTool = async (name, args) => {
+	assistant([{ type: "tool_use", name: `mcp__jarvis__${name}`, input: args }]);
 	if (!mcp) return { isError: true, text: "no tools configured" };
 	const r = await rpc("tools/call", { name, arguments: args });
 	if (r?.error) return { isError: true, text: r.error.message };
@@ -210,12 +222,14 @@ try {
 if (failMode === "error") { result = "simulated model error"; isError = true; }
 if (failMode === "error-once" && state.turns.length === 0) { result = "simulated first-turn API error"; isError = true; }
 
+assistant([{ type: "text", text: result }]);
+
 state.turns.push({ prompt, result, at: Date.now() });
 writeFileSync(file, JSON.stringify(state, null, 1));
 
-process.stdout.write(JSON.stringify({
+emit({
 	type: "result", subtype: isError ? "error" : "success",
 	is_error: isError, result,
 	session_id: id, num_turns: state.turns.length,
 	total_cost_usd: 0, duration_ms: 1
-}) + "\n");
+});

@@ -661,6 +661,37 @@ try {
 		c.close(); server.stop();
 	}
 
+	section("PRD 6: turen berättar vad den gör medan den gör det");
+	{
+		const server = track(await startJarvis());
+		const c = await connect(server);
+
+		// Jarvis's turn calls a tool. The tool's name has to reach the client
+		// while the turn is still running: "thinking" for eight seconds and
+		// "spawn_worker for eight seconds" are the same wait and not the same
+		// experience.
+		const spawn = await say(c, "Jarvis, start a worker called Bosse");
+		const tool = spawn.find((m) => m.type === "event" && m.kind === "progress" && m.data?.tool);
+		check("verktyget syns medan turen pågår", !!tool && /spawn_worker/.test(String(tool.data.tool)), JSON.stringify(tool));
+		check("händelsen bär vem som håller på", tool?.data?.from === "jarvis", JSON.stringify(tool?.data));
+		check("den kommer före svaret, inte efter",
+			spawn.indexOf(tool) < spawn.findIndex((m) => m.type === "text"), JSON.stringify(spawn.map((m) => m.type + (m.kind ? `:${m.kind}` : ""))));
+
+		const turn = await say(c, "Bosse, säg något");
+		const partial = turn.find((m) => m.type === "event" && m.kind === "progress" && m.data?.text);
+		check("arbetarens svar strömmar fram", !!partial && /turn 1: /.test(String(partial.data.text)), JSON.stringify(partial));
+		check("och är märkt med arbetarens namn", partial?.data?.from === "Bosse", JSON.stringify(partial?.data));
+
+		// The finished answer is still exactly one transcript line. A stream
+		// that also got recorded would say everything twice, in halves.
+		check("svaret sägs en gång, inte två", textsOf(turn).length === 1, JSON.stringify(textsOf(turn)));
+		check("turen stängs som vanligt", turn.some((m) => m.type === "state" && m.busy === false));
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+
+		c.close();
+		server.stop();
+	}
+
 	section("PRD 3:s manusstyrda körning, steg 1–9");
 	{
 		const server = track(await startJarvis());

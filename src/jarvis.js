@@ -182,7 +182,7 @@ export function createJarvis({
 		});
 	};
 
-	const runTurn = async (session, text) => {
+	const runTurn = async (session, text, onProgress) => {
 		// A grant only has to outlive the turn it was minted for. The default
 		// hour would be fine except that the grant table evicts the oldest when
 		// it fills, and an hour of busy use is more turns than it holds — which
@@ -202,7 +202,10 @@ export function createJarvis({
 				...JARVIS_BUILTIN_TOOLS,
 				...mcp.allowedToolNames("jarvis")
 			],
-			onSpawn: (c) => { child = c; }
+			onSpawn: (c) => { child = c; },
+			// PRD 6: the turn is read as it is written, so the lens can stop
+			// saying "thinking" and start saying what he is doing.
+			onProgress
 		});
 		child = null;
 
@@ -235,8 +238,9 @@ export function createJarvis({
 		contextFor,
 
 		/** One turn, queued behind whatever he is already answering. */
-		say(session, text) {
-			const next = queue.then(() => runTurn(session, text), () => runTurn(session, text));
+		say(session, text, { onProgress } = {}) {
+			const run = () => runTurn(session, text, onProgress);
+			const next = queue.then(run, run);
 			queue = next.then(() => { }, () => { });
 			return next;
 		},

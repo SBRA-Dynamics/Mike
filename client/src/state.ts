@@ -53,6 +53,10 @@ export type AppState = {
 	/** When the current turn started, so "thinking" can carry how long it has
 	 *  been thinking. Null whenever nothing is running. */
 	busySince: number | null;
+	/** What the running turn is doing, as it does it (PRD 6). Cleared the
+	 *  moment the turn ends: the finished answer arrives as a `text` message
+	 *  and must be the last word, not a leftover half-sentence. */
+	progress: { from: string; text: string | null; tool: string | null } | null;
 };
 
 export type Pending = {
@@ -81,11 +85,12 @@ export type ListeningState = "idle" | "listening" | "heard" | "thinking";
  *  second to show. A turn that takes a while and a turn that has hung look
  *  identical without the count, and which of the two it is is the whole
  *  question the user is asking when they look at the lens. */
-export const thinkingText = (since: number | null, now = Date.now()): string => {
-	if (since === null) return "thinking";
+export const thinkingText = (since: number | null, now = Date.now(), doing: string | null = null): string => {
+	const word = doing ?? "thinking";
+	if (since === null) return word;
 	const secs = Math.floor((now - since) / 1000);
-	if (secs < 1) return "thinking";
-	return secs < 60 ? `thinking ${secs}s` : `thinking ${Math.floor(secs / 60)}m${secs % 60}s`;
+	if (secs < 1) return word;
+	return secs < 60 ? `${word} ${secs}s` : `${word} ${Math.floor(secs / 60)}m${secs % 60}s`;
 };
 
 /** How many lines of transcript the companion keeps. A phone that has been
@@ -123,6 +128,7 @@ export class Store {
 		sessions: [],
 		voice: null,
 		busySince: null,
+		progress: null,
 		heard: null
 	};
 
@@ -172,8 +178,10 @@ export class Store {
 		return this.state.voice?.live ? "listening" : "idle";
 	}
 
+	/** "thinking 7s", or the tool it is running instead of the word, because a
+	 *  name the user recognises answers the question the counter only measures. */
 	thinkingLabel(now = Date.now()): string {
-		return thinkingText(this.state.busySince, now);
+		return thinkingText(this.state.busySince, now, this.state.progress?.tool ?? null);
 	}
 
 	/** When the "heard" indicator stops being true, so the caller can repaint
@@ -386,7 +394,10 @@ export class Store {
 
 			case "state": {
 				const before = this.state.worker;
-				if (m.busy !== this.state.busy) this.state.busySince = m.busy ? Date.now() : null;
+				if (m.busy !== this.state.busy) {
+					this.state.busySince = m.busy ? Date.now() : null;
+					this.state.progress = null;
+				}
 				this.state.busy = m.busy;
 				this.state.worker = m.worker ?? null;
 				this.state.mode = m.mode ?? this.state.mode;
@@ -467,6 +478,25 @@ export class Store {
 		}
 
 		switch (m.kind) {
+			case "progress": {
+				// A turn saying what it is doing while it does it (PRD 6). Only
+				// the conversation the user is actually in may touch the lens:
+				// a background worker's half-sentence would take the screen away
+				// from the one they are looking at, which is the same rule the
+				// finished answer follows.
+				const from = String(d.from ?? JARVIS);
+				const mine = from === (this.state.worker ?? "jarvis") || (from === "jarvis" && !this.state.worker);
+				if (!mine) break;
+				const text = d.text ? String(d.text) : null;
+				const tool = d.tool ? String(d.tool) : null;
+				this.state.progress = { from, text, tool: text ? null : tool };
+				// Partial text goes on the lens but NOT in the transcript: the
+				// finished answer arrives as its own `text` message and would
+				// otherwise be said twice, once in halves.
+				if (text) this.state.lens = { from: this.state.worker ?? JARVIS, text, page: 0 };
+				break;
+			}
+
 			case "workerNotice":
 				// Somebody the user is not talking to has spoken, and the server
 				// has read it well enough to say whether they are asking.

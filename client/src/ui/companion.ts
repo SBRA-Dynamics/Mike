@@ -384,7 +384,7 @@ export class Companion {
 		n.listening.textContent = listening === "heard" && state.heard
 			? `heard: ${state.heard.text.slice(0, 40)}`
 			: listening === "thinking"
-				? thinkingText(state.busySince)
+				? thinkingText(state.busySince, Date.now(), state.progress?.tool ?? null)
 				: LISTENING_TEXT[listening];
 		n.listening.classList.toggle("live", listening === "listening" || listening === "heard");
 		n.listening.classList.toggle("speaking", !!v?.speaking);
