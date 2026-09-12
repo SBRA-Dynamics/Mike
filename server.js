@@ -380,6 +380,10 @@ server.listen(config.port, config.host, () => {
 	log.info(`workers: default model ${config.workerModel}, default cwd ${config.workerCwd}`);
 	log.info(`handler ${config.handler}, engine ${engine.name} (${config.claudeBin}), jarvis ${config.jarvisModel} session ${jarvis.sessionId.slice(0, 8)} cwd ${config.jarvisCwd}`);
 	log.info(`routing: default mode ${config.defaultMode}, ${config.contextTurns} worker turns quoted to Jarvis`);
+	// Said out loud because it is the one setting whose right value is a fact
+	// about how the person speaks, and the first thing to reach for when turns
+	// feel slow or sentences arrive in halves.
+	log.info(`utterances: ${config.holdMs ? `held ${config.holdMs} ms for the rest of the sentence` : "sent as they arrive (hold off)"}`);
 	// Asked once, after the listener is up so a slow answer delays nothing.
 	// Not fatal either way: the whisper service can be started or restarted
 	// under a running server, and the next segment will simply work.
