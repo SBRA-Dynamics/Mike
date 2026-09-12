@@ -50,17 +50,76 @@ let connection: Connection | null = null;
  * So the last thing that was attempted is kept in a variable, and anything
  * thrown is sent to the server, which has a log file that survives. Bounded to
  * one short string: this is a breadcrumb, not telemetry.
+ *
+ * The first thing it found was itself.
+ *
+ * PRD 6 called the hang "the client dies when a reply lands". It does not die,
+ * it spins, and the log says so plainly: 588 identical lines in one second —
+ * `unhandled rejection at "painted": The object does not support the operation
+ * or argument. @user-script:350:24:30` — and then the socket goes. Nothing in
+ * this client produces 588 of anything per second. A paint is once a second, a
+ * heartbeat is once every fifteen; the only path in the whole page that can
+ * feed itself is this function, and it feeds itself through the console.
+ *
+ * In the Even App the console is bridged: `flutter_inappwebview` replaces
+ * console.error with one that ships the line to the host through
+ * `callHandler`, which returns a promise — and that promise is nobody's. When
+ * it rejects, the rejection is unhandled, which arrives here, which calls
+ * console.error, which bridges, which rejects. `user-script:N` is that injected
+ * script and not our bundle, which is why every line reports the identical
+ * source position, and why N moves by fifteen between app restarts and never
+ * within one.
+ *
+ * So a report is rate limited, and the FIRST thing it does is decide whether to
+ * stay quiet. Nothing may be moved above that decision — not the console call
+ * least of all — because staying quiet is the entire mechanism: the loop's
+ * second turn produces a line identical to its first, is counted instead of
+ * said, and there is no third.
  */
 let step = "boot";
 const mark = (s: string): void => { step = s; };
 
+/** Five in two seconds is enough to read a cascade — one failure knocking over
+ *  three others is a shape worth having — and few enough that nothing built on
+ *  top of it can spend the main thread. The total is the backstop for a loop
+ *  that alternates between two messages and so slips the duplicate check: a
+ *  page that has reported a hundred times is not going to be debugged by the
+ *  hundred and first. */
+const REPORT_BURST = 5;
+const REPORT_WINDOW_MS = 2000;
+const REPORT_TOTAL = 100;
+
+let reportWindowAt = 0;
+let reportsInWindow = 0;
+let reportsTotal = 0;
+let reportedLast = "";
+let reportsSuppressed = 0;
+
 const report = (what: string, e: unknown): void => {
-	const detail = e instanceof Error ? `${e.message} ${(e.stack ?? "").split("\n")[1] ?? ""}` : String(e);
+	// Two frames rather than one. The line that mattered here was the second,
+	// and knowing it was the second only helped because the first was guessable;
+	// the next unexplained one will not be.
+	const detail = e instanceof Error
+		? `${e.message} ${(e.stack ?? "").split("\n").slice(0, 2).join(" ").trim()}`
+		: String(e);
 	const line = `${VERSION} ${what} at "${step}": ${detail}`;
-	console.error(`[jarvis] ${line}`);
+
+	// Before the console, always. See above.
+	const now = Date.now();
+	if (now - reportWindowAt > REPORT_WINDOW_MS) { reportWindowAt = now; reportsInWindow = 0; }
+	if (line === reportedLast || reportsInWindow >= REPORT_BURST || reportsTotal >= REPORT_TOTAL) { reportsSuppressed++; return; }
+	reportedLast = line;
+	reportsInWindow++;
+	reportsTotal++;
+
+	// What was swallowed is said by the next one that gets through, so a quiet
+	// log never means a quiet page.
+	const text = reportsSuppressed ? `${line} (+${reportsSuppressed} suppressed)` : line;
+	reportsSuppressed = 0;
+	console.error(`[jarvis] ${text}`);
 	// Best effort, and never able to throw on its own account: the thing being
 	// reported may well be the socket.
-	try { connection?.control(CONTROL.CLIENT_LOG, { level: "error", text: line }); } catch { }
+	try { connection?.control(CONTROL.CLIENT_LOG, { level: "error", text }); } catch { }
 };
 
 globalThis.addEventListener?.("error", (ev) => report("uncaught", (ev as ErrorEvent).error ?? (ev as ErrorEvent).message));
@@ -305,6 +364,27 @@ store.subscribe((s) => {
  */
 const HEARTBEAT_MS = 15_000;
 let beatAt = Date.now();
+let beatTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * One chain, however many times this is armed.
+ *
+ * The log the crash came out of has the heartbeat multiplying: beats half a
+ * second apart, each saying it woke a full interval early, all of them sharing
+ * one `beatAt` and one set of frame counters — so one page with many chains,
+ * not many pages with one each. It grows by roughly half again every interval,
+ * and by the end there are dozens.
+ *
+ * Where the extra chains come from is NOT settled. What can be settled here is
+ * that they cannot accumulate: the pending one is cancelled before the next is
+ * armed, so a page that somehow arms twice still only ever has one outstanding.
+ * Written down rather than quietly fixed, because a guard that hides a cause is
+ * worth less than one that admits to it.
+ */
+const armBeat = (): void => {
+	if (beatTimer) clearTimeout(beatTimer);
+	beatTimer = setTimeout(beat, HEARTBEAT_MS);
+};
 
 const beat = (): void => {
 	const now = Date.now();
@@ -323,9 +403,9 @@ const beat = (): void => {
 			});
 		} catch { }
 	}
-	setTimeout(beat, HEARTBEAT_MS);
+	armBeat();
 };
-setTimeout(beat, HEARTBEAT_MS);
+armBeat();
 
 // The mode is the server's to decide — it can be changed by speaking, from
 // another device, or by the picker here — and the microphone has to follow it:
@@ -450,7 +530,11 @@ const start = async (): Promise<void> => {
 	 *  lead-in R5b.3 says to measure before promising a hold-to-talk; the role
 	 *  counts are R5b.2's "the ratio is logged". */
 	glasses: () => (voice.glasses ? { attached: glasses.attached, error: glasses.error, ...(voice.glasses as { stats: object }).stats } : null),
-	connection: () => (connection ? { status: connection.status, detail: connection.detail, ...connection.stats } : null)
+	connection: () => (connection ? { status: connection.status, detail: connection.detail, ...connection.stats } : null),
+	/** How much the black box has said, and how much it decided not to. The
+	 *  property the suite holds it to is that the first number stops growing
+	 *  while the second one does not. */
+	reports: () => ({ total: reportsTotal, suppressed: reportsSuppressed })
 };
 
 // R4.5: a backgrounded WebView's socket is usually gone by the time it comes

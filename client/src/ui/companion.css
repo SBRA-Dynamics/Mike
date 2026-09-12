@@ -65,6 +65,7 @@ html, body {
 }
 .chip.worker { color: var(--text); }
 .chip.warn { color: var(--warn); border-color: #4a4128; }
+.chip.version { font-variant-numeric: tabular-nums; }
 
 /* --------------------------------------------------------------------- lens */
 

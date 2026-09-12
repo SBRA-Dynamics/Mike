@@ -31,6 +31,7 @@ glasses / browser ──ws──► server ──► Jarvis (opus) ──MCP─�
 | **4** | Even Hub client: lens view + companion view | built, running |
 | **5a** | Voice from the browser: VAD, segments, whisper, addressing modes | built, running |
 | **5b** | Voice from the glasses' own microphones | built; needs a hardware session |
+| **6** | Waiting: streamed answers, named turns, and the client hang | built; the hang is found and fixed |
 
 The reasoning for each lives in [`PRD/`](PRD/), one document per phase. They are
 the design record, not a summary of the code — read the relevant one before
@@ -136,6 +137,17 @@ Two conventions worth keeping:
   separately, and the simulator's `/api/input` accepts `long_press` and
   `long_press_release`. None of that is in either set of documentation; the
   0.0.15 typings and the simulator binary agree with each other.
+- **The Even App's console is bridged through a promise nobody owns, so a global
+  error handler that logs is a loop.** `flutter_inappwebview` replaces
+  `console.error` with one that ships the line to the host through
+  `callHandler`; that returns a promise, nothing awaits it, and when it rejects
+  the rejection is unhandled — which calls the handler, which logs, which
+  rejects. Counted in the server's log at 588 identical reports in one second,
+  three separate times, each ending in a dead socket. That was the whole of "the
+  app hangs when a reply lands": the page does not die, it spins, and the black
+  box meant to explain the crash was causing it. The report path now rate limits
+  itself before it touches the console, and `test/prd4-browser.mjs` builds the
+  same bridge in a real browser so it cannot come back (PRD 6).
 
 ## Layout
 

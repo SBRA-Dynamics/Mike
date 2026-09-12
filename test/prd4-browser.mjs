@@ -118,6 +118,54 @@ try {
 	check("inga fel i konsolen under hela varvet", consoleErrors.length === 0, JSON.stringify(consoleErrors.slice(0, 3)));
 	check("inga ouppfångade undantag i servern", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
 
+	// Sist, för att det här avsnittet med flit skriver fel i konsolen.
+	//
+	// Kraschen PRD 6 lämnade öppen var svarta lådan själv. I Even-appen är
+	// console bryggad till värden genom ett löfte som ingen äger; när det
+	// avvisas blir det en unhandledrejection, som rapporteras med console.error,
+	// som bryggas, som avvisas. Serverloggen har 588 identiska rader på en
+	// sekund och sedan en död socket.
+	//
+	// Så: bygg samma brygga i en riktig webbläsare — en console.error som
+	// avvisar ett löfte varje gång den anropas — och släpp in ETT fel. Utan
+	// spärren är det här ett test som aldrig återvänder.
+	section("svarta lådan kan inte bli kraschen");
+	await evaluate(`(() => {
+		globalThis.__consoleCalls = 0;
+		const real = console.error.bind(console);
+		console.error = (...a) => {
+			globalThis.__consoleCalls++;
+			// Precis vad flutter_inappwebview gör: ett löfte som ingen tar hand om.
+			Promise.reject(new Error("console bridge unavailable"));
+			real(...a);
+		};
+		Promise.reject(new Error("frö"));
+		return true;
+	})()`);
+
+	// En sekund är hundratals varv om loopen lever: den mätta takten var ~600
+	// rapporter i sekunden.
+	await sleep(1000);
+
+	const reports = await evaluate(`jarvis.reports()`);
+	const calls = await evaluate(`globalThis.__consoleCalls`);
+	check("sidan svarar fortfarande", (await evaluate(`1 + 1`)) === 2);
+	check("rapporterna slutar växa", reports.total <= 5, JSON.stringify(reports));
+	check("och konsolen anropas ett fåtal gånger, inte hundratals", calls <= 5, String(calls));
+	check("det som tystades är räknat, inte glömt", reports.suppressed > 0, JSON.stringify(reports));
+
+	// Klienten lever kvar efteråt: spärren får inte vara ett sätt att dö tyst.
+	const AFTER = "efter loopen";
+	await evaluate(`(() => {
+		const i = document.querySelector(".composer input");
+		i.value = ${JSON.stringify(AFTER)};
+		document.querySelector(".composer").dispatchEvent(new Event("submit", { cancelable: true }));
+		return true;
+	})()`);
+	await waitFor(`document.querySelector(".transcript").textContent.includes("echo: ${AFTER}")`, 10_000, "svaret efteråt");
+	check("och en tur går igenom efteråt",
+		(await evaluate(`document.querySelector(".transcript").textContent`)).includes(AFTER));
+
 } catch (err) {
 	console.error("\ntestriggen kraschade:", err.stack || err.message);
 	check("testriggen överlevde", false, err.message);

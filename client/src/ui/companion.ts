@@ -42,6 +42,11 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = ""):
 	return n;
 };
 
+/** Stamped in at build time (vite.config.ts), same as in main.ts: the bar says
+ *  which build the phone is actually running, where it can be read out loud. */
+declare const __JARVIS_VERSION__: string;
+const VERSION = typeof __JARVIS_VERSION__ === "string" ? __JARVIS_VERSION__ : "dev";
+
 const STATUS_TEXT: Record<string, string> = {
 	idle: "idle",
 	connecting: "connecting…",
@@ -98,11 +103,12 @@ export class Companion {
 		const status = el("span", "chip");
 		const worker = el("span", "chip worker");
 		const glasses = el("span", "chip");
+		const version = el("span", "chip version", `v${VERSION}`);
 		// Before the status chip, never after it: the transport status is the
 		// last thing in the bar and one test reads it as ":last-child".
 		const listening = el("span", "chip listening");
-		bar.append(dot, title, el("span", "spacer"), worker, listening, glasses, status);
-		Object.assign(this.#nodes, { dot, status, worker, glasses, listening });
+		bar.append(dot, title, el("span", "spacer"), worker, listening, glasses, version, status);
+		Object.assign(this.#nodes, { dot, status, worker, glasses, listening, version });
 		return bar;
 	}
 

@@ -95,17 +95,54 @@ vad verktyget pekas på.
 `prompts/worker.md` sa uttryckligen "Do not describe what you are about to do
 and then do it". Den raden är utbytt.
 
-## Öppet: kraschen i klienten
+## Kraschen i klienten: den var svarta lådan
 
-Klienten dör när ett svar landar, ofta men inte alltid, och startar man om
-ligger svaret redan på linsen. Simulatorn reproducerar det inte (sju turer,
-långa svar, noll konsolfel), vilket är ett svar om värden och inte om koden.
-a34f517 lägger in en svart låda — global felfälla plus `clientLog` genom
-transporten — så nästa krasch säger var den sker.
+Klienten dog när ett svar landade, ofta men inte alltid, och startade man om
+låg svaret redan på linsen. Simulatorn reproducerade det inte. a34f517 la in
+en svart låda — global felfälla plus `clientLog` genom transporten — och den
+svarade på första försöket, om än inte på frågan den ställdes.
 
-Misstanke värd att mäta när det finns data: räknaren i rubriken byter text
-varje sekund, och varje ändrad ram är ett BLE-hopp. En tur på tre minuter är
-~180 hopp. Ingen av dem är dyr mätt en och en.
+Loggen: 588 identiska rader på en sekund, `unhandled rejection at "painted":
+The object does not support the operation or argument. @user-script:350:24:30`,
+och sedan en död socket. Tre gånger, samma rad, samma position. Ingenting i
+klienten producerar 588 av någonting i sekunden — en målning är en per sekund,
+en puls en per femton — så det är inte många fel, det är ett fel som matar sig
+självt. Den enda återkopplingen som finns är rapporteringen.
+
+I Even-appen är konsolen bryggad: `flutter_inappwebview` byter ut
+console.error mot en som skickar raden till värden genom `callHandler`, som
+lämnar ifrån sig ett löfte som ingen äger. När det löftet avvisas är det en
+unhandledrejection, som rapporteras med console.error, som bryggas, som
+avvisas. `user-script:N` är det injicerade skriptet och inte vårt bygge —
+därav den identiska positionen varje gång. N är konstant så länge sidan lever
+och flyttar sig exakt femton steg varje gång den kommer upp igen (245, 275,
+290, 305, 320, 335, 350, 365 under en kväll), för värden injicerar femton
+skript per WebView. Det är också hur man skiljer ett avvisat brygglöfte från
+ett fel i vår egen bunt.
+
+Appen dör alltså inte, den snurrar, och det är därför det ser ut som att den
+hänger sig. Fröet kan vara vad som helst; det spelar ingen roll, för det är
+andra varvet som är felet.
+
+Rättat: en rapport bestämmer sig för att tiga innan den säger något. En rad
+identisk med den förra räknas i stället för att sägas, högst fem per två
+sekunder går ut oavsett vad de säger, och hundra totalt är taket. Loopens
+andra varv blir därmed dess sista. `test/prd4-browser.mjs` bygger samma brygga
+i en riktig webbläsare — en console.error som avvisar ett löfte varje gång —
+och släpper in ett enda fel; utan spärren återvänder det testet aldrig.
+
+Två saker som föll ut på vägen och inte är avslutade:
+
+**Pulsen förökar sig.** Samma logg visar `beat` en halv sekund isär, var och
+en med `late=-15000ms`, alla med samma `beatAt` och samma bildräknare — alltså
+en sida med många kedjor, inte många sidor. Den växer med ungefär hälften per
+intervall. Varifrån de extra kedjorna kommer är inte utrett; att de inte kan
+samlas på hög är det, för den väntande timern avbeställs innan nästa beställs.
+
+**Räknaren i rubriken** byter fortfarande text varje sekund, och varje ändrad
+ram är ett BLE-hopp. En tur på tre minuter är ~180 hopp. Ingen av dem är dyr
+mätt en och en, och nu när kraschen har ett namn är det inte längre en
+misstanke om den utan bara en kostnad.
 
 ## Mätpunkt
 
