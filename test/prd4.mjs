@@ -24,7 +24,7 @@ import { startProxy } from "./netcut.mjs";
 
 import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS } from "../client/src/lens/render.ts";
 import { Connection, wsUrlFrom } from "../client/src/connection.ts";
-import { Store, NOTICE_MS, STALE_MS, MARK_WAITING, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
+import { Store, NOTICE_MS, STALE_MS, LENS_IDLE_MS, MARK_WAITING, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
 import { settingsFromScan, decodeFrame } from "../client/src/qr.ts";
 import { readUrlSettings, SettingsStore } from "../client/src/settings.ts";
 import { Glasses, hasHostChannel, isAudioChatter } from "../client/src/glasses.ts";
@@ -593,6 +593,39 @@ try {
 		s.apply({ type: "text", text: "Alla 41 checkar gröna.", from: "Bosse", seq: 2 });
 		check("svaret tar över linsen när turen är slut", s.lensView().text === "Alla 41 checkar gröna.", s.lensView().text);
 		check("och ingenting påstår längre att något pågår", s.working() === false);
+	}
+
+	section("modellen: linsen släcks när ingen har sagt något på tio sekunder");
+	{
+		const s = new Store();
+		s.state.connection = "online";
+		s.state.worker = "Bosse";
+		s.apply({ type: "text", text: "Alla 41 checkar gröna.", from: "Bosse", seq: 1 });
+
+		const said = Date.now();
+		const dark = said + LENS_IDLE_MS + 1;
+		check("svaret står på linsen medan det är nytt", s.lensView(said).text === "Alla 41 checkar gröna.", s.lensView(said).text);
+		check("och släckningen är bokad, inte pollad", Math.abs(s.nextIdleExpiry(said) - LENS_IDLE_MS) <= 50, String(s.nextIdleExpiry(said)));
+		check("tystnaden släcker texten", s.lensView(dark).text === "", JSON.stringify(s.lensView(dark).text));
+		check("men inte vem som är där", s.lensView(dark).from === "Bosse", s.lensView(dark).from);
+		check("en släckt lins armerar ingen ny timer", s.nextIdleExpiry(dark) === null, String(s.nextIdleExpiry(dark)));
+
+		// A tap is the user asking to see it again (R4.3).
+		s.setPage(0);
+		check("en tryckning tänder den igen", s.lensView().text === "Alla 41 checkar gröna.", s.lensView().text);
+
+		// Something heard counts as having said something, even before a reply.
+		const t = new Store();
+		t.state.connection = "online";
+		t.apply({ type: "text", text: "Svar.", from: "Bosse", seq: 1 });
+		t.apply({ type: "heard", text: "vad är klockan", confidence: 0.9, seq: 2 });
+		check("ett hört yttrande räknas som att något sagts", t.lensView(Date.now() + LENS_IDLE_MS - 1000).text !== "");
+
+		// A turn that is running owns the lens: the blink says it is alive.
+		const w = new Store();
+		w.state.connection = "online";
+		w.apply({ type: "event", kind: "turn", data: { id: "t1", to: "Bosse", parts: ["kör sviten"], phase: "started" } });
+		check("men något som pågår släcks aldrig", w.lensView(Date.now() + LENS_IDLE_MS * 3).text.includes("kör sviten"), w.lensView().text);
 	}
 
 	section("modellen: många meningar får plats, de äldsta viker undan");

@@ -317,7 +317,12 @@ const paint = (): void => {
 	// turn runs, re-armed from inside its own callback. On the SDK's shadow
 	// timers that shape is a loop that never returns (timers.ts); on the
 	// host's own it is a timer.
-	const due = [store.nextNoticeExpiry(), store.nextListeningExpiry()].filter((v): v is number => v !== null);
+	//
+	// The third is the lens going dark after ten quiet seconds (LENS_IDLE_MS).
+	// It arms once per utterance and does not re-arm from its own callback: once
+	// the lens is blank nextIdleExpiry is null, so this is not a chain.
+	const due = [store.nextNoticeExpiry(), store.nextListeningExpiry(), store.nextIdleExpiry()]
+		.filter((v): v is number => v !== null);
 	if (due.length) expiryTimer = after(() => { expiryTimer = null; paint(); }, Math.min(...due) + 50);
 };
 

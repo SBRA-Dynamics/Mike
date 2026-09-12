@@ -132,6 +132,24 @@ export const HEARD_MS = 3000;
  */
 export const STALE_MS = 10_000;
 
+/**
+ * How long the lens keeps showing the last thing said before it goes dark.
+ *
+ * A lens is a screen half a metre from the eye that nobody can look away from,
+ * and an answer left on it stops being an answer after the first read: it
+ * becomes something in the way. Ten seconds of nobody saying anything — no
+ * utterance heard, no reply drawn — and the body is cleared.
+ *
+ * Only the body. The header keeps saying who is there and whether a microphone
+ * is open, because "is it listening" is the one question a voice interface must
+ * always answer (R5a.8), and blanking that would make a live microphone look
+ * like a dead app.
+ *
+ * Nothing is lost: the transcript keeps it, and a tap repaints (setPage), which
+ * is also what makes this safe to be aggressive about.
+ */
+export const LENS_IDLE_MS = 10_000;
+
 /** How long a finished turn stays on the lens when nothing arrived to replace
  *  it. Normally the answer does that within a message or two; this is for the
  *  turns that end without one — an interrupted turn, a worker answering in the
@@ -208,6 +226,9 @@ export class Store {
 		turns: [],
 		lensAt: 0
 	};
+
+	/** When the user last asked to see the lens — see #wake. */
+	#wokeAt = 0;
 
 	#subs = new Set<(s: AppState) => void>();
 	#localSeq = 0;
@@ -368,7 +389,30 @@ export class Store {
 	 */
 	lensView(now = Date.now()): LensItem {
 		const work = this.workingView(now);
-		return work ?? this.state.lens;
+		if (work) return work;
+		// Work outranks the idle clock: a turn that says nothing for a minute is
+		// still a turn, and the blink in #doingLine is what carries that.
+		if (this.idleFor(now) >= LENS_IDLE_MS) return { from: this.state.lens.from, text: "", page: 0 };
+		return this.state.lens;
+	}
+
+	/** How long nothing has been said, in either direction — the last reply
+	 *  drawn, or the last utterance the server reported hearing. A held
+	 *  microphone counts as being said something to: the words are on their way
+	 *  and blanking under the user's own finger would read as a dropped hold. */
+	idleFor(now = Date.now()): number {
+		if (this.state.voice?.held) return 0;
+		const last = Math.max(this.state.lensAt, this.state.heard?.at ?? 0, this.#wokeAt);
+		return last ? now - last : 0;
+	}
+
+	/** When the lens goes dark, so the caller can repaint exactly then rather
+	 *  than polling. Null once it already has — this arms once per utterance and
+	 *  does not re-arm itself. */
+	nextIdleExpiry(now = Date.now()): number | null {
+		if (this.workingView(now)) return null;
+		const left = LENS_IDLE_MS - this.idleFor(now);
+		return left > 0 ? left : null;
 	}
 
 	/** The turns still worth drawing. Finished ones are kept for a moment in
@@ -457,6 +501,7 @@ export class Store {
 	 *  a gesture that changed nothing can be answered differently from one that
 	 *  did — tapping past the last page repeats instead of sitting still. */
 	turnPage(delta: number, pages: number): boolean {
+		this.#wake();
 		const next = this.state.lens.page + delta;
 		if (next < 0 || next >= pages) return false;
 		this.state.lens.page = next;
@@ -465,9 +510,17 @@ export class Store {
 	}
 
 	setPage(page: number): void {
+		this.#wake();
 		this.state.lens.page = Math.max(0, page);
 		this.notify();
 	}
+
+	/** A gesture asking to see the lens is a reason to light it again, and it is
+	 *  kept apart from `lensAt` on purpose: `lensAt` is when something was SAID,
+	 *  and workingView compares against it to decide whether an answer is newer
+	 *  than the work. Paging through a reply must not make the running turn look
+	 *  stale. */
+	#wake(): void { this.#wokeAt = Date.now(); }
 
 	// -------------------------------------------------------------- reducer
 
