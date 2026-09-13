@@ -207,6 +207,31 @@ sentence, so *talking about* a command does not trigger it.
 | stop | "stop", "cancel", "abort", "never mind", "stopp", "avbryt", "glöm det" | kills the running turn, drops words being gathered and anything queued behind it |
 | null program | "null program", "nollprogram" | the same, answered in Mike's words: "Null program. Standing by, Man." |
 
+**"Null program"** deserves its own paragraph, because it is the way out of
+everything. In the book it is what Man tells Mike when the current job is to be
+forgotten: not paused, not finished — forgotten. Here it means exactly that.
+Said on its own, in any mode including *paused*, with or without "Mike" in
+front of it, it does four things at once:
+
+1. kills the turn that is running, whether it is Mike's or the active worker's
+   — the `claude` process dies, and the transcript records "(stopped by the
+   user)" rather than an error;
+2. throws away the words still being gathered in the hold window, so a
+   sentence you regret half-way through never reaches a model;
+3. drops every turn queued behind the running one — the two fragments that
+   were going to arrive out of context as soon as the first job finished;
+4. answers "Null program. Standing by, Man." and does nothing more until you
+   speak again.
+
+Use it when you hear the wrong thing being worked on, when the transcription
+came back as something you never said, when you have changed your mind, or
+when the lens has said "thinking" for longer than the job deserves and you
+would rather start over than wait. It is cheap: nothing is lost that you
+wanted kept. Workers keep running and keep their transcripts, the addressing
+mode stays what it was, the microphone stays as it was, and the next sentence
+you say is handled exactly as if nothing had happened. A plain "stop" does the
+same work; "null program" is the version that says what you meant.
+
 ### The touchpad
 
 | gesture | does |
