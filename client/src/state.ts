@@ -1009,6 +1009,11 @@ export class Store {
 				this.state.lastEvent = d.worker?.name ? `${d.worker.name} ended` : m.kind;
 				break;
 
+			case "workerReset":
+				// Same worker, same place in the list; only its memory is gone.
+				this.state.lastEvent = d.worker?.name ? `${d.worker.name} reset` : m.kind;
+				break;
+
 			case "workerRenamed":
 				// The same bug in a different shape, and the easy one to leave
 				// behind: folding the new name in without taking the old one out

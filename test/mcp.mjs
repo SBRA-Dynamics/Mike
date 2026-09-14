@@ -79,7 +79,7 @@ try {
 	const listed = await mcp.listTools();
 	const names = listed.result.tools.map((t) => t.name).sort();
 	check("exakt de sju verktygen finns",
-		JSON.stringify(names) === JSON.stringify(["end_worker", "leave_worker", "list_workers", "read_worker", "rename_worker", "spawn_worker", "switch_worker"]),
+		JSON.stringify(names) === JSON.stringify(["end_worker", "leave_worker", "list_workers", "read_worker", "rename_worker", "reset_worker", "spawn_worker", "switch_worker"]),
 		JSON.stringify(names));
 	check("inget skal-verktyg exponeras", !names.some((n) => /bash|shell|exec|run/.test(n)));
 	check("varje verktyg har ett schema", listed.result.tools.every((t) => t.inputSchema?.type === "object"));
@@ -178,6 +178,16 @@ try {
 	check("read_worker taggar med arbetarens namn", /Bosse:/.test(read.text), read.text);
 	const readOther = await mcp.call("read_worker", { name: "Kalle" });
 	check("read_worker på en tyst arbetare säger det rent ut", /has not said anything/.test(readOther.text), readOther.text);
+
+	{
+		const sinceReset = c1.mark();
+		const reset = await mcp.call("reset_worker", { name: "Kalle" });
+		check("reset lyckas", reset.isError === false, reset.text);
+		const resetEv = await c1.waitFor((m) => m.type === "event" && m.kind === "workerReset", 5000, "workerReset", sinceReset);
+		check("reset syns som händelse och byter inte aktiv arbetare", resetEv.data.active === "Bosse", JSON.stringify(resetEv.data));
+		check("arbetaren finns kvar efter reset", /Kalle/.test((await mcp.call("list_workers")).text));
+		refused("reset av okänd arbetare", await mcp.call("reset_worker", { name: "Ingen" }));
+	}
 
 	const sinceRename = c1.mark();
 	const renamed = await mcp.call("rename_worker", { name: "Bosse", newName: "Berit" });

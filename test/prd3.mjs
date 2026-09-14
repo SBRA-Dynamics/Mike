@@ -298,6 +298,36 @@ try {
 		server.stop();
 	}
 
+	section("en arbetare kan nollställas och börjar om från noll");
+	{
+		const server = track(await startMike());
+		const c = await connect(server);
+
+		await say(c, "Mike, start a worker called Bosse with sonnet");
+		await say(c, "Bosse, kom ihåg ordet banan");
+		await say(c, "Bosse, andra saken");
+		const before = await whoIs(c, "Bosse");
+
+		const reset = await say(c, "Mike, nollställ Bosse");
+		check("reset går via Mike som ett verktyg", !!eventOf(reset, "workerReset"), JSON.stringify(reset));
+		const after = await whoIs(c, "Bosse");
+		check("arbetaren får en ny session", /^[0-9a-f-]{36}$/.test(String(after.sessionId)) && after.sessionId !== before.sessionId,
+			JSON.stringify({ before: before.sessionId, after: after.sessionId }));
+
+		const next = textsOf(await say(c, "Bosse, hej igen"));
+		check("nästa tur räknas som den första", next[0]?.text === "turn 1: hej igen", JSON.stringify(next));
+		const newState = JSON.parse(readFileSync(join(server.fakeDir, `${after.sessionId}.json`), "utf8"));
+		check("den nya sessionen skapas med --session-id, inte --resume",
+			newState.lastArgs.includes("--session-id") && !newState.lastArgs.includes("--resume"), JSON.stringify(newState.lastArgs));
+
+		const read = await say(c, "Mike, vad gör Bosse");
+		const quoted = textsOf(read).map((m) => m.text).join(" ");
+		check("det gamla samtalet citeras inte längre", !/banan|andra saken/.test(quoted) && /hej igen/.test(quoted), quoted);
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
 	section("motorn: när en tur misslyckas");
 	{
 		const server = track(await startMike([], { FAKE_CLAUDE_FAIL: "exit" }));

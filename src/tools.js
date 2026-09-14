@@ -268,6 +268,29 @@ export function createToolset({ registry, engine, log, dirs }) {
 		},
 
 		{
+			name: "reset_worker",
+			description: "Start a worker over from nothing: stop whatever it is doing and wipe its conversation, so it remembers nothing of what was said. It keeps its name, model, folder and system prompt, and stays the one the user is talking to if it was. Use this when the user wants to reset, clear or restart a worker, not end it.",
+			inputSchema: {
+				type: "object",
+				properties: { name: { type: "string", description: "The worker's spoken name." } },
+				required: ["name"],
+				additionalProperties: false
+			},
+			run: async (args, { session }) => {
+				const worker = registry.require(str(args.name, "name"));
+				const r = await engine.reset(worker);
+				// Persisted in the same write as the new id: a restart between the
+				// two would resume a session that was never created.
+				registry.touch(worker, { engineSessionId: r?.engineSessionId ?? null, sessionCreated: false });
+				return {
+					kind: "workerReset",
+					text: `${worker.name} starts over with a clean context.`,
+					data: { worker: publicWorker(worker), active: session.worker }
+				};
+			}
+		},
+
+		{
 			name: "read_worker",
 			description: "Read the recent exchange from another worker, to answer a question about what it is doing. Returns a few turns, oldest first.",
 			inputSchema: {

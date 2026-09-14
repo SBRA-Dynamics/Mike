@@ -148,6 +148,7 @@ const SWITCH = R(`(?:switch|byt|vaxla|växla|go|ga|gå)\\b[^.]*?\\b(?:to|till|ti
 const READ = R(`(?:what\\s+(?:is|was)\\s+${NAME}\\s+(?:working on|doing|up to)|vad\\s+(?:gör|gor|jobbar)\\s+${NAME}(?:\\s+med)?)`);
 const LIST_WORKERS = R("(?:list|show|lista|visa)\\s+(?:the\\s+|alla\\s+)?(?:workers|arbetare|arbetarna)");
 const END = R(`(?:end|stop|avsluta|stoppa)\\s+(?:the\\s+)?(?:worker\\s+)?${NAME}\\s*[.!?]?\\s*$`);
+const RESET = R(`(?:reset|nollställ|nollstall)\\s+(?:the\\s+)?(?:worker\\s+|arbetaren\\s+)?${NAME}\\s*[.!?]?\\s*$`);
 const LIST_FILES = R("(?:list|show|lista|visa)\\s+(?:the\\s+|de\\s+)?(?:files|filerna|filer)");
 
 /** The bracketed block PRD 3 injects. Reading the working directory out of it
@@ -187,6 +188,10 @@ const answer = async () => {
 	if (LIST_WORKERS.test(said)) {
 		const r = await callTool("list_workers", {});
 		return r.isError ? `Could not: ${r.text}` : r.text.replace(/\n/g, " | ");
+	}
+	if ((m = said.match(RESET))) {
+		const r = await callTool("reset_worker", { name: m[1] });
+		return r.isError ? `Could not: ${r.text}` : r.text;
 	}
 	if ((m = said.match(END))) {
 		const r = await callTool("end_worker", { name: m[1] });

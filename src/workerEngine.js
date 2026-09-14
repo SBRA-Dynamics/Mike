@@ -29,6 +29,12 @@
 //        End the session. The transcript is kept (PRD 3 "end: explicit;
 //        transcript is kept"); only the process goes away.
 //
+//   async reset(worker)              -> { engineSessionId }
+//        Start the worker over: whatever it is doing is stopped, its session
+//        and its transcript are left behind, and it gets a fresh session id.
+//        The caller keeps name, model, folder and system prompt — a reset
+//        forgets the conversation, not the job.
+//
 //   interrupt(worker)                -> boolean
 //        Stop a turn in flight, for PRD 1's `interrupt`. True when there was
 //        one. Added by PRD 3: a turn that takes minutes has to be stoppable
@@ -100,6 +106,12 @@ export function createStubWorkerEngine({ log } = {}) {
 			// Transcript intentionally kept: PRD 3 keeps it too.
 		},
 
+		async reset(worker) {
+			threads.delete(worker.id);
+			log?.info(`worker reset ${worker.name} (stub engine)`);
+			return { engineSessionId: null };
+		},
+
 		// The seam is only a seam if both sides answer the same calls. The stub
 		// has nothing running, so both of these are honestly nothing.
 		interrupt() { return false; },
@@ -132,7 +144,7 @@ export function createStubWorkerEngine({ log } = {}) {
 // server never becomes the second driver of its own worker.
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, appendFileSync, readFileSync, existsSync, unlinkSync } from "node:fs";
+import { mkdirSync, appendFileSync, readFileSync, existsSync, unlinkSync, renameSync } from "node:fs";
 import { PromptFile, fillTemplate } from "./promptFile.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -401,6 +413,31 @@ export function createClaudeWorkerEngine({
 			// the Claude Code session on disk is untouched either way, so the id
 			// is still resumable from a terminal afterwards.
 			log?.info(`worker stop ${worker.name} (session ${String(worker.engineSessionId).slice(0, 8)} kept)`);
+		},
+
+		async reset(worker) {
+			// The turn in flight is killed and the queue drained BEFORE anything
+			// is cleared. A first turn dying late would otherwise mark the NEW
+			// session as created, and every turn after it would --resume an id
+			// the CLI has never seen.
+			this.interrupt(worker);
+			await (queues.get(worker.id) ?? Promise.resolve());
+			queues.delete(worker.id);
+			threads.delete(worker.id);
+			waiting.delete(worker.id);
+
+			// Moved aside, not deleted: the old conversation is still worth
+			// reading afterwards, it just must not be quoted as this one.
+			const before = worker.engineSessionId;
+			try {
+				const p = pathFor(worker);
+				if (existsSync(p)) renameSync(p, p.replace(/\.jsonl$/, `.reset-${Date.now()}.jsonl`));
+			} catch (e) { log?.error(`worker reset ${worker.name}: transcript not moved: ${e.message}`); }
+
+			worker.engineSessionId = randomUUID();
+			worker.sessionCreated = false;
+			log?.info(`worker reset ${worker.name} session ${String(before).slice(0, 8)} -> ${worker.engineSessionId.slice(0, 8)}`);
+			return { engineSessionId: worker.engineSessionId };
 		},
 
 		/** Forget a worker's transcript entirely. Not part of the engine
