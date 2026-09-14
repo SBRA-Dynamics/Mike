@@ -362,7 +362,7 @@ const paint = (): void => {
 	// own callback: once the lens is blank nextIdleExpiry is null, so this is
 	// not a chain. The fourth is the pairing screen's grace period, likewise
 	// armed once per outage.
-	const due = [store.nextNoticeExpiry(), store.nextListeningExpiry(), store.nextIdleExpiry(), store.nextPairingExpiry()]
+	const due = [store.nextNoticeExpiry(), store.nextListeningExpiry(), store.nextIdleExpiry(), store.nextPairingExpiry(), store.nextCommandNoteExpiry()]
 		.filter((v): v is number => v !== null);
 	if (due.length) expiryTimer = after(() => { expiryTimer = null; paint(); }, Math.min(...due) + 50);
 };

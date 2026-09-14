@@ -897,6 +897,8 @@ try {
 		await sleep(200);
 
 		check("första rewind tar den senaste köade", /^Rewound: tredje$/.test(await rewindSaid(c)));
+		check("svaret är märkt som ett kommando, inte en replik",
+			c.messages.filter((m) => m.type === "text" && m.from === "system").every((m) => m.command === true));
 		check("nästa tar den före", /^Rewound: andra$/.test(await rewindSaid(c)));
 		check("det som modellen redan läst tas inte tillbaka", (await rewindSaid(c)) === "Nothing to rewind.");
 

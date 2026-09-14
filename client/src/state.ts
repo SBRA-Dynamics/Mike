@@ -111,6 +111,9 @@ export type AppState = {
 	 *  turn — because the user asked for a dark lens and every one of those is
 	 *  exactly the thing they asked not to be shown. */
 	displayOff: boolean;
+	/** The answer to the last spoken command, shown in the title bar for
+	 *  COMMAND_NOTE_MS. Never the lens body: that belongs to the conversation. */
+	commandNote: { text: string; at: number } | null;
 	/** A worker finished or wants something while the lens was dark. Shown as
 	 *  a ring in the corner of the dark lens, and cleared the moment the lens
 	 *  lights, because by then the user is looking at what it was about. */
@@ -137,6 +140,12 @@ export const NOTICE_MS = 8000;
  *  enough to read a sentence back, short enough that it is gone before the
  *  answer needs the row. */
 export const HEARD_MS = 3000;
+
+/** How long the answer to a command stays in the title bar. Long enough to
+ *  read "Input: Always." once, and gone before it is mistaken for a state. */
+export const COMMAND_NOTE_MS = 4000;
+/** What of it fits in the title bar next to a name. */
+const COMMAND_NOTE_COLS = 28;
 
 /**
  * How long a turn may say nothing new before the lens starts blinking.
@@ -276,6 +285,7 @@ export class Store {
 		turns: [],
 		lensAt: 0,
 		displayOff: false,
+		commandNote: null,
 		beacon: false,
 		offlineSince: null
 	};
@@ -394,6 +404,22 @@ export class Store {
 		// where it has room for what the tool is being pointed at, and this row
 		// goes back to the one thing only it can say: how long.
 		return thinkingText(this.workingSince(now), now);
+	}
+
+	/** The command answer while it is fresh, cut to what the title bar holds. */
+	commandNoteText(now = Date.now()): string | null {
+		const n = this.state.commandNote;
+		if (!n || now - n.at >= COMMAND_NOTE_MS) return null;
+		const t = n.text.trim();
+		return t.length > COMMAND_NOTE_COLS ? `${t.slice(0, COMMAND_NOTE_COLS - 1)}…` : t;
+	}
+
+	/** When the command answer leaves the title bar, so it is repainted away. */
+	nextCommandNoteExpiry(now = Date.now()): number | null {
+		const n = this.state.commandNote;
+		if (!n) return null;
+		const left = n.at + COMMAND_NOTE_MS - now;
+		return left > 0 ? left : null;
 	}
 
 	/** When the "heard" indicator stops being true, so the caller can repaint
@@ -769,6 +795,9 @@ export class Store {
 		if (s.connection === "fatal") return "stopped";
 		if (s.connection !== "online") return "offline";
 		if (s.voice?.held) return s.voice.live ? "held" : "opening";
+		// The user just said a command and is looking for whether it worked.
+		const note = this.commandNoteText(now);
+		if (note) return note;
 		const waiting = this.notice(now);
 		if (waiting) return waiting;
 		const listening = this.listening(now);
@@ -853,6 +882,14 @@ export class Store {
 	#reduce(m: SeqMsg): void {
 		switch (m.type) {
 			case "text":
+				if (m.command) {
+					// In the transcript, for the phone; in the title bar, for the
+					// lens. Not #say: that would put "Display on." where the
+					// last answer was, and take the turns off the lens with it.
+					this.state.transcript.push({ seq: m.seq, from: speaker(m.from), text: m.text, kind: "note", at: Date.now() });
+					this.state.commandNote = { text: m.text, at: Date.now() };
+					return;
+				}
 				if ((m as { background?: boolean }).background) {
 					// Transcript yes, lens no: the user switched away on purpose,
 					// and a long job finishing is not a reason to interrupt the

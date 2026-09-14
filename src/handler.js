@@ -21,6 +21,13 @@ import { MODES, MODE_LABEL, applyModeCommand, isMode, route, ORIGIN } from "./ro
 import { decodeSegment, DEFAULT_MAX_AUDIO_BYTES } from "./audio.js";
 import { NOISE_MAX_BYTES, saveNoise } from "./noise.js";
 
+/** Marks a line as the answer to a spoken command — "Input: Always.", "Mic
+ *  off.", "Rewound: …" — rather than something said in the conversation. The
+ *  client shows it for a moment in the title bar and leaves the conversation
+ *  on the lens where it was; without the mark, every "display on" replaced the
+ *  last answer until the next one arrived. */
+const COMMAND = { command: true };
+
 /**
  * The audio path, shared by both handlers — PRD 5a R5a.6 and R5a.8.
  *
@@ -233,7 +240,7 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 		session.emit(msg.event("modeChanged", { mode: session.mode, previous: before }));
 		// One short line, because this is the confirmation that the user is not
 		// shouting into a paused microphone.
-		session.emit(msg.text(`Input: ${MODE_LABEL[session.mode]}.`, "system"));
+		session.emit(msg.text(`Input: ${MODE_LABEL[session.mode]}.`, "system", COMMAND));
 		// R5a.4: the mode is part of the state message, and a client that only
 		// watched `state` would otherwise never learn it changed.
 		session.emit(state(session, false));
@@ -408,7 +415,7 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 		// quiet in a way that looks like a hang rather than an obedience.
 		// A null program is answered the way the book's Mike would: what was
 		// dropped is not worth a word, and "standing by" is the whole state.
-		session.transient(msg.text(nullProgram ? "Null program. Standing by, Man." : stopped ? "Stopped." : "Nothing running.", "system"));
+		session.transient(msg.text(nullProgram ? "Null program. Standing by, Man." : stopped ? "Stopped." : "Nothing running.", "system", COMMAND));
 		session.transient(state(session, false));
 		log?.info(`stopped worker=${stoppedWorker} mike=${stoppedMike} held=${held?.parts.length ?? 0} session=${session.id.slice(0, 8)}`);
 		return stopped;
@@ -447,7 +454,7 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 			}
 		}
 
-		session.transient(msg.text(taken === null ? "Nothing to rewind." : `Rewound: ${clip(taken)}`, "system"));
+		session.transient(msg.text(taken === null ? "Nothing to rewind." : `Rewound: ${clip(taken)}`, "system", COMMAND));
 		return taken !== null;
 	};
 
@@ -649,7 +656,7 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 				// microphone off needs to know it worked — and the lens status
 				// they would otherwise read it from is about to say "mic off"
 				// for a different reason.
-				session.transient(msg.text(decision.on ? "Mic on." : "Mic off. Hold to talk.", "system"));
+				session.transient(msg.text(decision.on ? "Mic on." : "Mic off. Hold to talk.", "system", COMMAND));
 				log?.info(`mic ${decision.on ? "on" : "off"} by voice session=${session.id.slice(0, 8)}`);
 				return;
 
@@ -661,7 +668,7 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 				session.transient(msg.event("displayRequested", { on: decision.on }));
 				// The confirmation of "off" is read on the phone, not the lens —
 				// the lens is dark, which is the confirmation.
-				session.transient(msg.text(decision.on ? "Display on." : "Display off. Say display on to light it.", "system"));
+				session.transient(msg.text(decision.on ? "Display on." : "Display off. Say display on to light it.", "system", COMMAND));
 				log?.info(`display ${decision.on ? "on" : "off"} by voice session=${session.id.slice(0, 8)}`);
 				return;
 
@@ -669,9 +676,9 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 				// The microphone is the client's, so the server asks and the
 				// client records. Transient: a replayed request would start a
 				// recording on a reconnect hours later.
-				if (!noiseDir) return session.transient(msg.text("This server keeps no noise recordings.", "system"));
+				if (!noiseDir) return session.transient(msg.text("This server keeps no noise recordings.", "system", COMMAND));
 				session.transient(msg.event("noiseRequested", { seconds: decision.seconds }));
-				session.transient(msg.text(`Recording noise for ${decision.seconds} s. Stay quiet.`, "system"));
+				session.transient(msg.text(`Recording noise for ${decision.seconds} s. Stay quiet.`, "system", COMMAND));
 				log?.info(`noise recording requested ${decision.seconds}s session=${session.id.slice(0, 8)}`);
 				return;
 
@@ -759,14 +766,14 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 				case C2S.NOISE: {
 					if (!noiseDir) return session.emit(msg.error("this server keeps no noise recordings"));
 					const seg = decodeSegment(m, { maxBytes: NOISE_MAX_BYTES });
-					if (!seg.ok) return session.transient(msg.text(`Noise not saved: ${seg.error}.`, "system"));
+					if (!seg.ok) return session.transient(msg.text(`Noise not saved: ${seg.error}.`, "system", COMMAND));
 					try {
 						const r = saveNoise(noiseDir, seg.pcm, { device: m.device });
 						log?.info(`noise saved ${r.file} ${r.durationMs}ms level ${r.levelDb} floor ${r.floorDb} peak ${r.peakDb} session=${session.id.slice(0, 8)}`);
-						session.transient(msg.text(`Noise saved, ${Math.round(r.durationMs / 1000)} s: level ${r.levelDb}, floor ${r.floorDb}, peak ${r.peakDb} dBFS.`, "system"));
+						session.transient(msg.text(`Noise saved, ${Math.round(r.durationMs / 1000)} s: level ${r.levelDb}, floor ${r.floorDb}, peak ${r.peakDb} dBFS.`, "system", COMMAND));
 					} catch (e) {
 						log?.error(`noise not saved: ${e.message}`);
-						session.transient(msg.text(`Noise not saved: ${lens(e)}`, "system"));
+						session.transient(msg.text(`Noise not saved: ${lens(e)}`, "system", COMMAND));
 					}
 					return;
 				}

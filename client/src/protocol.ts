@@ -41,7 +41,9 @@ export type ReadyMsg = {
 
 export type WorkerInfo = { name: string; model?: string; cwd?: string; busy?: boolean };
 
-export type TextMsg = { type: "text"; text: string; from: string } & Framed;
+/** `command` marks the answer to a spoken command, which is not part of the
+ *  conversation and must not take the lens from it. */
+export type TextMsg = { type: "text"; text: string; from: string; command?: boolean } & Framed;
 export type StateMsg = { type: "state"; busy: boolean; worker: string | null; mode: string } & Framed;
 export type HeardMsg = { type: "heard"; text: string; confidence: number | null } & Framed;
 export type EventMsg = { type: "event"; kind: string; data: Record<string, any> } & Framed;

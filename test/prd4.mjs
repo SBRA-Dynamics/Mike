@@ -24,7 +24,7 @@ import { startProxy } from "./netcut.mjs";
 
 import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS, BODY_COLS, FRAME_PX, MIC_LIVE, MIC_OFF, CORNER_HEARING, CORNER_WAITING } from "../client/src/lens/render.ts";
 import { Connection, wsUrlFrom } from "../client/src/connection.ts";
-import { Store, NOTICE_MS, STALE_MS, LENS_IDLE_MS, PAIRING_GRACE_MS, MARK_WAITING, MARK_QUEUED, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
+import { Store, COMMAND_NOTE_MS, NOTICE_MS, STALE_MS, LENS_IDLE_MS, PAIRING_GRACE_MS, MARK_WAITING, MARK_QUEUED, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
 import { settingsFromScan, decodeFrame } from "../client/src/qr.ts";
 import { readUrlSettings, SettingsStore } from "../client/src/settings.ts";
 import { Glasses, hasHostChannel, isAudioChatter } from "../client/src/glasses.ts";
@@ -820,6 +820,34 @@ try {
 		check("och hos Bosse heter inpasset Mike, med stort M", s.lensView().text === "Mike: Hello, Man.", s.lensView().text);
 		s.apply({ type: "text", text: "Input: paused.", from: "system", seq: 2 });
 		check("systemets rader är också Mikes", s.lensView().text === "Mike: Input: paused.", s.lensView().text);
+	}
+
+	section("modellen: ett kommandos svar ersätter inte samtalet på linsen");
+	{
+		const s = new Store();
+		s.state.connection = "online";
+		s.state.worker = "Bosse";
+		s.apply({ type: "text", text: "Alla 41 checkar gröna.", from: "Bosse", seq: 1 });
+		const t0 = Date.now();
+		for (const [i, text] of ["Input: Always.", "Display on.", "Mic off. Hold to talk.", "Nothing to rewind.", "Stopped."].entries()) {
+			s.apply({ type: "text", text, from: "system", command: true, seq: 2 + i });
+			check(`"${text}" lämnar samtalet kvar`, s.lensView().text === "Alla 41 checkar gröna.", s.lensView().text);
+			check(`"${text}" syns i titelraden`, s.lensStatus() === text, String(s.lensStatus()));
+		}
+		check("och hamnar i transkriptet som en notis", s.state.transcript.at(-1).kind === "note" && s.state.transcript.at(-1).text === "Stopped.");
+		check("notisen försvinner av sig själv", s.lensStatus(t0 + COMMAND_NOTE_MS + 100) === null, String(s.lensStatus(t0 + COMMAND_NOTE_MS + 100)));
+		check("och ommålningen är bokad", s.nextCommandNoteExpiry() !== null && s.nextCommandNoteExpiry() <= COMMAND_NOTE_MS);
+
+		s.apply({ type: "text", text: "Noise saved, 10 s: level -41, floor -52, peak -20 dBFS.", from: "system", command: true, seq: 9 });
+		const f = renderLens({ ...s.lensView(), status: s.lensStatus(), mic: "live" });
+		check("ett långt kommandosvar kortas så titelraden håller", f.lines[0].length <= LENS.cols && getTextWidth(f.content.split("\n")[0]) <= LENS.width, f.lines[0]);
+		check("och namnet står kvar", f.header.startsWith("Bosse"), f.header);
+
+		const t = new Store();
+		t.state.connection = "online";
+		t.apply({ type: "event", kind: "turn", data: { id: "t1", to: "Mike", parts: ["kör sviten"], phase: "started" } });
+		t.apply({ type: "text", text: "Display on.", from: "system", command: true, seq: 1 });
+		check("en tur som pågår står kvar på linsen", t.lensView().text.includes("kör sviten"), t.lensView().text);
 	}
 
 	section("modellen: mikrofonen som titelraden visar den");
