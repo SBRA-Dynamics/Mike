@@ -196,6 +196,7 @@ const glasses = new Glasses({
 				//
 				// Not when the lens was switched off on purpose ("display off"):
 				// nothing lights it then, so the tap goes straight to the switch.
+				// Tried the other way for a day, and Mannie wanted it back.
 				if (store.lensDark() && !store.state.displayOff) { store.setPage(store.state.lens.page); return; }
 				// PushToTalk is the one mode where the switch means nothing: the
 				// hold IS the microphone there, by design and unconditionally, so
@@ -328,7 +329,7 @@ const paint = (): void => {
 	mark("render");
 	const view = store.lensView();
 	const dark = store.lensDark();
-	frame = renderLens({ from: view.from, text: view.text, status: store.lensStatus(), mic: store.lensMic(), page: view.page, blank: dark });
+	frame = renderLens({ from: view.from, text: view.text, status: store.lensStatus(), mic: store.lensMic(), page: view.page, blank: dark, corner: store.lensCorner() });
 	mark("companion");
 	companion.render(s, frame, store.listening(), store.needsPairing());
 	mark(`glasses ${frame.content.length}c`);

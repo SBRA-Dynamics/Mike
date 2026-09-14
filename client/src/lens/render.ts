@@ -64,6 +64,13 @@ const EDGE_H = "─";
  *  "thinking 12s" used to hide whether anyone was listening. */
 export const MIC_LIVE = "●";
 export const MIC_OFF = "○";
+/** The corner of a dark lens, top right: a ring while the microphone hears,
+ *  a dot when a worker is done or wants something. The same glyphs as the
+ *  microphone marks, which cannot be confused with them — a dark lens has no
+ *  title bar for the microphone to be in. */
+export const CORNER_HEARING = "○";
+export const CORNER_WAITING = "●";
+export type LensCorner = "hearing" | "waiting" | null;
 
 /** Twenty-eight glyphs of 20 px. Sixteen pixels of the lens are left unused
  *  at the right, which is the price of an edge that is straight. */
@@ -93,6 +100,8 @@ export type LensView = {
 	 *  caller-side special case, so the companion preview shows the dark lens
 	 *  too and the two faces cannot disagree about what is on the glass. */
 	blank?: boolean;
+	/** On a blank lens only: the mark in the top right corner. */
+	corner?: LensCorner;
 };
 
 export type LensFrame = {
@@ -259,7 +268,14 @@ export const renderLens = (view: LensView): LensFrame => {
 	// frame goes with it — a window drawn round nothing is still a thing in
 	// the eye.
 	if (view.blank) {
-		return { header: "", lines: Array(LENS.rows).fill(""), content: "", page: 0, pages: 1, overflow: false };
+		const lines: string[] = Array(LENS.rows).fill("");
+		if (!view.corner) return { header: "", lines, content: "", page: 0, pages: 1, overflow: false };
+		// Pushed to the corner with spaces, the one filler that draws nothing.
+		// Against the lens edge rather than the frame's, since there is no frame.
+		const mark = view.corner === "waiting" ? CORNER_WAITING : CORNER_HEARING;
+		lines[0] = " ".repeat(LENS.cols - 1) + mark;
+		const pad = Math.floor((LENS.width - getTextWidth(mark)) / getTextWidth(" "));
+		return { header: "", lines, content: " ".repeat(pad) + mark, page: 0, pages: 1, overflow: false };
 	}
 	const body = wrapText(view.text ?? "");
 	const pages = paginate(body);

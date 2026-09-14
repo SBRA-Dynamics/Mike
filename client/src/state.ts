@@ -8,7 +8,7 @@
 
 import { DEFAULT_MODE, MODE_LABEL, MODES } from "../../src/routing.js";
 import { BODY_ROWS, wrapText } from "./lens/render.ts";
-import type { LensMic } from "./lens/render.ts";
+import type { LensCorner, LensMic } from "./lens/render.ts";
 import type { VoiceStatus } from "./audio/voice.ts";
 import type { ConnectionStatus } from "./connection.ts";
 import type { EventMsg, ReadyMsg, SeqMsg, WorkerInfo } from "./protocol.ts";
@@ -111,6 +111,10 @@ export type AppState = {
 	 *  turn — because the user asked for a dark lens and every one of those is
 	 *  exactly the thing they asked not to be shown. */
 	displayOff: boolean;
+	/** A worker finished or wants something while the lens was dark. Shown as
+	 *  a ring in the corner of the dark lens, and cleared the moment the lens
+	 *  lights, because by then the user is looking at what it was about. */
+	beacon: boolean;
 	/** When the socket was last seen going away, or null while it is up. The
 	 *  pairing screen waits on this: a blip while the phone was in a pocket is
 	 *  not a reason to put a QR button over the conversation. */
@@ -272,6 +276,7 @@ export class Store {
 		turns: [],
 		lensAt: 0,
 		displayOff: false,
+		beacon: false,
 		offlineSince: null
 	};
 
@@ -503,6 +508,27 @@ export class Store {
 		if (this.state.displayOff) return true;
 		if (this.workingView(now)) return false;
 		return this.idleFor(now) >= LENS_IDLE_MS;
+	}
+
+	/** Should the dark lens carry the ring? Only while it is dark: a lit lens
+	 *  shows the thing itself, so lighting it is what clears the ring — whether
+	 *  by "display on", a tap, or a foreground reply that lit it on arrival. */
+	lensBeacon(now = Date.now()): boolean {
+		if (!this.state.beacon) return false;
+		if (this.lensDark(now)) return true;
+		this.state.beacon = false;
+		return false;
+	}
+
+	/** The mark in the corner of a dark lens, or null for none. A ring while
+	 *  the microphone is hearing — held or always, whatever the mode — because
+	 *  a dark lens has no title bar to carry the microphone mark. A dot when a
+	 *  worker is waiting, which has to outrank the ring: in Always the ring
+	 *  never goes out, and the same glyph for both would hide the worker. */
+	lensCorner(now = Date.now()): LensCorner {
+		if (!this.lensDark(now)) { this.lensBeacon(now); return null; }
+		if (this.lensBeacon(now)) return "waiting";
+		return this.state.voice?.live ? "hearing" : null;
 	}
 
 	/** The microphone as the title bar shows it: hearing, not hearing, or
@@ -833,9 +859,14 @@ export class Store {
 					// conversation they are in. The notice arrives separately, as
 					// `workerNotice`, once the server has read the sentence.
 					this.state.transcript.push({ seq: m.seq, from: m.from, text: m.text, kind: "text", at: Date.now() });
-					return;
+				} else {
+					this.#say(speaker(m.from), m.text, "text", m.seq);
 				}
-				this.#say(speaker(m.from), m.text, "text", m.seq);
+				// Any worker's answer is a worker done with its turn. Mike's are
+				// not: he is the one being talked to, not someone to come back to.
+				// Asked after the answer is in, so one that lit the lens on arrival
+				// leaves no ring behind.
+				if (speaker(m.from) !== MIKE && this.lensDark()) this.state.beacon = true;
 				return;
 
 			case "error":
@@ -970,6 +1001,9 @@ export class Store {
 				// Somebody the user is not talking to has spoken, and the server
 				// has read it well enough to say whether they are asking.
 				if (d.worker) this.#note(String(d.worker), d.kind === "question" ? "question" : "said");
+				// A question arrives seconds after the answer it is part of, and
+				// the lens may have gone dark in between.
+				if (d.kind === "question" && this.lensDark()) this.state.beacon = true;
 				break;
 
 			case "workerSpawned":

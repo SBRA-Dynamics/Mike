@@ -232,7 +232,11 @@ const DISPLAY_COMMANDS = [
 	{ on: true, re: new RegExp(`^(?:tand|tand upp|light|light up|wake|wake up) (?:the |min )?${SCREEN}$`) },
 	{ on: false, re: new RegExp(`^(?:${VERB} |turn |sla |stang |slack )?(?:off|av) (?:the |min )?${SCREEN}$`) },
 	{ on: false, re: new RegExp(`^(?:turn |sla |stang |stanga |slack |slacka )?(?:the |min )?${SCREEN} (?:off|av)$`) },
-	{ on: false, re: new RegExp(`^(?:slack|slack ner|slack ned|darken|dim|kill) (?:the |min )?${SCREEN}$`) }
+	{ on: false, re: new RegExp(`^(?:slack|slack ner|slack ned|darken|dim|kill) (?:the |min )?${SCREEN}$`) },
+	// How whisper hears "display off" said quickly: "Display of." and, with the
+	// first syllable lost, "Playoff." Whole-utterance only, like every other
+	// entry here, so a sentence about the playoffs is still a sentence.
+	{ on: false, re: new RegExp(`^(?:${SCREEN} of|display ?off|playoff)$`) }
 ];
 
 /** Same shape as matchMicCommand. Returns { on } or null. */

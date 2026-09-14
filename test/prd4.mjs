@@ -22,7 +22,7 @@ import { validateC2S, S2C } from "../src/protocol.js";
 import { MODES } from "../src/routing.js";
 import { startProxy } from "./netcut.mjs";
 
-import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS, BODY_COLS, FRAME_PX, MIC_LIVE, MIC_OFF } from "../client/src/lens/render.ts";
+import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS, BODY_COLS, FRAME_PX, MIC_LIVE, MIC_OFF, CORNER_HEARING, CORNER_WAITING } from "../client/src/lens/render.ts";
 import { Connection, wsUrlFrom } from "../client/src/connection.ts";
 import { Store, NOTICE_MS, STALE_MS, LENS_IDLE_MS, PAIRING_GRACE_MS, MARK_WAITING, MARK_QUEUED, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
 import { settingsFromScan, decodeFrame } from "../client/src/qr.ts";
@@ -730,10 +730,84 @@ try {
 		check("men det som sades finns kvar att visa", s.state.lens.text === "Ett nytt svar.");
 		s.apply({ type: "event", kind: "displayRequested", data: { on: true } });
 		check("display on tänder den igen", s.lensDark() === false && s.state.displayOff === false);
+
 		check("och säger det på telefonen", s.state.lastEvent === "display on");
 		s.state.turns = [];
 		s.state.lensAt -= LENS_IDLE_MS + 1;
 		check("tänd av display on räknas som nyss sedd, så tomgången börjar om", s.lensDark() === false);
+	}
+
+	section("hörnet på en släckt lins: ring när den lyssnar, prick när en arbetare väntar");
+	{
+		for (const [corner, mark] of [["hearing", CORNER_HEARING], ["waiting", CORNER_WAITING]]) {
+			const f = renderLens({ from: "Bosse", text: "x", blank: true, corner });
+			check(`${corner}: tecknet finns i fonten`, getTextWidth(mark) > 8);
+			check(`${corner}: längst upp till höger`, f.lines[0].endsWith(mark) && f.lines[0].length === LENS.cols, JSON.stringify(f.lines[0]));
+			check(`${corner}: och ingenting annat syns`, f.lines.slice(1).every((l) => l === "") && f.content.trim() === mark);
+			const px = getTextWidth(f.content);
+			check(`${corner}: mot linsens högerkant, inte förbi den`, px <= LENS.width && px > LENS.width - getTextWidth(" "), String(px));
+		}
+		check("ringen och pricken går att skilja åt", CORNER_HEARING !== CORNER_WAITING);
+		check("en tänd lins bryr sig inte om hörnet", !renderLens({ from: "Bosse", text: "x", corner: "hearing" }).content.includes(" ".repeat(60)));
+
+		const online = () => { const st = new Store(); st.state.connection = "online"; return st; };
+		const voice = (st, held, live) => st.setVoice({ ...(st.state.voice ?? {}), held, live });
+
+		// A worker done or asking, with the display off.
+		const s = online();
+		s.state.worker = "Bosse";
+		s.apply({ type: "event", kind: "displayRequested", data: { on: false } });
+		check("inget i hörnet utan anledning", s.lensCorner() === null);
+		s.apply({ type: "text", text: "Mike här.", from: "mike", seq: 1 });
+		check("Mike som svarar ger ingen prick", s.lensCorner() === null);
+		s.apply({ type: "text", text: "Klart, alla tester gröna.", from: "Bosse", seq: 2 });
+		check("en arbetare som blir klar ger pricken", s.lensCorner() === "waiting");
+		voice(s, false, true);
+		check("pricken går före ringen, annars syns den aldrig i Always", s.lensCorner() === "waiting");
+		s.apply({ type: "event", kind: "displayRequested", data: { on: true } });
+		check("display on tar bort pricken", s.lensCorner() === null && s.state.beacon === false);
+		s.apply({ type: "event", kind: "displayRequested", data: { on: false } });
+		check("och den kommer inte tillbaka av sig själv, bara ringen för mikrofonen", s.lensCorner() === "hearing");
+
+		const q = online();
+		q.apply({ type: "event", kind: "displayRequested", data: { on: false } });
+		q.apply({ type: "event", kind: "workerNotice", data: { worker: "Kalle", kind: "question" } });
+		check("en arbetare som frågar något ger pricken", q.lensCorner() === "waiting");
+
+		// Listening, whatever the mode, with the display off.
+		const h = online();
+		h.apply({ type: "event", kind: "displayRequested", data: { on: false } });
+		check("ingen ring med stängd mikrofon", h.lensCorner() === null);
+		voice(h, true, false);
+		check("ingen ring medan mikrofonen öppnas", h.lensCorner() === null);
+		voice(h, true, true);
+		check("hålla nere: ringen lyser när den lyssnar", h.lensCorner() === "hearing" && h.lensDark() === true);
+		voice(h, false, false);
+		check("släpper man försvinner ringen", h.lensCorner() === null);
+		voice(h, false, true);
+		check("Always: ringen lyser hela tiden den lyssnar, utan att något hålls", h.lensCorner() === "hearing");
+
+		// The idle-dark lens.
+		const idle = online();
+		idle.state.worker = "Bosse";
+		idle.apply({ type: "text", text: "Svar.", from: "Bosse", seq: 1 });
+		idle.state.lensAt -= LENS_IDLE_MS + 1;
+		check("släckt av tystnad, ingen prick kvar från det tända svaret", idle.lensDark() === true && idle.lensCorner() === null);
+		voice(idle, false, true);
+		check("släckt av tystnad och Always: ringen lyser", idle.lensCorner() === "hearing");
+		idle.apply({ type: "text", text: "Kalle är klar.", from: "Kalle", seq: 2, background: true });
+		check("ett svar i bakgrunden på en släckt lins ger pricken", idle.lensCorner() === "waiting");
+		idle.state.lastEvent = null;
+		idle.setPage(0);
+		check("ett tryck på en lins som slocknat av sig själv väcker den, det är inte display on",
+			idle.lensDark() === false && idle.state.displayOff === false && idle.state.lastEvent === null, String(idle.state.lastEvent));
+		check("och tar bort pricken", idle.lensCorner() === null && idle.state.beacon === false);
+
+		const hi = online();
+		hi.apply({ type: "text", text: "Svar.", from: "Mike", seq: 1 });
+		hi.state.lensAt -= LENS_IDLE_MS + 1;
+		voice(hi, true, true);
+		check("hålla nere tänder en lins som slocknat av sig själv, så inget hörn behövs", hi.lensDark() === false && hi.lensCorner() === null);
 	}
 
 	section("modellen: Mike heter Mike på linsen, hur tråden än stavar honom");
