@@ -22,7 +22,7 @@ import { validateC2S, S2C } from "../src/protocol.js";
 import { MODES } from "../src/routing.js";
 import { startProxy } from "./netcut.mjs";
 
-import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS, BODY_COLS, FRAME_PX, MIC_LIVE, MIC_OFF, CORNER_HEARING, CORNER_WAITING } from "../client/src/lens/render.ts";
+import { renderLens, wrapText, buildHeader, LENS, BODY_ROWS, BODY_COLS, FRAME_PX, MIC_LIVE, MIC_OFF, CORNER_HEARING, CORNER_WAITING, waitingLabel } from "../client/src/lens/render.ts";
 import { Connection, wsUrlFrom } from "../client/src/connection.ts";
 import { Store, COMMAND_NOTE_MS, NOTICE_MS, STALE_MS, LENS_IDLE_MS, PAIRING_GRACE_MS, MARK_WAITING, MARK_QUEUED, MARK_TAKEN, MARK_THEIRS } from "../client/src/state.ts";
 import { settingsFromScan, decodeFrame } from "../client/src/qr.ts";
@@ -737,77 +737,99 @@ try {
 		check("tänd av display on räknas som nyss sedd, så tomgången börjar om", s.lensDark() === false);
 	}
 
-	section("hörnet på en släckt lins: ring när den lyssnar, prick när en arbetare väntar");
+	section("den släckta linsens översta rad: vem som väntar till vänster, ringen till höger när den lyssnar");
 	{
-		for (const [corner, mark] of [["hearing", CORNER_HEARING], ["waiting", CORNER_WAITING]]) {
-			const f = renderLens({ from: "Bosse", text: "x", blank: true, corner });
-			check(`${corner}: tecknet finns i fonten`, getTextWidth(mark) > 8);
-			check(`${corner}: längst upp till höger`, f.lines[0].endsWith(mark) && f.lines[0].length === LENS.cols, JSON.stringify(f.lines[0]));
-			check(`${corner}: och ingenting annat syns`, f.lines.slice(1).every((l) => l === "") && f.content.trim() === mark);
-			const px = getTextWidth(f.content);
-			check(`${corner}: mot linsens högerkant, inte förbi den`, px <= LENS.width && px > LENS.width - getTextWidth(" "), String(px));
-		}
-		check("ringen och pricken går att skilja åt", CORNER_HEARING !== CORNER_WAITING);
-		check("en tänd lins bryr sig inte om hörnet", !renderLens({ from: "Bosse", text: "x", corner: "hearing" }).content.includes(" ".repeat(60)));
+		const top = (corners) => renderLens({ from: "Bosse", text: "x", blank: true, corners });
+		const fitsLens = (f) => f.lines[0].length <= LENS.cols && getTextWidth(f.content) <= LENS.width;
+
+		const ring = top({ hearing: true });
+		check("tecknen finns i fonten", getTextWidth(CORNER_HEARING) > 8 && getTextWidth(CORNER_WAITING) > 8);
+		check("ringen står längst upp till höger", ring.lines[0].endsWith(CORNER_HEARING) && ring.lines[0].length === LENS.cols, JSON.stringify(ring.lines[0]));
+		const px = getTextWidth(ring.content);
+		check("mot linsens högerkant, inte förbi den", px <= LENS.width && px > LENS.width - getTextWidth(" "), String(px));
+		check("och ingenting annat syns", ring.lines.slice(1).every((l) => l === "") && ring.content.trim() === CORNER_HEARING);
+
+		const one = top({ waiting: ["Bosse"] });
+		check("en väntande arbetare står med namn uppe till vänster", one.content === `Bosse ${CORNER_WAITING}` && one.lines[0] === `Bosse ${CORNER_WAITING}`, JSON.stringify(one.content));
+		const both = top({ waiting: ["Bosse"], hearing: true });
+		check("båda samtidigt: namnet till vänster, ringen till höger",
+			both.content.startsWith(`Bosse ${CORNER_WAITING}`) && both.content.endsWith(CORNER_HEARING) && fitsLens(both), JSON.stringify(both.content));
+		check("två namn", waitingLabel(["Bosse", "Kalle"]) === `Bosse, Kalle ${CORNER_WAITING}`);
+		check("fler blir ett antal", waitingLabel(["A", "B", "C"]) === `3 waiting ${CORNER_WAITING}`);
+		const long = top({ waiting: ["W".repeat(60)], hearing: true });
+		check("ett långt namn kortas och ringen står kvar", fitsLens(long) && long.content.endsWith(CORNER_HEARING), JSON.stringify(long.lines[0]));
+		check("inget att visa är en tom lins", top({ waiting: [], hearing: false }).content === "");
+		check("en tänd lins bryr sig inte om hörnen", !renderLens({ from: "Bosse", text: "x", corners: { hearing: true } }).content.includes(" ".repeat(60)));
 
 		const online = () => { const st = new Store(); st.state.connection = "online"; return st; };
 		const voice = (st, held, live) => st.setVoice({ ...(st.state.voice ?? {}), held, live });
 
-		// A worker done or asking, with the display off.
 		const s = online();
 		s.state.worker = "Bosse";
 		s.apply({ type: "event", kind: "displayRequested", data: { on: false } });
-		check("inget i hörnet utan anledning", s.lensCorner() === null);
+		check("inget på raden utan anledning", JSON.stringify(s.lensCorners()) === JSON.stringify({ waiting: [], hearing: false }));
 		s.apply({ type: "text", text: "Mike här.", from: "mike", seq: 1 });
-		check("Mike som svarar ger ingen prick", s.lensCorner() === null);
+		check("Mike som svarar nämns inte", s.lensCorners().waiting.length === 0);
 		s.apply({ type: "text", text: "Klart, alla tester gröna.", from: "Bosse", seq: 2 });
-		check("en arbetare som blir klar ger pricken", s.lensCorner() === "waiting");
+		check("en arbetare som blir klar nämns vid namn", JSON.stringify(s.lensCorners().waiting) === JSON.stringify(["Bosse"]));
+		s.apply({ type: "text", text: "Jag med.", from: "Kalle", seq: 3 });
+		s.apply({ type: "text", text: "Och en sak till.", from: "Bosse", seq: 4 });
+		check("varje arbetare en gång, den senaste sist", JSON.stringify(s.lensCorners().waiting) === JSON.stringify(["Kalle", "Bosse"]));
 		voice(s, false, true);
-		check("pricken går före ringen, annars syns den aldrig i Always", s.lensCorner() === "waiting");
+		check("namnen och ringen syns samtidigt", s.lensCorners().hearing === true && s.lensCorners().waiting.length === 2);
 		s.apply({ type: "event", kind: "displayRequested", data: { on: true } });
-		check("display on tar bort pricken", s.lensCorner() === null && s.state.beacon === false);
+		check("display on tar bort namnen", JSON.stringify(s.lensCorners()) === "{}" && s.state.beacon.length === 0);
 		s.apply({ type: "event", kind: "displayRequested", data: { on: false } });
-		check("och den kommer inte tillbaka av sig själv, bara ringen för mikrofonen", s.lensCorner() === "hearing");
+		check("och de kommer inte tillbaka, bara ringen för mikrofonen", s.lensCorners().waiting.length === 0 && s.lensCorners().hearing === true);
+
+		// "Ignore": one worker, then everyone; the title bar's notice goes too.
+		const ig = online();
+		ig.apply({ type: "event", kind: "displayRequested", data: { on: false } });
+		ig.apply({ type: "text", text: "Klar.", from: "Bosse", seq: 1, background: true });
+		ig.apply({ type: "text", text: "Klar.", from: "Kalle", seq: 2, background: true });
+		ig.apply({ type: "event", kind: "workerNotice", data: { worker: "Kalle", kind: "question" } });
+		check("två väntar", ig.lensCorners().waiting.length === 2 && ig.state.pending.length === 1);
+		ig.apply({ type: "event", kind: "noticesDismissed", data: { worker: "kalle" } });
+		check("ignore Kalle tar bort Kalle och bara Kalle", JSON.stringify(ig.lensCorners().waiting) === JSON.stringify(["Bosse"]) && ig.state.pending.length === 0);
+		ig.apply({ type: "event", kind: "noticesDismissed", data: { worker: null } });
+		check("ignore tar bort resten", ig.lensCorners().waiting.length === 0);
 
 		const q = online();
 		q.apply({ type: "event", kind: "displayRequested", data: { on: false } });
 		q.apply({ type: "event", kind: "workerNotice", data: { worker: "Kalle", kind: "question" } });
-		check("en arbetare som frågar något ger pricken", q.lensCorner() === "waiting");
+		check("en arbetare som frågar något nämns", JSON.stringify(q.lensCorners().waiting) === JSON.stringify(["Kalle"]));
 
-		// Listening, whatever the mode, with the display off.
 		const h = online();
 		h.apply({ type: "event", kind: "displayRequested", data: { on: false } });
-		check("ingen ring med stängd mikrofon", h.lensCorner() === null);
 		voice(h, true, false);
-		check("ingen ring medan mikrofonen öppnas", h.lensCorner() === null);
+		check("ingen ring medan mikrofonen öppnas", h.lensCorners().hearing === false);
 		voice(h, true, true);
-		check("hålla nere: ringen lyser när den lyssnar", h.lensCorner() === "hearing" && h.lensDark() === true);
+		check("hålla nere: ringen lyser när den lyssnar", h.lensCorners().hearing === true && h.lensDark() === true);
 		voice(h, false, false);
-		check("släpper man försvinner ringen", h.lensCorner() === null);
+		check("släpper man försvinner ringen", h.lensCorners().hearing === false);
 		voice(h, false, true);
-		check("Always: ringen lyser hela tiden den lyssnar, utan att något hålls", h.lensCorner() === "hearing");
+		check("Always: ringen lyser hela tiden den lyssnar", h.lensCorners().hearing === true);
 
-		// The idle-dark lens.
 		const idle = online();
 		idle.state.worker = "Bosse";
 		idle.apply({ type: "text", text: "Svar.", from: "Bosse", seq: 1 });
 		idle.state.lensAt -= LENS_IDLE_MS + 1;
-		check("släckt av tystnad, ingen prick kvar från det tända svaret", idle.lensDark() === true && idle.lensCorner() === null);
+		check("släckt av tystnad, inget namn kvar från det tända svaret", idle.lensDark() === true && idle.lensCorners().waiting.length === 0);
 		voice(idle, false, true);
-		check("släckt av tystnad och Always: ringen lyser", idle.lensCorner() === "hearing");
+		check("släckt av tystnad och Always: ringen lyser", idle.lensCorners().hearing === true);
 		idle.apply({ type: "text", text: "Kalle är klar.", from: "Kalle", seq: 2, background: true });
-		check("ett svar i bakgrunden på en släckt lins ger pricken", idle.lensCorner() === "waiting");
+		check("ett svar i bakgrunden på en släckt lins nämner arbetaren", JSON.stringify(idle.lensCorners().waiting) === JSON.stringify(["Kalle"]));
 		idle.state.lastEvent = null;
 		idle.setPage(0);
 		check("ett tryck på en lins som slocknat av sig själv väcker den, det är inte display on",
 			idle.lensDark() === false && idle.state.displayOff === false && idle.state.lastEvent === null, String(idle.state.lastEvent));
-		check("och tar bort pricken", idle.lensCorner() === null && idle.state.beacon === false);
+		check("och tar bort namnen", JSON.stringify(idle.lensCorners()) === "{}" && idle.state.beacon.length === 0);
 
 		const hi = online();
 		hi.apply({ type: "text", text: "Svar.", from: "Mike", seq: 1 });
 		hi.state.lensAt -= LENS_IDLE_MS + 1;
 		voice(hi, true, true);
-		check("hålla nere tänder en lins som slocknat av sig själv, så inget hörn behövs", hi.lensDark() === false && hi.lensCorner() === null);
+		check("hålla nere tänder en lins som slocknat av sig själv, så inga hörn behövs", hi.lensDark() === false && JSON.stringify(hi.lensCorners()) === "{}");
 	}
 
 	section("modellen: Mike heter Mike på linsen, hur tråden än stavar honom");

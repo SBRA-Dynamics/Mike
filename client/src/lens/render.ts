@@ -64,13 +64,25 @@ const EDGE_H = "─";
  *  "thinking 12s" used to hide whether anyone was listening. */
 export const MIC_LIVE = "●";
 export const MIC_OFF = "○";
-/** The corner of a dark lens, top right: a ring while the microphone hears,
- *  a dot when a worker is done or wants something. The same glyphs as the
- *  microphone marks, which cannot be confused with them — a dark lens has no
- *  title bar for the microphone to be in. */
+/** The top row of a dark lens. Right: a ring while the microphone hears.
+ *  Left: the name of a worker that is done or wants something, with a dot.
+ *  Two corners rather than two glyphs in one: on the glass a ring and a dot
+ *  the size of a letter were measured as the same thing, and a name also says
+ *  who. A dark lens has no title bar, so neither can be confused with the
+ *  microphone mark. */
 export const CORNER_HEARING = "○";
 export const CORNER_WAITING = "●";
-export type LensCorner = "hearing" | "waiting" | null;
+/** Longest worker label before it is cut; the ring keeps its corner. */
+const WAITING_COLS = 30;
+export type LensCorners = { waiting?: string[]; hearing?: boolean };
+
+/** "Bosse ●", "Bosse, Kalle ●", "3 waiting ●". */
+export const waitingLabel = (names: string[]): string => {
+	if (!names.length) return "";
+	const joined = names.length > 2 ? `${names.length} waiting` : names.join(", ");
+	const cut = joined.length > WAITING_COLS ? `${joined.slice(0, WAITING_COLS - 1)}${ELLIPSIS}` : joined;
+	return `${cut} ${CORNER_WAITING}`;
+};
 
 /** Twenty-eight glyphs of 20 px. Sixteen pixels of the lens are left unused
  *  at the right, which is the price of an edge that is straight. */
@@ -100,8 +112,8 @@ export type LensView = {
 	 *  caller-side special case, so the companion preview shows the dark lens
 	 *  too and the two faces cannot disagree about what is on the glass. */
 	blank?: boolean;
-	/** On a blank lens only: the mark in the top right corner. */
-	corner?: LensCorner;
+	/** On a blank lens only: what its top row carries. */
+	corners?: LensCorners;
 };
 
 export type LensFrame = {
@@ -269,13 +281,15 @@ export const renderLens = (view: LensView): LensFrame => {
 	// the eye.
 	if (view.blank) {
 		const lines: string[] = Array(LENS.rows).fill("");
-		if (!view.corner) return { header: "", lines, content: "", page: 0, pages: 1, overflow: false };
-		// Pushed to the corner with spaces, the one filler that draws nothing.
-		// Against the lens edge rather than the frame's, since there is no frame.
-		const mark = view.corner === "waiting" ? CORNER_WAITING : CORNER_HEARING;
-		lines[0] = " ".repeat(LENS.cols - 1) + mark;
-		const pad = Math.floor((LENS.width - getTextWidth(mark)) / getTextWidth(" "));
-		return { header: "", lines, content: " ".repeat(pad) + mark, page: 0, pages: 1, overflow: false };
+		const left = waitingLabel(view.corners?.waiting ?? []);
+		const right = view.corners?.hearing ? CORNER_HEARING : "";
+		if (!left && !right) return { header: "", lines, content: "", page: 0, pages: 1, overflow: false };
+		// Pushed apart with spaces, the one filler that draws nothing. Against
+		// the lens edge rather than the frame's, since there is no frame.
+		lines[0] = right ? left + " ".repeat(Math.max(1, LENS.cols - left.length - right.length)) + right : left;
+		const pad = Math.floor((LENS.width - getTextWidth(left) - getTextWidth(right)) / getTextWidth(" "));
+		const top = right ? left + " ".repeat(Math.max(1, pad)) + right : left;
+		return { header: "", lines, content: top, page: 0, pages: 1, overflow: false };
 	}
 	const body = wrapText(view.text ?? "");
 	const pages = paginate(body);

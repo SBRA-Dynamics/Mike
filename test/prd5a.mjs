@@ -543,7 +543,7 @@ section("mikrofonen går att slå på och av med rösten");
 section("linsen går att släcka och tända med rösten: display off, display on");
 {
 	const said = (text, mode = MODES.BYNAME) => route(text, { mode, worker: "Bosse" });
-	for (const [text, on] of [["display off", false], ["Display off.", false], ["Display of.", false], ["Playoff.", false], ["Displayoff", false], ["Mike, display off", false],
+	for (const [text, on] of [["display off", false], ["Display off.", false], ["Display of.", false], ["Playoff.", false], ["Displayoff", false], ["Stay on.", true], ["Splay on.", true], ["Play on.", true], ["Mike, display off", false],
 		["turn the display off", false], ["släck skärmen", false], ["stäng av displayen", false], ["släck linsen", false],
 		["display on", true], ["Display on.", true], ["turn on the display", true], ["tänd skärmen", true],
 		["slå på displayen", true], ["tänd linsen", true], ["screen on", true]]) {
@@ -554,6 +554,7 @@ section("linsen går att släcka och tända med rösten: display off, display on
 		const r = said("display on", mode);
 		check(`och tillbaka går det i läge ${mode}`, r.kind === "display" && r.on === true, JSON.stringify(r));
 	}
+	check("stay on i en mening är en mening", said("Mike, should the heater stay on", MODES.ALWAYS).kind === "mike");
 	check("en mening om slutspelet är en mening", said("Mike, who won the playoff", MODES.ALWAYS).kind === "mike");
 	check("en mening om displayen är en mening", said("Mike, what does display off do", MODES.ALWAYS).kind === "mike");
 	check("ett skrivet display off räknas också", route("display off", { mode: MODES.BYNAME, worker: null, origin: ORIGIN.TYPED }).kind === "display");

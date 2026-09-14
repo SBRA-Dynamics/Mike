@@ -233,10 +233,11 @@ const DISPLAY_COMMANDS = [
 	{ on: false, re: new RegExp(`^(?:${VERB} |turn |sla |stang |slack )?(?:off|av) (?:the |min )?${SCREEN}$`) },
 	{ on: false, re: new RegExp(`^(?:turn |sla |stang |stanga |slack |slacka )?(?:the |min )?${SCREEN} (?:off|av)$`) },
 	{ on: false, re: new RegExp(`^(?:slack|slack ner|slack ned|darken|dim|kill) (?:the |min )?${SCREEN}$`) },
-	// How whisper hears "display off" said quickly: "Display of." and, with the
-	// first syllable lost, "Playoff." Whole-utterance only, like every other
-	// entry here, so a sentence about the playoffs is still a sentence.
-	{ on: false, re: new RegExp(`^(?:${SCREEN} of|display ?off|playoff)$`) }
+	// How whisper hears the switch said quickly: "Display of." and, with the
+	// first syllable lost, "Playoff." and "Stay on." Whole-utterance only, like
+	// every other entry here, so a sentence about the playoffs is a sentence.
+	{ on: false, re: new RegExp(`^(?:${SCREEN} of|display ?off|playoff)$`) },
+	{ on: true, re: /^(?:displayon|stay on|splay on|play on)$/ }
 ];
 
 /** Same shape as matchMicCommand. Returns { on } or null. */
@@ -364,6 +365,33 @@ export function matchRewindCommand(text) {
 	return null;
 }
 
+/** Waving away a worker that wants something — "ignore", "ignorera", or
+ *  "ignore Bosse". Clears the names on the dark lens and the notice in the
+ *  title bar; nothing is said to the worker. With a name, only when the name
+ *  is a worker that exists: "Mike, ignore the warnings" is an instruction,
+ *  and it is matched before everything, so a guess here would eat it. */
+const DISMISS_VERB = "(?:ignore|ignor|ignorera|ignorer)";
+const DISMISS_BARE = new RegExp(`^${DISMISS_VERB}(?: (?:it|that|them|all|all of them|det|dem|alla|allihop))?$`);
+const DISMISS_NAMED = new RegExp(`^${DISMISS_VERB} (.+)$`);
+
+/** Returns { name } — null for everyone — or null when it is not the command. */
+export function matchDismissCommand(text, workers = []) {
+	const candidates = [text];
+	const bare = stripAddress(text, MIKE_NAME);
+	if (bare !== null) candidates.push(bare);
+
+	for (const c of candidates) {
+		const { folded } = foldWithIndex(c);
+		if (!folded) continue;
+		if (DISMISS_BARE.test(folded)) return { name: null };
+		const m = folded.match(DISMISS_NAMED);
+		const key = m ? normalizeName(m[1]) : null;
+		const hit = key ? workers.find((w) => normalizeName(w) === key) : null;
+		if (hit) return { name: hit };
+	}
+	return null;
+}
+
 /** Same shape as matchModeCommand, and matched at the same point. Returns
  *  { on } or null. */
 export function matchMicCommand(text) {
@@ -416,6 +444,7 @@ export function matchModeCommand(text) {
  *   { kind: "stop", nullProgram }            — kill whatever turn is running;
  *                                               nullProgram when said that way
  *   { kind: "rewind" }                       — take back the newest unread words
+ *   { kind: "dismiss", name }                — clear who is waiting; name or null
  *   { kind: "mike", text, bare? }          — address stripped; bare when
  *                                               there was nothing after it
  *   { kind: "worker", name, text, addressed } — address stripped if there
@@ -425,7 +454,7 @@ export function matchModeCommand(text) {
  * Nothing here mutates anything: the caller owns the session, and a classifier
  * that changed state would be impossible to test one utterance at a time.
  */
-export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGIN.VOICE } = {}) {
+export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGIN.VOICE, workers = [] } = {}) {
 	const raw = String(text ?? "").trim();
 	if (!raw) return { kind: "empty" };
 
@@ -459,6 +488,10 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 	// words already on their way, whatever mode and whoever they went to.
 	const rewind = matchRewindCommand(raw) ?? (toStopped !== null ? matchRewindCommand(toStopped) : null);
 	if (rewind) return { kind: "rewind" };
+
+	// Ignore, likewise: a notice is waved away from wherever the user is.
+	const dismiss = matchDismissCommand(raw, workers);
+	if (dismiss) return { kind: "dismiss", name: dismiss.name };
 
 	// 2. The gate — for speech only. See ORIGIN above for why typing skips it.
 	const gated = origin !== ORIGIN.TYPED;

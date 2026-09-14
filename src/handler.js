@@ -586,7 +586,7 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 	 */
 	const utterance = async (session, text, origin, heard = null) => {
 		const worker = activeWorker(session);
-		let decision = route(text, { mode: session.mode, worker: worker?.name ?? null, origin });
+		let decision = route(text, { mode: session.mode, worker: worker?.name ?? null, origin, workers: registry?.list().map((w) => w.name) ?? [] });
 
 		// "Mike", alone, with no sentence open: a call. He answers at once and
 		// the next thing said is his, whether or not it starts with his name —
@@ -640,6 +640,15 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 
 			case "rewind":
 				return rewind(session);
+
+			case "dismiss":
+				// The client owns the notices, like the lens; the server says
+				// who to forget. Transient: a replayed "ignore" would wave away
+				// somebody who spoke after it.
+				session.transient(msg.event("noticesDismissed", { worker: decision.name }));
+				session.transient(msg.text(decision.name ? `Ignoring ${decision.name}.` : "Ignoring them.", "system", COMMAND));
+				log?.info(`dismissed ${decision.name ?? "all"} session=${session.id.slice(0, 8)}`);
+				return;
 
 			case "mic":
 				// The switch lives in the client — the server has no microphone

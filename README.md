@@ -101,6 +101,12 @@ To build the app yourself, `cd client && npm run pack` produces `mike.ehpk` from
 row by row), the description and the screenshots for the store listing are in
 `client/` too.
 
+`npm run publish` packs it and uploads it to Even Hub as a new private version,
+without the web portal. It uses the account `evenhub login` signed in on this
+machine and the `package_id` in `client/app.json`, so a clone under another
+account needs its own. `-- --dry-run` only lists what is uploaded. The API it
+calls is the portal's own and undocumented; if it breaks, upload by hand.
+
 ### Running by hand
 
 ```bash
@@ -207,6 +213,7 @@ sentence, so *talking about* a command does not trigger it.
 | stop | "stop", "cancel", "abort", "never mind", "stopp", "avbryt", "glöm det" | kills the running turn, drops words being gathered and anything queued behind it |
 | null program | "null program", "nollprogram" | the same, answered in Mike's words: "Null program. Standing by, Man." |
 | rewind | "rewind", "spola tillbaka" | takes back the newest words no model has read yet — a fragment still being gathered, then a turn waiting in the queue; say it again for the one before. A turn already running is not taken back |
+| ignore | "ignore", "ignorera", "ignore Bosse" | clears who is waiting — the names on a dark lens and the notice in the title bar — for everyone, or for the worker named. Nothing is said to the worker |
 
 **"Null program"** deserves its own paragraph, because it is the way out of
 everything. In the book it is what Man tells Mike when the current job is to be

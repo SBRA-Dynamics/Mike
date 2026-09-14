@@ -940,6 +940,33 @@ try {
 		s2.stop();
 	}
 
+	section("ignore viftar bort den som väntar, för alla eller en");
+	{
+		const o = { worker: "Bosse", workers: ["Bosse", "Kalle"] };
+		for (const t of ["Ignore.", "Ignorera.", "Ignor.", "Mike, ignore", "ignorera dem", "Ignore all of them."]) {
+			const r = route(t, o);
+			check(`"${t}" viftar bort alla`, r.kind === "dismiss" && r.name === null, JSON.stringify(r));
+		}
+		check("med namn bara den", JSON.stringify(route("Ignore Kalle.", o)) === JSON.stringify({ kind: "dismiss", name: "Kalle" }));
+		check("namnet som arbetaren heter, hur det än sägs", route("ignorera bosse", o).name === "Bosse");
+		check("även i ignore-läget", route("Ignore Kalle", { ...o, mode: MODES.IGNORE }).kind === "dismiss");
+		check("något som inte är en arbetare är en mening", route("Mike, ignore the warnings", o).kind === "mike");
+		check("utan arbetarlista gissas inget namn", route("Mike, ignore Kalle", { worker: null }).kind === "mike");
+
+		const server = track(await startMike());
+		const c = await connect(server);
+		await say(c, "Mike, start a worker called Kalle");
+		const since = c.mark();
+		c.send({ type: "say", text: "Ignore Kalle." });
+		const ev = await c.waitFor((m) => m.type === "event" && m.kind === "noticesDismissed", 5000, "noticesDismissed", since);
+		check("servern säger vem som ska glömmas", ev.data.worker === "Kalle", JSON.stringify(ev.data));
+		const note = await c.waitFor((m) => m.type === "text" && m.from === "system", 5000, "svar", since);
+		check("och svarar som ett kommando", note.command === true && note.text === "Ignoring Kalle.", JSON.stringify(note));
+		check("ingen tur startade", !c.messages.slice(since).some((m) => m.type === "event" && m.kind === "turn"));
+		c.close();
+		server.stop();
+	}
+
 	section("PRD 6: ett verktygsanrop blir en mening");
 	{
 		// Pure, so it is asserted here rather than through a model. The shapes
