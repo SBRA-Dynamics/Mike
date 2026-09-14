@@ -408,9 +408,16 @@ export class GlassesMicrophone implements MicSource {
 	 * sentence being lost when the app is backgrounded mid-word.
 	 */
 	close(reason: "release" | "close" = "close"): void {
+		const wasSpeaking = this.#segmenter?.speaking ?? false;
 		const last = this.#segmenter?.flush(reason) ?? null;
 		this.#teardown();
 		this.#setState("off", reason);
+		// The detector only reports from a frame, and a closed microphone sends
+		// none — so a release left `speaking` on at the server, which held the
+		// sentence for the whole SPEAKING_CAP_MS waiting for words that were
+		// never coming. Said here, before the last segment, so the hold window
+		// counts from the release.
+		if (wasSpeaking) this.#opts.onLevel?.(-100, false);
 		// After the teardown, so a handler that reopens on the back of a segment
 		// cannot race the close.
 		if (last) this.#emit(last);

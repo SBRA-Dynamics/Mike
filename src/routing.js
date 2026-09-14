@@ -249,6 +249,44 @@ export function matchDisplayCommand(text) {
 	return null;
 }
 
+/** Recording the background noise — "spela in brus", "record noise".
+ *
+ * A measurement, not a conversation: the client captures raw audio for a few
+ * seconds, bypassing the speech detector, and the server keeps it as a WAV for
+ * test/car-noise.mjs. It exists because the detector's trouble is in a car,
+ * and a car is the one place nobody can plug a laptop into the glasses. Matched
+ * before the gate like the other device commands, so it works in every mode.
+ * An optional length, in digits or the few number words dictation writes out. */
+const NOISE_NOUN = "(?:bakgrunds ?)?(?:brus|bruset|ljud|ljudet)|(?:background |ambient |room )?noise|(?:background|ambient|room) (?:sound|audio)";
+const NOISE_COMMANDS = [
+	new RegExp(`^(?:spela in|spel in|record|recorda) (?:lite |some |the )?(?:${NOISE_NOUN})(?: (?:i |for |under )?([a-z0-9]+) (?:sekunder|sekund|sek|seconds|second|secs|s))?$`)
+];
+const NUMBER_WORDS = { fem: 5, five: 5, tio: 10, ten: 10, femton: 15, fifteen: 15, tjugo: 20, twenty: 20, trettio: 30, thirty: 30 };
+export const NOISE_DEFAULT_S = 20;
+export const NOISE_MAX_S = 30;
+
+/** Returns { seconds } or null. The length is clamped to 3..NOISE_MAX_S, which
+ *  keeps a recording inside one audio message. */
+export function matchNoiseCommand(text) {
+	const candidates = [text];
+	const bare = stripAddress(text, MIKE_NAME);
+	if (bare !== null) candidates.push(bare);
+
+	for (const c of candidates) {
+		const { folded } = foldWithIndex(c);
+		if (!folded) continue;
+		for (const re of NOISE_COMMANDS) {
+			const m = re.exec(folded);
+			if (!m) continue;
+			if (m[1] === undefined) return { seconds: NOISE_DEFAULT_S };
+			const n = /^\d+$/.test(m[1]) ? Number(m[1]) : NUMBER_WORDS[m[1]];
+			if (n === undefined) continue;
+			return { seconds: Math.min(NOISE_MAX_S, Math.max(3, n)) };
+		}
+	}
+	return null;
+}
+
 /** Stopping a turn that is already running.
  *
  * The same footing as the mode and microphone commands, and for the sharpest
@@ -347,6 +385,7 @@ export function matchModeCommand(text) {
  *   { kind: "mode", to }                     — a mode command, always first
  *   { kind: "mic", on }                      — the microphone switch, likewise
  *   { kind: "display", on }                  — the lens switch, likewise
+ *   { kind: "noise", seconds }               — record the background noise
  *   { kind: "stop", nullProgram }            — kill whatever turn is running;
  *                                               nullProgram when said that way
  *   { kind: "mike", text, bare? }          — address stripped; bare when
@@ -375,6 +414,11 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 	// user must be able to say their way out of.
 	const display = matchDisplayCommand(raw);
 	if (display) return { kind: "display", on: display.on };
+
+	// Recording the noise, likewise: a measurement taken in whatever mode the
+	// car happens to be in.
+	const noise = matchNoiseCommand(raw);
+	if (noise) return { kind: "noise", seconds: noise.seconds };
 
 	// Stop, likewise before the gate. The worker's own name is accepted as an
 	// address here and nowhere else in this block: "Bosse, stopp" is the most

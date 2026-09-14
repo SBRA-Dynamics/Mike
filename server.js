@@ -217,7 +217,7 @@ const transcriber = config.whisper === "off"
 
 const handler = config.handler === "echo"
 	? createEchoHandler({ log, transcriber, audioMaxBytes: config.audioMaxBytes })
-	: createMikeHandler({ classifier, log, mike, registry, engine, transcriber, audioMaxBytes: config.audioMaxBytes, holdMs: config.holdMs });
+	: createMikeHandler({ classifier, log, mike, registry, engine, transcriber, audioMaxBytes: config.audioMaxBytes, holdMs: config.holdMs, noiseDir: path.join(config.dataDir, "noise") });
 
 // ----------------------------------------------------------------- TLS certs
 // Re-read on mtime change so a certbot renewal lands without a restart

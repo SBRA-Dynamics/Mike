@@ -19,6 +19,7 @@
 import { C2S, CONTROL, msg } from "./protocol.js";
 import { MODES, MODE_LABEL, applyModeCommand, isMode, route, ORIGIN } from "./routing.js";
 import { decodeSegment, DEFAULT_MAX_AUDIO_BYTES } from "./audio.js";
+import { NOISE_MAX_BYTES, saveNoise } from "./noise.js";
 
 /**
  * The audio path, shared by both handlers — PRD 5a R5a.6 and R5a.8.
@@ -211,7 +212,7 @@ export const SPEAKING_CAP_MS = 20_000;
  * `mike`, `registry` and `engine` are the three things a turn can be about;
  * everything else is plumbing this file borrows from the session.
  */
-export function createMikeHandler({ log, mike, registry, engine, classifier, transcriber, audioMaxBytes, holdMs = DEFAULT_HOLD_MS }) {
+export function createMikeHandler({ log, mike, registry, engine, classifier, transcriber, audioMaxBytes, holdMs = DEFAULT_HOLD_MS, noiseDir = null }) {
 
 	// PRD 5a. Null only when the server was started with no transcription at
 	// all; every other case is the whisper client, which reports its own
@@ -605,6 +606,16 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 				log?.info(`display ${decision.on ? "on" : "off"} by voice session=${session.id.slice(0, 8)}`);
 				return;
 
+			case "noise":
+				// The microphone is the client's, so the server asks and the
+				// client records. Transient: a replayed request would start a
+				// recording on a reconnect hours later.
+				if (!noiseDir) return session.transient(msg.text("This server keeps no noise recordings.", "system"));
+				session.transient(msg.event("noiseRequested", { seconds: decision.seconds }));
+				session.transient(msg.text(`Recording noise for ${decision.seconds} s. Stay quiet.`, "system"));
+				log?.info(`noise recording requested ${decision.seconds}s session=${session.id.slice(0, 8)}`);
+				return;
+
 			case "dropped":
 				// The rest of a sentence whose beginning was addressed. In ByName
 				// an unaddressed fragment is dropped, which is right for ambient
@@ -684,6 +695,21 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 					// Spoken, always: the microphone is the one input with an
 					// ambient problem, which is the whole reason the gate exists.
 					return await utterance(session, heard.text, ORIGIN.VOICE, heard);
+				}
+
+				case C2S.NOISE: {
+					if (!noiseDir) return session.emit(msg.error("this server keeps no noise recordings"));
+					const seg = decodeSegment(m, { maxBytes: NOISE_MAX_BYTES });
+					if (!seg.ok) return session.transient(msg.text(`Noise not saved: ${seg.error}.`, "system"));
+					try {
+						const r = saveNoise(noiseDir, seg.pcm, { device: m.device });
+						log?.info(`noise saved ${r.file} ${r.durationMs}ms level ${r.levelDb} floor ${r.floorDb} peak ${r.peakDb} session=${session.id.slice(0, 8)}`);
+						session.transient(msg.text(`Noise saved, ${Math.round(r.durationMs / 1000)} s: level ${r.levelDb}, floor ${r.floorDb}, peak ${r.peakDb} dBFS.`, "system"));
+					} catch (e) {
+						log?.error(`noise not saved: ${e.message}`);
+						session.transient(msg.text(`Noise not saved: ${lens(e)}`, "system"));
+					}
+					return;
 				}
 
 				case C2S.SPEAKING:

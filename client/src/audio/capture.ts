@@ -305,9 +305,13 @@ export class Microphone {
 	 * switches the microphone off mid-word.
 	 */
 	close(reason: "release" | "close" = "close"): void {
+		const wasSpeaking = this.#segmenter?.speaking ?? false;
 		const last = this.#segmenter?.flush(reason) ?? null;
 		this.#teardown();
 		this.#setState("off", reason);
+		// No frames after this, so nothing else will ever say the speech ended.
+		// See GlassesMicrophone.close.
+		if (wasSpeaking) this.#opts.onLevel?.(-100, false);
 		// After teardown, so a handler that reopens the microphone on the back of
 		// a segment cannot race the close.
 		if (last) this.#emit(last);

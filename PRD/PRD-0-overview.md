@@ -47,6 +47,10 @@ These are settled and not revisited by the phase PRDs:
 | **4** | Even Hub SDK client: lens view + companion view | Lens is 50×10; everything must fit |
 | **5a** | Voice from the browser: capture, VAD, segments, server-side STT, addressing modes | Whisper latency, VAD splitting sentences |
 | **5b** | Voice from the glasses: the G2 mic array as a source for 5a's pipeline | Battery, bandwidth, speakerRole accuracy |
+| **6** | Latency: streaming the turn, saying what it is doing | Cold start per turn |
+| **7** | Mail, provider-neutral: accounts, tokens, the provider contract, quarantined reading | Mail text reaching a model that has Bash |
+| **7a** | Gmail provider | Google's 7-day refresh tokens for unverified apps |
+| **7b** | Outlook provider (Microsoft Graph) | `$search` and `$filter` cannot be combined |
 
 Phases 1–3 need no glasses. Phase 4 makes the client real.
 

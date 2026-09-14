@@ -11,6 +11,7 @@ export const C2S = {
 	HELLO: "hello",         // { protocol, token, sessionId?, resumeFrom? }
 	SAY: "say",             // { text, origin? }
 	AUDIO: "audio",         // { pcm, final, sampleRate?, durationMs? }  (PRD 5a)
+	NOISE: "noise",         // { pcm, sampleRate?, device? }  — raw background noise, for the car test
 	SPEAKING: "speaking",   // { on }  — the microphone hears speech / stopped hearing it (PRD 6)
 	INTERRUPT: "interrupt", // {}
 	CONTROL: "control"      // { action, args }
@@ -132,6 +133,18 @@ export function validateC2S(raw) {
 			for (const k of ["floorDb", "peakDb"]) {
 				if (raw[k] !== undefined && !(Number.isFinite(raw[k]) && raw[k] >= -100 && raw[k] <= 0)) return { ok: false, error: `${k} must be a level in dBFS` };
 			}
+			return { ok: true, msg: raw };
+
+		case C2S.NOISE:
+			// Raw microphone audio the user asked to have recorded ("spela in
+			// brus"). The same outer wall as a segment, and the handler applies
+			// its own limit to the decoded bytes.
+			if (!isStr(raw.pcm)) return { ok: false, error: "noise needs base64 pcm" };
+			if (raw.pcm.length > MAX_AUDIO_BASE64) return { ok: false, error: "noise recording too long" };
+			if (raw.sampleRate !== undefined && raw.sampleRate !== AUDIO_SAMPLE_RATE) {
+				return { ok: false, error: `audio must be ${AUDIO_SAMPLE_RATE} Hz` };
+			}
+			if (raw.device !== undefined && !(isStr(raw.device) && /^[a-z]{1,16}$/.test(raw.device))) return { ok: false, error: "device must be a short name" };
 			return { ok: true, msg: raw };
 
 		case C2S.SPEAKING:

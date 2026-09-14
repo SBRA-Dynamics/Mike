@@ -91,8 +91,9 @@ const makeMic = (over = {}) => {
 		pageReady: over.pageReady,
 		segmenter: over.segmenter,
 		now: over.now,
-		onSegment: (s) => segments.push(s),
+		onSegment: (s) => { segments.push(s); over.onSegment?.(s); },
 		onState: (st, detail) => states.push(`${st}:${detail}`),
+		onLevel: over.onLevel,
 		onNote: (t) => notes.push(t)
 	});
 	return { mic, calls, segments, states, notes };
@@ -469,6 +470,32 @@ try {
 		rig.mic.frame(events(three.pcm)[0]);
 		check("mätningen är per håll, inte per sidladdning", rig.mic.stats.leadInMs === 225, String(rig.mic.stats.leadInMs));
 		rig.mic.close("release");
+	}
+
+	section("släppet säger att talet är slut");
+	{
+		// A closed microphone sends no frames, and the detector only reports
+		// from a frame. Without an explicit "not speaking" at the release the
+		// server held "Mike, …" for its whole 20-second cap.
+		const seen = [];
+		const rig = makeMic({
+			onLevel: (_db, speaking) => { if (seen.at(-1) !== speaking) seen.push(speaking); },
+			onSegment: () => seen.push("segment")
+		});
+		await rig.mic.open(true);
+		// Six seconds, well inside the 15-second maximum, so the only segment
+		// is the one the release ends.
+		for (const ev of events(three.pcm.subarray(0, 16_000 * 6))) rig.mic.frame(ev);
+		check("under hållet står detektorn på tal", seen.at(-1) === true, JSON.stringify(seen));
+		rig.mic.close("release");
+		check("släppet slår av talet, före det sista segmentet",
+			JSON.stringify(seen.slice(-2)) === JSON.stringify([false, "segment"]), JSON.stringify(seen));
+
+		const quiet = [];
+		const idle = makeMic({ onLevel: (_db, speaking) => quiet.push(speaking) });
+		await idle.mic.open(true);
+		idle.mic.close("release");
+		check("ett håll utan tal säger ingenting om tal", quiet.length === 0, JSON.stringify(quiet));
 	}
 
 	section("R5b.4: bandbredden är räknad ur det som faktiskt kom in");
