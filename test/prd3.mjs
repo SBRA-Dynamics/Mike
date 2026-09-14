@@ -871,6 +871,73 @@ try {
 		server.stop();
 	}
 
+	section("rewind tar tillbaka det som ingen modell har läst än, det nyaste först");
+	{
+		check("rewind är ett kommando", route("Rewind.", { worker: "Bosse" }).kind === "rewind");
+		check("spola tillbaka också", route("Spola tillbaka.", {}).kind === "rewind");
+		check("med namn, även i ignore", route("Bosse, rewind", { worker: "Bosse", mode: MODES.IGNORE }).kind === "rewind");
+		check("en mening om att spola tillbaka är en mening", route("Mike, rewind the video to the start", {}).kind === "mike");
+		check("ångra går till modellen, det kan betyda att backa koden", route("Mike, ångra det", {}).kind === "mike");
+
+		const texts = (c, since) => c.messages.slice(since).filter((m) => m.type === "text").map((m) => m.text);
+		const rewindSaid = async (c) => {
+			const since = c.mark();
+			c.send({ type: "say", text: "Rewind." });
+			return (await c.waitFor((m) => m.type === "text" && m.from === "system", 5000, "svar på rewind", since)).text;
+		};
+
+		// Queued turns: the first is running, two wait behind it.
+		const server = track(await startMike([], { FAKE_CLAUDE_FAIL: "slow", FAKE_CLAUDE_SLOW_MS: "3000" }));
+		const c = await connect(server);
+		const since = c.mark();
+		c.send({ type: "say", text: "Mike, första", origin: "typed" });
+		await c.waitFor((m) => m.type === "event" && m.kind === "turn" && m.data.phase === "started", 5000, "första turen har börjat", since);
+		c.send({ type: "say", text: "Mike, andra", origin: "typed" });
+		c.send({ type: "say", text: "Mike, tredje", origin: "typed" });
+		await sleep(200);
+
+		check("första rewind tar den senaste köade", /^Rewound: tredje$/.test(await rewindSaid(c)));
+		check("nästa tar den före", /^Rewound: andra$/.test(await rewindSaid(c)));
+		check("det som modellen redan läst tas inte tillbaka", (await rewindSaid(c)) === "Nothing to rewind.");
+
+		await c.waitFor((m) => m.type === "text" && m.from === "mike", 10_000, "första svaret", since);
+		await sleep(3500);
+		const mikeId = (await (await fetch(`${server.base}/healthz`)).json()).mike.sessionId;
+		const prompts = JSON.parse(readFileSync(join(server.fakeDir, `${mikeId}.json`), "utf8")).turns.map((t) => t.prompt);
+		check("bara den första turen nådde modellen", prompts.length === 1 && /första/.test(prompts[0]), JSON.stringify(prompts));
+		check("inga felrutor för det som togs tillbaka", !c.messages.slice(since).some((m) => m.type === "error"));
+		c.close();
+		server.stop();
+
+		// Held words: fragments come off one at a time, newest first.
+		const s2 = track(await startMike(["--hold", "1500"]));
+		const c2 = await connect(s2);
+		const since2 = c2.mark();
+		c2.send({ type: "say", text: "Mike, första delen" });
+		await c2.waitFor((m) => m.type === "event" && m.kind === "turn" && m.data.phase === "held", 5000, "hållen", since2);
+		c2.send({ type: "say", text: "och andra delen" });
+		await c2.waitFor((m) => m.type === "event" && m.kind === "turn" && m.data.parts?.length === 2, 5000, "två delar", since2);
+		const r1 = c2.mark();
+		check("rewind tar det senaste fragmentet ur det som hålls", /^Rewound: och andra delen$/.test(await rewindSaid(c2)));
+		const ev = await c2.waitFor((m) => m.type === "event" && m.kind === "turn", 5000, "turen ritas om", r1);
+		check("och linsen får turen utan det", JSON.stringify(ev.data.parts) === JSON.stringify(["första delen"]), JSON.stringify(ev.data));
+		await c2.waitFor((m) => m.type === "text" && m.from === "mike", 10_000, "svaret", since2);
+		check("modellen fick bara det som var kvar", texts(c2, since2).some((t) => /första delen/.test(t) && !/andra delen/.test(t)), JSON.stringify(texts(c2, since2)));
+
+		const since3 = c2.mark();
+		c2.send({ type: "say", text: "Mike, ångrar mig" });
+		await c2.waitFor((m) => m.type === "event" && m.kind === "turn" && m.data.phase === "held", 5000, "hållen igen", since3);
+		const r3 = c2.mark();
+		await rewindSaid(c2);
+		const dropped = await c2.waitFor((m) => m.type === "event" && m.kind === "turn", 5000, "turen släpps", r3);
+		check("tas sista fragmentet bort släpps hela turen", dropped.data.phase === "dropped", JSON.stringify(dropped.data));
+		await sleep(2000);
+		check("och ingenting skickas", !c2.messages.slice(since3).some((m) => m.type === "text" && m.from === "mike"));
+		check("inga ouppfångade undantag", !s2.log().includes("UNCAUGHT") && !server.log().includes("UNCAUGHT"));
+		c2.close();
+		s2.stop();
+	}
+
 	section("PRD 6: ett verktygsanrop blir en mening");
 	{
 		// Pure, so it is asserted here rather than through a model. The shapes

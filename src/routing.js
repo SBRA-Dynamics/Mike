@@ -341,6 +341,29 @@ export function matchStopCommand(text) {
 	return null;
 }
 
+/** Taking back the last thing said that no model has read yet — "rewind",
+ *  "spola tillbaka". Said again, it takes back the one before, until nothing
+ *  unread is left. Whole utterance only, and deliberately not "undo" or
+ *  "ångra": to a worker in the middle of an edit those mean revert the code,
+ *  and that sentence has to reach it. Dictation writes the word in pieces. */
+const REWIND_COMMANDS = [
+	{ re: /^(?:rewind|re wind|rewind that|rewind it|spola tillbaka|spola tillbaks|spola bakat|spola bak|spola tillbaka det)$/ }
+];
+
+/** Same shape as matchStopCommand. Returns {} or null. */
+export function matchRewindCommand(text) {
+	const candidates = [text];
+	const bare = stripAddress(text, MIKE_NAME);
+	if (bare !== null) candidates.push(bare);
+
+	for (const c of candidates) {
+		const { folded } = foldWithIndex(c);
+		if (!folded) continue;
+		for (const cmd of REWIND_COMMANDS) if (cmd.re.test(folded)) return {};
+	}
+	return null;
+}
+
 /** Same shape as matchModeCommand, and matched at the same point. Returns
  *  { on } or null. */
 export function matchMicCommand(text) {
@@ -392,6 +415,7 @@ export function matchModeCommand(text) {
  *   { kind: "noise", seconds }               — record the background noise
  *   { kind: "stop", nullProgram }            — kill whatever turn is running;
  *                                               nullProgram when said that way
+ *   { kind: "rewind" }                       — take back the newest unread words
  *   { kind: "mike", text, bare? }          — address stripped; bare when
  *                                               there was nothing after it
  *   { kind: "worker", name, text, addressed } — address stripped if there
@@ -430,6 +454,11 @@ export function route(text, { mode = DEFAULT_MODE, worker = null, origin = ORIGI
 	const toStopped = worker ? stripAddress(raw, worker) : null;
 	const stop = matchStopCommand(raw) ?? (toStopped !== null ? matchStopCommand(toStopped) : null);
 	if (stop) return { kind: "stop", nullProgram: stop.nullProgram };
+
+	// Rewind, on the same footing as stop and for the same reason: it is about
+	// words already on their way, whatever mode and whoever they went to.
+	const rewind = matchRewindCommand(raw) ?? (toStopped !== null ? matchRewindCommand(toStopped) : null);
+	if (rewind) return { kind: "rewind" };
 
 	// 2. The gate — for speech only. See ORIGIN above for why typing skips it.
 	const gated = origin !== ORIGIN.TYPED;

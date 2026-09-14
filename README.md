@@ -206,6 +206,7 @@ sentence, so *talking about* a command does not trigger it.
 | display | "display on", "display off", "tänd skärmen", "släck linsen" | the lens; off stays off until you say on — no reply, no speech, no turn lights it |
 | stop | "stop", "cancel", "abort", "never mind", "stopp", "avbryt", "glöm det" | kills the running turn, drops words being gathered and anything queued behind it |
 | null program | "null program", "nollprogram" | the same, answered in Mike's words: "Null program. Standing by, Man." |
+| rewind | "rewind", "spola tillbaka" | takes back the newest words no model has read yet — a fragment still being gathered, then a turn waiting in the queue; say it again for the one before. A turn already running is not taken back |
 
 **"Null program"** deserves its own paragraph, because it is the way out of
 everything. In the book it is what Man tells Mike when the current job is to be

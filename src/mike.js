@@ -244,17 +244,22 @@ export function createMike({
 		/** Exposed so a test can assert the block without paying for a turn. */
 		contextFor,
 
-		/** One turn, queued behind whatever he is already answering. */
-		say(session, text, { onProgress } = {}) {
+		/** One turn, queued behind whatever he is already answering.
+		 *
+		 *  `ticket` is the caller's handle on a turn still in the queue: set
+		 *  `withdrawn` before it runs and it never does ("rewind"), and read
+		 *  `begun` to know whether that is still possible. */
+		say(session, text, { onProgress, ticket } = {}) {
 			const at = epoch;
 			waiting++;
 			const run = () => {
 				waiting--;
-				if (at !== epoch) {
+				if (at !== epoch || ticket?.withdrawn) {
 					const e = new Error("stopped");
 					e.kind = "interrupted";
 					throw e;
 				}
+				if (ticket) ticket.begun = true;
 				return runTurn(session, text, onProgress);
 			};
 			const next = queue.then(run, run);

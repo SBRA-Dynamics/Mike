@@ -17,9 +17,11 @@
 //        spawn_worker, before the tool answers. Must be quick or must not
 //        block: the user is waiting on a lens. `prompt` is optional first work.
 //
-//   async send(worker, text)         -> { text }
+//   async send(worker, text, { onProgress, ticket }) -> { text }
 //        One turn. May be long-running. The caller marks the worker busy
-//        around it.
+//        around it. A `ticket` whose `withdrawn` is set before the turn
+//        reaches the model fails as interrupted instead ("rewind"); the
+//        engine sets `begun` at the point that is no longer possible.
 //
 //   transcript(worker, turns)        -> [{ role, text, at }]
 //        The last `turns` exchanges, newest last. `read_worker` quotes these
@@ -88,7 +90,10 @@ export function createStubWorkerEngine({ log } = {}) {
 			return { engineSessionId: null };
 		},
 
-		async send(worker, text, { onProgress } = {}) {
+		async send(worker, text, { onProgress, ticket } = {}) {
+			// Nothing queues here, so a turn has begun the moment it is sent.
+			if (ticket?.withdrawn) { const e = new Error("stopped"); e.kind = "interrupted"; throw e; }
+			if (ticket) ticket.begun = true;
 			append(worker, "user", text);
 			const reply = `(stub ${worker.model}) ${text}`;
 			append(worker, "assistant", reply);
@@ -339,7 +344,7 @@ export function createClaudeWorkerEngine({
 			return { engineSessionId };
 		},
 
-		async send(worker, text, { onProgress } = {}) {
+		async send(worker, text, { onProgress, ticket } = {}) {
 			// A record written by the stub engine (or by a build before PRD 3)
 			// has no session id. Minting one here rather than refusing means a
 			// data directory survives the engine being switched; the registry
@@ -352,7 +357,7 @@ export function createClaudeWorkerEngine({
 			waiting.set(worker.id, (waiting.get(worker.id) ?? 0) + 1);
 			return enqueue(worker, async () => {
 				waiting.set(worker.id, waiting.get(worker.id) - 1);
-				if (at !== (epochs.get(worker.id) ?? 0)) {
+				if (at !== (epochs.get(worker.id) ?? 0) || ticket?.withdrawn) {
 					// Never delivered, so not in the transcript either: a worker
 					// quoted these words later would be answering an instruction
 					// the user withdrew.
@@ -360,6 +365,7 @@ export function createClaudeWorkerEngine({
 					e.kind = "interrupted";
 					throw e;
 				}
+				if (ticket) ticket.begun = true;
 				append(worker, "user", text);
 				try {
 					const r = await turn(worker, text, onProgress);

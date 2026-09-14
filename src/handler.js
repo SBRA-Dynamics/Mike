@@ -254,6 +254,9 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 
 	let turnSeq = 0;
 	const holds = new Map();   // session.id -> the turn still gathering words
+	/** Turns sent to a model's queue that no model has picked up yet, oldest
+	 *  first. What "rewind" takes back once there is nothing held. */
+	const queued = new Map();  // session.id -> [turn]
 	/** Sessions where "Mike" was just said on its own, and until when the next
 	 *  sentence is his. See utterance(). */
 	const summons = new Map(); // session.id -> expiry (ms)
@@ -278,7 +281,16 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 	 *  behind the question. */
 	const finishTurn = (session, turn, phase = "done") => {
 		if (!turn || turn.phase === "done" || turn.phase === "dropped") return;
+		unqueue(session, turn);
 		announce(session, turn, phase);
+	};
+
+	const unqueue = (session, turn) => {
+		const list = queued.get(session.id);
+		if (!list) return;
+		const i = list.indexOf(turn);
+		if (i >= 0) list.splice(i, 1);
+		if (!list.length) queued.delete(session.id);
 	};
 
 	/** Add an utterance to the turn being assembled, starting one if there is
@@ -340,6 +352,9 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 		// punctuation invented here would be punctuation the model reads as
 		// meaning something.
 		const text = turn.parts.join(" ");
+		turn.ticket = { withdrawn: false, begun: false };
+		if (!queued.has(session.id)) queued.set(session.id, []);
+		queued.get(session.id).push(turn);
 		announce(session, turn, "queued");
 		log?.info(`turn ${turn.id} ${turn.parts.length > 1 ? `merged ${turn.parts.length} parts ` : ""}-> ${turn.to} session=${session.id.slice(0, 8)}`);
 
@@ -399,6 +414,43 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 		return stopped;
 	};
 
+	/** "Rewind": take back the newest words no model has read. Words still
+	 *  being gathered are the newest there are, so they go first, one fragment
+	 *  at a time; then whole turns waiting in a queue, newest first. A turn a
+	 *  process has already picked up is read, and is not taken back — that is
+	 *  what "stop" is for.
+	 *
+	 *  Transient, like stop: what is taken back never happened. */
+	const rewind = (session) => {
+		const clip = (s) => (s.length > 40 ? `${s.slice(0, 39)}…` : s);
+		let taken = null;
+
+		const held = holds.get(session.id);
+		if (held) {
+			taken = held.parts.pop();
+			if (held.parts.length) {
+				announce(session, held, "held");
+				// A fresh window for what is left: the user is plainly not done.
+				arm(session, held);
+			} else {
+				dropHold(session);
+			}
+			log?.info(`rewind: held ${held.id} fragment dropped, ${held.parts.length} left session=${session.id.slice(0, 8)}`);
+		} else {
+			const list = queued.get(session.id) ?? [];
+			const turn = [...list].reverse().find((t) => !t.ticket?.begun);
+			if (turn) {
+				turn.ticket.withdrawn = true;
+				taken = turn.parts.join(" ");
+				finishTurn(session, turn, "dropped");
+				log?.info(`rewind: queued ${turn.id} withdrawn session=${session.id.slice(0, 8)}`);
+			}
+		}
+
+		session.transient(msg.text(taken === null ? "Nothing to rewind." : `Rewound: ${clip(taken)}`, "system"));
+		return taken !== null;
+	};
+
 	/** A worker named on the session but gone from the registry — ended from
 	 *  another device between one utterance and the next. Routing must not send
 	 *  words to it, and the session must stop claiming it. */
@@ -423,7 +475,11 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 		// The process is up and has the whole utterance. This is the moment the
 		// user's words stop being a promise, and the only one worth marking them
 		// with — "queued" is a fact about us, not about their instruction.
-		if (p?.kind === "start") return turn ? announce(session, turn, "started") : undefined;
+		if (p?.kind === "start") {
+			if (!turn) return undefined;
+			unqueue(session, turn);
+			return announce(session, turn, "started");
+		}
 
 		const at = { from, turn: turn?.id ?? null };
 		if (p?.kind === "tool" && p.tool) session.transient(msg.event("progress", { ...at, tool: p.tool, doing: p.doing ?? null }));
@@ -434,7 +490,7 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 	const toMike = async (session, text, turn = null) => {
 		session.emit(state(session, true));
 		try {
-			const r = await mike.say(session, text, { onProgress: progressTo(session, "mike", turn) });
+			const r = await mike.say(session, text, { onProgress: progressTo(session, "mike", turn), ticket: turn?.ticket });
 			// Before the reply, always: the lens carries the turn while it runs,
 			// and an answer arriving underneath it would not be seen.
 			finishTurn(session, turn);
@@ -460,7 +516,7 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 		registry.touch(worker, { busy: true });
 		session.emit(state(session, true));
 		try {
-			const r = await engine.send(worker, text, { onProgress: progressTo(session, worker.name, turn) });
+			const r = await engine.send(worker, text, { onProgress: progressTo(session, worker.name, turn), ticket: turn?.ticket });
 			finishTurn(session, turn);
 
 			// A reply from somebody the user is no longer talking to must not take
@@ -574,6 +630,9 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 
 			case "stop":
 				return stopTurns(session, { nullProgram: decision.nullProgram });
+
+			case "rewind":
+				return rewind(session);
 
 			case "mic":
 				// The switch lives in the client — the server has no microphone
