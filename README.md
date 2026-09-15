@@ -294,6 +294,45 @@ with `--dangerously-skip-permissions`, so on an internet-facing listener the
 bearer token becomes the ability to run code on the machine. It is deliberate
 and it is not the default.
 
+### External MCP servers
+
+**Symptom:** Mike says he has no such tool even though `claude mcp list` shows
+it connected.
+
+That is on purpose. Mike takes every turn with `--strict-mcp-config` and an
+explicit `--allowedTools` list, and a worker does too as soon as the file below
+exists, so Claude Code's own MCP configuration is ignored: a server added with
+`claude mcp add`, in user or project scope, is never seen here. A voice-driven
+agent and the workers it starts must not inherit whatever servers the account
+happens to have.
+
+The only way to give Mike a server is `~/.config/mike/mcp.json` (another path
+with `MIKE_MCP_SERVERS`), in Claude Code's own `mcpServers` format:
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "type": "http",
+      "url": "https://example.invalid/mcp",
+      "headers": { "Authorization": "Bearer REPLACE_WITH_YOUR_TOKEN" }
+    }
+  }
+}
+```
+
+Mode 600: those headers are credentials, and nothing here ever logs their
+values. Every server in the file is merged into the `--mcp-config` each session
+gets and allowed as `mcp__<name>__*` for every role, Mike and the workers alike.
+The name `mike` is his own tool server's and an entry using it is ignored. A
+missing or unreadable file is one line in the log and no extra servers.
+
+The file is read once, at startup, so after editing it:
+
+```bash
+sudo systemctl restart mike-server
+```
+
 ## Testing
 
 ```bash

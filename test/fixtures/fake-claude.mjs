@@ -112,7 +112,10 @@ let mcp = null;
 if (mcpConfig) {
 	try {
 		const parsed = JSON.parse(mcpConfig);
-		const entry = Object.values(parsed.mcpServers ?? {})[0];
+		// Mike's own server by name, not "the first one": the config may also
+		// carry the operator's extra servers (src/mcpServers.js), and talking to
+		// one of those would be this fixture calling somebody's real system.
+		const entry = (parsed.mcpServers ?? {}).mike;
 		if (entry?.url) mcp = { url: entry.url, token: String(entry.headers?.Authorization ?? "").replace(/^Bearer /, "") };
 	} catch { /* a malformed config is the server's bug, and the turn says so below */ }
 }

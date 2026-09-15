@@ -8,6 +8,10 @@
 // live model run cannot assert deterministically. test/mcp-live.mjs is the one
 // run that puts a real `claude -p` in front of it.
 
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { startServer, connect, grantTools, McpClient, check, failed, section, sleep } from "./harness.mjs";
 import { resolveModel, MODEL_LIST, MODELS } from "../src/models.js";
 import { normalizeName, displayName, checkName, BOOK_NAMES, pickName } from "../src/names.js";
@@ -307,6 +311,79 @@ try {
 		const ok = await mcp.call("spawn_worker", { name: "Tyst", systemPrompt: "Du sköter testriggen." });
 		check("med fältet går det igenom", ok.isError === false, JSON.stringify(ok));
 		await mcp.call("end_worker", { name: "Tyst" });
+	}
+
+	// ------------------------------------------------------- extra mcp-servrar
+	//
+	// ~/.config/mike/mcp.json, src/mcpServers.js. --strict-mcp-config means the
+	// config minted here is the whole of what a session can see, so a server the
+	// operator added on purpose has to be merged into it, and allowed by name,
+	// or it does not exist for Mike at all.
+	section("extra mcp-servrar från filen");
+	{
+		const extraDir = mkdtempSync(join(tmpdir(), "mike-mcpfile-"));
+		const extraFile = join(extraDir, "mcp.json");
+		// A value that must never reach a log line, asserted below. Random so a
+		// stale log from an earlier run cannot make the assertion pass.
+		const SECRET = "Bearer test-secret-" + Math.random().toString(16).slice(2, 10);
+		writeFileSync(extraFile, JSON.stringify({
+			mcpServers: { example: { type: "http", url: "https://example.invalid/mcp", headers: { Authorization: SECRET } } }
+		}));
+		const withExtra = await startServer(["--engine", "stub"], { env: { MIKE_MCP_SERVERS: extraFile } });
+		try {
+			const ce = await connect(withExtra);
+			const ge = await grantTools(ce);
+			const servers = ge.parsedConfig.mcpServers;
+			check("den extra servern står i --mcp-config",
+				servers.example?.type === "http" && servers.example?.url === "https://example.invalid/mcp",
+				JSON.stringify(Object.keys(servers)));
+			check("dess headers följer med oförändrade", servers.example?.headers?.Authorization === SECRET);
+			check("mikes egen server är kvar, och först", Object.keys(servers)[0] === "mike" && !!servers.mike.url,
+				JSON.stringify(Object.keys(servers)));
+			check("hela servern tillåts med jokertecken", ge.allowedTools.includes("mcp__example__*"),
+				JSON.stringify(ge.allowedTools));
+			check("mikes egna verktyg står kvar bredvid", ge.allowedTools.includes("mcp__mike__spawn_worker"),
+				JSON.stringify(ge.allowedTools));
+
+			const gw = await grantTools(ce, "worker");
+			check("en arbetargrant får också den extra servern", gw.allowedTools.includes("mcp__example__*"),
+				JSON.stringify(gw.allowedTools));
+			check("men fortfarande inget av mikes egna — R2.4",
+				!gw.allowedTools.some((t) => t.startsWith("mcp__mike__")), JSON.stringify(gw.allowedTools));
+
+			check("loggen nämner servern vid namn", /extra server.*example/.test(withExtra.log()), withExtra.log().slice(-300));
+			check("loggen skriver aldrig ut token-värdet", !withExtra.log().includes(SECRET));
+			ce.close();
+		} finally {
+			withExtra.stop();
+			rmSync(extraDir, { recursive: true, force: true });
+		}
+	}
+
+	section("ingen fil, eller en trasig fil, ändrar ingenting");
+	for (const [label, contents] of [["ingen fil", null], ["trasig fil", "{ nope"]]) {
+		const dir = mkdtempSync(join(tmpdir(), "mike-mcpfile-"));
+		const file = join(dir, "mcp.json");
+		if (contents !== null) writeFileSync(file, contents);
+		const plain = await startServer(["--engine", "stub"], { env: { MIKE_MCP_SERVERS: file } });
+		try {
+			const cn = await connect(plain);
+			const gn = await grantTools(cn);
+			check(`${label}: bara mikes egen server i konfigurationen`,
+				JSON.stringify(Object.keys(gn.parsedConfig.mcpServers)) === '["mike"]',
+				JSON.stringify(gn.parsedConfig.mcpServers));
+			check(`${label}: inga främmande verktyg i allowedTools`,
+				gn.allowedTools.length > 0 && gn.allowedTools.every((t) => t.startsWith("mcp__mike__")),
+				JSON.stringify(gn.allowedTools));
+			check(`${label}: en arbetargrant ser fortfarande inga verktyg`,
+				(await grantTools(cn, "worker")).allowedTools.length === 0);
+			check(`${label}: en rad i loggen, inte en krasch`,
+				/mcp: (no extra servers|.*is not valid JSON)/.test(plain.log()), plain.log().slice(-300));
+			cn.close();
+		} finally {
+			plain.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
 	}
 
 	section("arbetare överlever en omstart — acceptans 4");

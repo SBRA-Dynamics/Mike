@@ -45,7 +45,15 @@ export async function startServer(extraArgs = [], { env: extraEnv = {} } = {}) {
 	// shape the window is not for — leaving it on would add two seconds to every
 	// one of a few hundred turns and assert nothing. The suite that tests the
 	// merging turns it back on.
-	const env = { MIKE_HOLD_MS: "0", ...process.env, ...extraEnv };
+	//
+	// MIKE_MCP_SERVERS is pinned INSIDE the run's own temp directory, after
+	// process.env rather than before it. A machine whose operator has real
+	// extra MCP servers in ~/.config/mike/mcp.json would otherwise hand every
+	// spawned server a different --mcp-config and a longer --allowedTools than
+	// the assertions here are written against, and the suite would pass or fail
+	// depending on whose machine it ran on. A suite that wants extra servers
+	// passes its own path in `env`, which still wins.
+	const env = { MIKE_HOLD_MS: "0", ...process.env, MIKE_MCP_SERVERS: join(dataDir, "no-extra-mcp.json"), ...extraEnv };
 
 	// Port 0: the OS hands out one that is free, and tells us which.
 	//

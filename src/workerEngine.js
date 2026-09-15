@@ -155,6 +155,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createClaudeRunner, ChildTracker } from "./claudeCli.js";
+import { extraMcpServers, mcpWildcard } from "./mcpServers.js";
 
 /** Kept in memory per worker; the file on disk is the authority across a
  *  restart. Bounded for the same reason TRANSCRIPT_DEPTH is. */
@@ -178,9 +179,25 @@ const clip = (s, n = MAX_QUOTED_CHARS) => {
  */
 export function createClaudeWorkerEngine({
 	log, dataDir, bin = "claude", runner, tracker = new ChildTracker(),
-	timeoutMs, env, permissions = "readonly", promptFile
+	timeoutMs, env, permissions = "readonly", promptFile, extraServers
 } = {}) {
 	if (!dataDir) throw new Error("createClaudeWorkerEngine needs a dataDir for transcripts");
+
+	// The operator's own MCP servers (mcpServers.js). A worker gets those and
+	// nothing else: Mike's tool server is his, a worker holds no grant for it
+	// (R2.4), and there is no third source, because a config passed at all is
+	// passed with --strict-mcp-config.
+	//
+	// With no such file there is no config and no --allowedTools, which is
+	// exactly what a worker turn looked like before this existed. That is on
+	// purpose: passing an empty config would quietly switch every worker on
+	// every installation into strict mode, which is a different change from the
+	// one this is.
+	const extra = extraServers ?? extraMcpServers({ log });
+	const extraNames = Object.keys(extra);
+	const extraConfig = extraNames.length ? JSON.stringify({ mcpServers: extra }) : null;
+	const extraTools = extraNames.map(mcpWildcard);
+
 	// The template every worker's system prompt is built from. Re-read when it
 	// changes, so an edit reaches the next turn of every worker at once — the
 	// same contract Mike's own prompt has.
@@ -291,6 +308,7 @@ export function createClaudeWorkerEngine({
 			model: worker.modelId ?? worker.model,
 			permissions,
 			appendSystemPrompt: promptFor(worker),
+			...(extraConfig ? { mcpConfig: extraConfig, allowedTools: extraTools } : {}),
 			...(first ? { sessionId: id } : { resume: id }),
 			onSpawn: (child) => inflight.set(worker.id, child),
 			// PRD 6: partial answers and tool names, while the turn is still

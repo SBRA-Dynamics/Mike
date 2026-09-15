@@ -84,6 +84,11 @@ if (has("help")) {
   --whisper-timeout <ms>  how long one transcription may take (default 20000)
   --audio-max-bytes <n>   biggest accepted audio segment (default 1000000)
   --help
+
+  $MIKE_MCP_SERVERS    extra MCP servers, in Claude Code's own mcpServers
+                       format (default ~/.config/mike/mcp.json). Every session
+                       runs --strict-mcp-config, so this file is the only way
+                       one of them sees a server that is not Mike's own.
 `);
 	process.exit(0);
 }

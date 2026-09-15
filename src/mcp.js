@@ -27,6 +27,7 @@ import { randomBytes } from "node:crypto";
 
 import { msg } from "./protocol.js";
 import { ToolError } from "./workers.js";
+import { extraMcpServers, mcpWildcard } from "./mcpServers.js";
 
 /** MCP version we answer with when the client does not name one. Claude Code
  *  2.1.268 asks for 2025-11-25 and we echo whatever it asks. */
@@ -59,8 +60,25 @@ const logArgs = (args) => {
 const rpcResult = (id, result) => ({ jsonrpc: "2.0", id, result });
 const rpcError = (id, code, message) => ({ jsonrpc: "2.0", id, error: { code, message } });
 
-export function createMcpServer({ store, toolset, registry, log }) {
+export function createMcpServer({ store, toolset, registry, log, extraServers }) {
 	const grants = new Map();   // token -> { sessionId, role, expiresAt, calls }
+
+	// Servers the operator added in ~/.config/mike/mcp.json (mcpServers.js).
+	// They ride along in every grant, because --strict-mcp-config means the
+	// config handed to the CLI is the whole of what that session can see: a
+	// server left out here does not exist for Mike no matter what `claude mcp
+	// add` was told.
+	const extra = { ...(extraServers ?? extraMcpServers({ log })) };
+	// The loader refuses the name already; this is the second lock on the one
+	// clash that would matter, in the file that owns the name.
+	if (Object.hasOwn(extra, MCP_SERVER_NAME)) {
+		delete extra[MCP_SERVER_NAME];
+		log?.warn(`mcp: an extra server is called "${MCP_SERVER_NAME}"; mike's own tool server keeps that name and the other is ignored`);
+	}
+	// A whole server at a time, not tool by tool: nothing here knows what tools
+	// somebody else's server has, and finding out would mean connecting to it
+	// before the turn that needs it.
+	const extraTools = Object.keys(extra).map(mcpWildcard);
 
 	const sweep = () => {
 		const now = Date.now();
@@ -91,18 +109,29 @@ export function createMcpServer({ store, toolset, registry, log }) {
 		grants.set(token, { sessionId, role: role === "worker" ? "worker" : "mike", expiresAt, calls: 0 });
 
 		const url = `http://127.0.0.1:${boundPort}/mcp`;
+		// Mike's own server is written first and the extras after it, which is
+		// belt and braces on the same clash: his entry is the one a reader (and
+		// the test fixture) finds at the head of the object.
 		const config = JSON.stringify({
 			mcpServers: {
-				[MCP_SERVER_NAME]: { type: "http", url, headers: { Authorization: `Bearer ${token}` } }
+				[MCP_SERVER_NAME]: { type: "http", url, headers: { Authorization: `Bearer ${token}` } },
+				...extra
 			}
 		});
-		log?.info(`mcp grant minted role=${role} session=${String(sessionId).slice(0, 8)} port=${boundPort}`);
+		log?.info(`mcp grant minted role=${role} session=${String(sessionId).slice(0, 8)} port=${boundPort}${extraTools.length ? ` extra=${Object.keys(extra).join(",")}` : ""}`);
 		return { token, url, config, expiresAt, role: grants.get(token).role };
 	};
 
-	/** Every tool name a grant of this role may call, for --allowedTools. */
+	/** Every tool name a grant of this role may call, for --allowedTools.
+	 *
+	 *  R2.4 is about MIKE'S tools: a worker must not be able to spawn or end
+	 *  workers. It says nothing about the operator's own servers, and those are
+	 *  added to both roles: a worker that cannot use them is a worker that
+	 *  cannot do the job they were added for. */
 	const allowedToolNames = (role = "mike") =>
-		role === "worker" ? [] : toolset.definitions().map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`);
+		role === "worker"
+			? [...extraTools]
+			: [...toolset.definitions().map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`), ...extraTools];
 
 	// ------------------------------------------------------------------ dispatch
 
@@ -239,6 +268,9 @@ export function createMcpServer({ store, toolset, registry, log }) {
 	return {
 		mintGrant,
 		allowedToolNames,
+		/** The operator's servers, by name. For the log and for the tests; the
+		 *  definitions are not handed out, because they hold credentials. */
+		get extraServerNames() { return Object.keys(extra); },
 		get port() { return boundPort; },
 		get grantCount() { sweep(); return grants.size; },
 
