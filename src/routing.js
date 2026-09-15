@@ -237,7 +237,11 @@ const DISPLAY_COMMANDS = [
 	// first syllable lost, "Playoff." and "Stay on." Whole-utterance only, like
 	// every other entry here, so a sentence about the playoffs is a sentence.
 	{ on: false, re: new RegExp(`^(?:${SCREEN} of|display ?off|playoff)$`) },
-	{ on: true, re: /^(?:displayon|stay on|splay on|play on)$/ }
+	{ on: true, re: /^(?:displayon|stay on|splay on|play on)$/ },
+	// The same word in pieces: "this pay off", "the splay on", "dis play of".
+	// A lone "pay off" is not in it — that one can be a sentence.
+	{ on: false, re: /^(?:(?:this|dis|the|de|di) ?(?:s?play|s?pay|splay)|s?play) ?(?:off|of|av)$/ },
+	{ on: true, re: /^(?:(?:this|dis|the|de|di) ?(?:s?play|s?pay|splay)|s?play) ?(?:on|pa)$/ }
 ];
 
 /** Same shape as matchMicCommand. Returns { on } or null. */
