@@ -327,6 +327,11 @@ gets and allowed as `mcp__<name>__*` for every role, Mike and the workers alike.
 The name `mike` is his own tool server's and an entry using it is ignored. A
 missing or unreadable file is one line in the log and no extra servers.
 
+They are merged only into the config of a `claude` this machine starts itself.
+The `mcpGrant` control reply, which hands a paired client a credential for
+Mike's loopback tools, carries his own server and his own tool names alone, so
+a token for somebody else's system never leaves the machine it was put on.
+
 The file is read once, at startup, so after editing it:
 
 ```bash
