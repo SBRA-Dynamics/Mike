@@ -86,7 +86,7 @@ Instead, when addressed, the last N turns of the active worker are injected
 ahead of the user's words:
 
 ```
-[The user is currently talking to worker "Bosse" (opus, /home/user/projects/MyProject).
+[The user is currently talking to worker "Bosse" (opus, /home/user/projects/myproject).
  Recent exchange:
    user: ...
    Bosse: ...]

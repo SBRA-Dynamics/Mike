@@ -11,7 +11,7 @@
 // `~/.claude.json` unchanged:
 //
 //   { "mcpServers": { "example": { "type": "http", "url": "https://...",
-//                               "headers": { "Authorization": "Bearer ..." } } } }
+//                                  "headers": { "Authorization": "Bearer ..." } } } }
 //
 // Read once, at startup, and never re-read: the tokens in it are handed to
 // child processes on a command line, and a file that changed under a running
@@ -46,8 +46,9 @@ const NAME_OK = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const RESERVED = new Set(["mike"]);
 
 /** What a whole server's tools are called in --allowedTools. Verified against
- *  claude 2.1.271: `mcp__example__*` allows every tool of the `example` server, and
- *  it does not restrict the built-in tools that are not named alongside it. */
+ *  claude 2.1.271: `mcp__example__*` allows every tool of the `example`
+ *  server, and it does not restrict the built-in tools that are not named
+ *  alongside it. */
 export const mcpWildcard = (name) => `mcp__${name}__*`;
 
 /** Log-safe: a name that failed validation is still going into a log line. */

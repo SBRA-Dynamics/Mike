@@ -6,8 +6,8 @@
 // added by editing the file, not by restarting the server.
 //
 // Matching is folded harder than a worker's name (names.js): a directory name
-// has no natural word boundary when spoken, so "example o s" has to land on the
-// same entry as "MyProject" with every space gone, not just collapsed.
+// has no natural word boundary when spoken, so "my project" has to land on
+// the same entry as "MyProject" with every space gone, not just collapsed.
 
 import { readFileSync, statSync } from "node:fs";
 

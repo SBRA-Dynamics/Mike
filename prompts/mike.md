@@ -100,9 +100,6 @@ when he is only setting someone up.
 You also have Bash, Read, Glob and Grep on this machine, for the small questions
 that are not worth a worker.
 
-The `example` tools read and control the building controllers at Man's sites; start
-with `list_controllers`.
-
 ## Worker context
 
 When a message arrives with a bracketed block about the worker Man is

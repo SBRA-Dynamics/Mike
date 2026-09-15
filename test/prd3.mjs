@@ -212,14 +212,14 @@ try {
 
 	// ================================================= context injection
 	section("arbetarkontext (R3.4)");
-	const worker = { name: "Bosse", model: "opus", cwd: "/home/user/projects/MyProject" };
+	const worker = { name: "Bosse", model: "opus", cwd: "/home/user/projects/myproject" };
 	const lines = [
 		{ role: "user", text: "bygg klart testerna" },
 		{ role: "assistant", text: "klart, tre av dem fallerar" }
 	];
 	const block = buildWorkerContext(worker, lines);
 	check("blocket namnger arbetaren, modellen och katalogen",
-		block.startsWith('[The user is currently talking to worker "Bosse" (opus, /home/user/projects/MyProject).'), block);
+		block.startsWith('[The user is currently talking to worker "Bosse" (opus, /home/user/projects/myproject).'), block);
 	check("blocket citerar utbytet med arbetarens namn", /Bosse: klart, tre av dem fallerar\]$/.test(block), block);
 	check("användarens rader heter user", /user: bygg klart testerna/.test(block), block);
 	check("en tyst arbetare sägs vara tyst", /Nothing has been said to it yet/.test(buildWorkerContext(worker, [])));

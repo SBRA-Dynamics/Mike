@@ -314,7 +314,7 @@ with `MIKE_MCP_SERVERS`), in Claude Code's own `mcpServers` format:
   "mcpServers": {
     "example": {
       "type": "http",
-      "url": "https://example.invalid/mcp",
+      "url": "https://example.com/mcp",
       "headers": { "Authorization": "Bearer REPLACE_WITH_YOUR_TOKEN" }
     }
   }

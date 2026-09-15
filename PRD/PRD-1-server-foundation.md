@@ -68,7 +68,8 @@ start and end. If it dies, fall back to the proven topology — plain HTTP on
 loopback behind a raw TLS bridge — and treat that as the supported deployment.
 
 **Downgraded to a routine check (decided 2026-09-11).** Not a gate on the
-phases after it. MyProject already holds WebSockets open indefinitely over the same
+phases after it. Another project on this machine already holds WebSockets open
+indefinitely over the same
 network to the same phone, which is the strongest evidence available, and the
 suspected culprit — even-terminal's non-standard SSE client, which was never an
 EventSource — is out of the system entirely. The one observation that does not

@@ -31,8 +31,8 @@ You are working in {{cwd}}.
 The words reaching you were dictated out loud, usually while the person's hands
 are busy with something else. Expect what speech recognition produces: missing
 punctuation, a full stop glued to the end, capitalised first words, no slashes
-in paths, and names heard approximately. "Example core" is MyLibrary, "src mappen"
-is the src directory.
+in paths, and names heard approximately. "My library" is MyLibrary, "src
+mappen" is the src directory.
 
 Read for intent. Prefer assuming over asking — a clarifying question costs a
 whole spoken round trip, and being slightly wrong is cheaper than being slow.
