@@ -204,7 +204,10 @@ export function createMike({
 			model,
 			...(first ? { sessionId: identity.sessionId } : { resume: identity.sessionId }),
 			appendSystemPrompt: prompt.read() || undefined,
-			mcpConfig: grant.config,
+			// sessionConfig, not config: this process is spawned here, on this
+			// machine, so it is the one that may hold the operator's extra
+			// servers and their credentials (mcp.js, mintGrant).
+			mcpConfig: grant.sessionConfig,
 			allowedTools: [
 				...MIKE_BUILTIN_TOOLS,
 				...mcp.allowedToolNames("mike")

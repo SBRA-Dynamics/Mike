@@ -8,11 +8,11 @@
 // live model run cannot assert deterministically. test/mcp-live.mjs is the one
 // run that puts a real `claude -p` in front of it.
 
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { startServer, connect, grantTools, McpClient, check, failed, section, sleep } from "./harness.mjs";
+import { startServer, connect, grantTools, McpClient, check, failed, section, sleep, ROOT } from "./harness.mjs";
 import { resolveModel, MODEL_LIST, MODELS } from "../src/models.js";
 import { normalizeName, displayName, checkName, BOOK_NAMES, pickName } from "../src/names.js";
 
@@ -316,40 +316,77 @@ try {
 	// ------------------------------------------------------- extra mcp-servrar
 	//
 	// ~/.config/mike/mcp.json, src/mcpServers.js. --strict-mcp-config means the
-	// config minted here is the whole of what a session can see, so a server the
-	// operator added on purpose has to be merged into it, and allowed by name,
-	// or it does not exist for Mike at all.
+	// config a session is started with is the whole of what it can see, so a
+	// server the operator added on purpose has to be merged into it, and
+	// allowed by name, or it does not exist for Mike at all.
+	//
+	// And it is merged into THAT config only. The `mcpGrant` control reply is a
+	// credential for Mike's own loopback tools, sent to a phone; the extras'
+	// headers are bearer tokens for somebody else's system and must not ride
+	// along on it (mcp.js: config vs sessionConfig).
+	const FAKE = join(ROOT, "test", "fixtures", "fake-claude.mjs");
+
+	/** The argv of the `claude` the server spawned for Mike: the one call that
+	 *  was given --mcp-config. Read off the stand-in binary's own state files
+	 *  rather than intercepted, which is how prd3 reads it too. */
+	const mikeArgs = (fakeDir) => readdirSync(fakeDir)
+		.filter((f) => f.endsWith(".json"))
+		.map((f) => JSON.parse(readFileSync(join(fakeDir, f), "utf8")))
+		.find((j) => Array.isArray(j.lastArgs) && j.lastArgs.includes("--mcp-config"))?.lastArgs ?? [];
+
+	const configIn = (args) => {
+		const i = args.indexOf("--mcp-config");
+		try { return JSON.parse(args[i + 1]); } catch { return null; }
+	};
+
 	section("extra mcp-servrar från filen");
 	{
 		const extraDir = mkdtempSync(join(tmpdir(), "mike-mcpfile-"));
+		const fakeDir = mkdtempSync(join(tmpdir(), "mike-fake-"));
 		const extraFile = join(extraDir, "mcp.json");
-		// A value that must never reach a log line, asserted below. Random so a
-		// stale log from an earlier run cannot make the assertion pass.
+		// A value that must never reach a log line or a client, asserted below.
+		// Random so a stale log from an earlier run cannot make it pass.
 		const SECRET = "Bearer test-secret-" + Math.random().toString(16).slice(2, 10);
 		writeFileSync(extraFile, JSON.stringify({
-			mcpServers: { example: { type: "http", url: "https://example.invalid/mcp", headers: { Authorization: SECRET } } }
+			mcpServers: { example: { type: "http", url: "https://example.com/mcp", headers: { Authorization: SECRET } } }
 		}));
-		const withExtra = await startServer(["--engine", "stub"], { env: { MIKE_MCP_SERVERS: extraFile } });
+		const withExtra = await startServer(
+			["--engine", "stub", "--claude-bin", FAKE, "--mike-cwd", "/tmp"],
+			{ env: { MIKE_MCP_SERVERS: extraFile, FAKE_CLAUDE_DIR: fakeDir } });
 		try {
 			const ce = await connect(withExtra);
-			const ge = await grantTools(ce);
-			const servers = ge.parsedConfig.mcpServers;
-			check("den extra servern står i --mcp-config",
-				servers.example?.type === "http" && servers.example?.url === "https://example.invalid/mcp",
-				JSON.stringify(Object.keys(servers)));
-			check("dess headers följer med oförändrade", servers.example?.headers?.Authorization === SECRET);
-			check("mikes egen server är kvar, och först", Object.keys(servers)[0] === "mike" && !!servers.mike.url,
-				JSON.stringify(Object.keys(servers)));
-			check("hela servern tillåts med jokertecken", ge.allowedTools.includes("mcp__example__*"),
-				JSON.stringify(ge.allowedTools));
-			check("mikes egna verktyg står kvar bredvid", ge.allowedTools.includes("mcp__mike__spawn_worker"),
-				JSON.stringify(ge.allowedTools));
 
+			// ------------------------------------------ what leaves the process
+			const ge = await grantTools(ce);
+			check("mcpGrant bär bara mikes egen server",
+				JSON.stringify(Object.keys(ge.parsedConfig.mcpServers)) === '["mike"]',
+				JSON.stringify(Object.keys(ge.parsedConfig.mcpServers)));
+			check("varken den extra serverns namn eller dess token går ut på tråden",
+				!JSON.stringify(ce.messages).includes("example") && !JSON.stringify(ce.messages).includes(SECRET));
+			check("och bara mikes egna verktyg räknas upp",
+				ge.allowedTools.includes("mcp__mike__spawn_worker") && ge.allowedTools.every((t) => t.startsWith("mcp__mike__")),
+				JSON.stringify(ge.allowedTools));
 			const gw = await grantTools(ce, "worker");
-			check("en arbetargrant får också den extra servern", gw.allowedTools.includes("mcp__example__*"),
-				JSON.stringify(gw.allowedTools));
-			check("men fortfarande inget av mikes egna — R2.4",
-				!gw.allowedTools.some((t) => t.startsWith("mcp__mike__")), JSON.stringify(gw.allowedTools));
+			check("en arbetargrant på tråden ser fortfarande inga verktyg — R2.4",
+				gw.allowedTools.length === 0, JSON.stringify(gw.allowedTools));
+			check("inte heller en främmande server i dess config",
+				JSON.stringify(Object.keys(gw.parsedConfig.mcpServers)) === '["mike"]',
+				JSON.stringify(Object.keys(gw.parsedConfig.mcpServers)));
+
+			// ------------------------------------- what the server spawns itself
+			await ce.sayAndSettle("Mike, hej.", 20_000);
+			const args = mikeArgs(fakeDir);
+			const cfg = configIn(args);
+			check("den spawnade processen fick den extra servern",
+				cfg?.mcpServers?.example?.type === "http" && cfg.mcpServers.example.url === "https://example.com/mcp",
+				JSON.stringify(Object.keys(cfg?.mcpServers ?? {})));
+			check("med sin header oförändrad", cfg?.mcpServers?.example?.headers?.Authorization === SECRET);
+			check("mikes egen server står kvar, och först",
+				Object.keys(cfg?.mcpServers ?? {})[0] === "mike" && !!cfg.mcpServers.mike.url,
+				JSON.stringify(Object.keys(cfg?.mcpServers ?? {})));
+			check("hela servern tillåts med jokertecken", args.includes("mcp__example__*"), JSON.stringify(args.filter((a) => a.startsWith("mcp__"))));
+			check("mikes egna verktyg står kvar bredvid", args.includes("mcp__mike__spawn_worker"));
+			check("och konfigurationen är fortfarande strikt", args.includes("--strict-mcp-config"));
 
 			check("loggen nämner servern vid namn", /extra server.*example/.test(withExtra.log()), withExtra.log().slice(-300));
 			check("loggen skriver aldrig ut token-värdet", !withExtra.log().includes(SECRET));
@@ -357,32 +394,43 @@ try {
 		} finally {
 			withExtra.stop();
 			rmSync(extraDir, { recursive: true, force: true });
+			rmSync(fakeDir, { recursive: true, force: true });
 		}
 	}
 
 	section("ingen fil, eller en trasig fil, ändrar ingenting");
 	for (const [label, contents] of [["ingen fil", null], ["trasig fil", "{ nope"]]) {
 		const dir = mkdtempSync(join(tmpdir(), "mike-mcpfile-"));
+		const fakeDir = mkdtempSync(join(tmpdir(), "mike-fake-"));
 		const file = join(dir, "mcp.json");
 		if (contents !== null) writeFileSync(file, contents);
-		const plain = await startServer(["--engine", "stub"], { env: { MIKE_MCP_SERVERS: file } });
+		const plain = await startServer(
+			["--engine", "stub", "--claude-bin", FAKE, "--mike-cwd", "/tmp"],
+			{ env: { MIKE_MCP_SERVERS: file, FAKE_CLAUDE_DIR: fakeDir } });
 		try {
 			const cn = await connect(plain);
 			const gn = await grantTools(cn);
-			check(`${label}: bara mikes egen server i konfigurationen`,
+			check(`${label}: bara mikes egen server i grant-konfigurationen`,
 				JSON.stringify(Object.keys(gn.parsedConfig.mcpServers)) === '["mike"]',
 				JSON.stringify(gn.parsedConfig.mcpServers));
-			check(`${label}: inga främmande verktyg i allowedTools`,
-				gn.allowedTools.length > 0 && gn.allowedTools.every((t) => t.startsWith("mcp__mike__")),
-				JSON.stringify(gn.allowedTools));
 			check(`${label}: en arbetargrant ser fortfarande inga verktyg`,
 				(await grantTools(cn, "worker")).allowedTools.length === 0);
+
+			await cn.sayAndSettle("Mike, hej.", 20_000);
+			const args = mikeArgs(fakeDir);
+			check(`${label}: den spawnade processen får bara mikes egen server`,
+				JSON.stringify(Object.keys(configIn(args)?.mcpServers ?? {})) === '["mike"]',
+				JSON.stringify(configIn(args)?.mcpServers ?? {}));
+			check(`${label}: inga främmande verktyg i --allowedTools`,
+				args.some((a) => a.startsWith("mcp__mike__")) && !args.some((a) => /^mcp__(?!mike__)/.test(a)),
+				JSON.stringify(args.filter((a) => a.startsWith("mcp__"))));
 			check(`${label}: en rad i loggen, inte en krasch`,
 				/mcp: (no extra servers|.*is not valid JSON)/.test(plain.log()), plain.log().slice(-300));
 			cn.close();
 		} finally {
 			plain.stop();
 			rmSync(dir, { recursive: true, force: true });
+			rmSync(fakeDir, { recursive: true, force: true });
 		}
 	}
 

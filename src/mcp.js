@@ -93,8 +93,23 @@ export function createMcpServer({ store, toolset, registry, log, extraServers })
 	/**
 	 * Mint a grant for one Claude Code invocation.
 	 * `role` is "mike" (sees the tools) or "worker" (sees none).
-	 * Returns { token, url, config, expiresAt } where `config` is the exact
-	 * string to hand to `claude --mcp-config`.
+	 *
+	 * Two configs come back, and which one a caller takes is a security
+	 * decision rather than a convenience:
+	 *
+	 *   sessionConfig  Mike's server AND the operator's extra servers. For a
+	 *                  `claude` process this server spawns itself, on this
+	 *                  machine. The extras' headers are third-party bearer
+	 *                  tokens, and this is the only shape they travel in.
+	 *   config         Mike's server alone. For anything that leaves the
+	 *                  process, which today is the `mcpGrant` control reply
+	 *                  (connection.js): a paired phone asks for a credential to
+	 *                  reach MIKE'S loopback tools, and nothing about that
+	 *                  errand needs somebody else's API token on a device that
+	 *                  can be lost.
+	 *
+	 * Both name the same one-session grant token, so the split costs nothing:
+	 * the wire copy is not a weaker grant, only a shorter config.
 	 */
 	const mintGrant = ({ sessionId, role = "mike", ttlMs = GRANT_TTL_MS }) => {
 		sweep();
@@ -109,29 +124,30 @@ export function createMcpServer({ store, toolset, registry, log, extraServers })
 		grants.set(token, { sessionId, role: role === "worker" ? "worker" : "mike", expiresAt, calls: 0 });
 
 		const url = `http://127.0.0.1:${boundPort}/mcp`;
+		const own = { [MCP_SERVER_NAME]: { type: "http", url, headers: { Authorization: `Bearer ${token}` } } };
 		// Mike's own server is written first and the extras after it, which is
 		// belt and braces on the same clash: his entry is the one a reader (and
 		// the test fixture) finds at the head of the object.
-		const config = JSON.stringify({
-			mcpServers: {
-				[MCP_SERVER_NAME]: { type: "http", url, headers: { Authorization: `Bearer ${token}` } },
-				...extra
-			}
-		});
+		const config = JSON.stringify({ mcpServers: own });
+		const sessionConfig = extraTools.length ? JSON.stringify({ mcpServers: { ...own, ...extra } }) : config;
 		log?.info(`mcp grant minted role=${role} session=${String(sessionId).slice(0, 8)} port=${boundPort}${extraTools.length ? ` extra=${Object.keys(extra).join(",")}` : ""}`);
-		return { token, url, config, expiresAt, role: grants.get(token).role };
+		return { token, url, config, sessionConfig, expiresAt, role: grants.get(token).role };
 	};
 
-	/** Every tool name a grant of this role may call, for --allowedTools.
+	/** Mike's own tools, for this role. R2.4: a worker must not be able to
+	 *  spawn or end workers, so it holds none of them. This is also the list
+	 *  that goes over the wire, because it is the list that matches the config
+	 *  that goes over the wire. */
+	const ownToolNames = (role = "mike") =>
+		role === "worker" ? [] : toolset.definitions().map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`);
+
+	/** Every tool name a session started with `sessionConfig` may call, for
+	 *  --allowedTools.
 	 *
-	 *  R2.4 is about MIKE'S tools: a worker must not be able to spawn or end
-	 *  workers. It says nothing about the operator's own servers, and those are
-	 *  added to both roles: a worker that cannot use them is a worker that
-	 *  cannot do the job they were added for. */
-	const allowedToolNames = (role = "mike") =>
-		role === "worker"
-			? [...extraTools]
-			: [...toolset.definitions().map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`), ...extraTools];
+	 *  R2.4 is about MIKE'S tools. It says nothing about the operator's own
+	 *  servers, and those are added to both roles: a worker that cannot use
+	 *  them is a worker that cannot do the job they were added for. */
+	const allowedToolNames = (role = "mike") => [...ownToolNames(role), ...extraTools];
 
 	// ------------------------------------------------------------------ dispatch
 
@@ -268,6 +284,7 @@ export function createMcpServer({ store, toolset, registry, log, extraServers })
 	return {
 		mintGrant,
 		allowedToolNames,
+		ownToolNames,
 		/** The operator's servers, by name. For the log and for the tests; the
 		 *  definitions are not handed out, because they hold credentials. */
 		get extraServerNames() { return Object.keys(extra); },

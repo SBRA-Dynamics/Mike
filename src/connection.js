@@ -150,12 +150,19 @@ export function attachConnection({ ws, req, store, config, handler, log, registr
 				// The "worker" role exists so the server can mint a grant that sees
 				// no tools at all (R2.4) — in PRD 3 the server mints these itself
 				// and a worker is never handed one.
+				//
+				// `grant.config` and `ownToolNames`, never `sessionConfig` and
+				// never `allowedToolNames`: those two carry the servers from
+				// ~/.config/mike/mcp.json, whose headers are bearer tokens for
+				// somebody else's system. The errand here is reaching MIKE's
+				// loopback tools, and a phone that can be lost has no business
+				// holding an API token for a building's controllers to do it.
 				if (!mcp) { send(msg.error("tools are not available")); return true; }
 				const role = m.args?.role === "worker" ? "worker" : "mike";
 				const grant = mcp.mintGrant({ sessionId: session.id, role });
 				send(msg.event("mcpGrant", {
 					role: grant.role, url: grant.url, config: grant.config,
-					expiresAt: grant.expiresAt, allowedTools: mcp.allowedToolNames(grant.role)
+					expiresAt: grant.expiresAt, allowedTools: mcp.ownToolNames(grant.role)
 				}));
 				log.info(`mcp grant for session=${session.id.slice(0, 8)} role=${grant.role}`);
 				return true;
