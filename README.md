@@ -170,7 +170,7 @@ sentences go to it by default.
 | you say | what happens |
 |---|---|
 | "Mike, start a worker on the BLE firmware" | a worker is spawned in the default directory and you switch to it; it gets a name from the book if you gave none |
-| "Mike, start a worker called Ada, on opus, in the web app" | name, model and directory can all be said; directories by the spoken names in `dirs.json` |
+| "Mike, start a worker called Ada, on opus, in the web app" | name, model and directory can all be said; directories by the spoken names in `dirs.json` (the checked-in one is an example; a deployment points `--dirs` at its own, next to the rest of its configuration in `~/.config/mike/`) |
 | "Mike, switch to Prof" / "Mike, byt till Prof" | back to a worker you left, transcript continued |
 | "Mike, leave" / "Mike, I want to talk to you" | back with Mike; the worker keeps running |
 | "Mike, end Wyoh" | the worker is stopped; its name is free again |

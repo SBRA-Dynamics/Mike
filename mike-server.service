@@ -27,6 +27,9 @@ EnvironmentFile=/etc/mike.env
 # to start workers somewhere worth working. `--engine stub` keeps the whole
 # thing alive without spending money, which is the safe way to run it while
 # something else is being debugged.
+# The spoken-name table for directories is a deployment's own list of projects,
+# not the repository's, so it lives beside the other per-machine configuration
+# in ~/.config/mike/ and the checked-in dirs.json is only an example.
 # Public deployment: the router forwards external 3456 to internal 3455, and the
 # certificate is the one certbot keeps for mike.example.com (readable by robin
 # through an ACL, so this does not run as root). The phone therefore reaches
@@ -42,6 +45,7 @@ ExecStart=/home/robin/.nvm/versions/node/v24.16.0/bin/node /home/robin/mike/serv
   --cert /etc/letsencrypt/live/mike.example.com/fullchain.pem \
   --key /etc/letsencrypt/live/mike.example.com/privkey.pem \
   --worker-cwd /home/user/projects --mike-cwd /home/user/projects \
+  --dirs /home/robin/.config/mike/dirs.json \
   --worker-perms full
 Restart=always
 # The server reaps its own `claude` children on SIGTERM; this is the backstop
