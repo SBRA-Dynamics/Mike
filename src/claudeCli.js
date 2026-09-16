@@ -29,6 +29,9 @@
 
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { statSync } from "node:fs";
+
+const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
 
 /** A turn that never comes back must not wedge the caller forever. Ten minutes
  *  is longer than any answer someone is waiting on and shorter than a lost
@@ -285,6 +288,11 @@ export function createClaudeRunner({
 		// A progress callback must never be able to fail the turn it is
 		// reporting on, and there are now four places that call one.
 		const progress = (p) => { try { onProgress?.(p); } catch (e) { log?.warn(`claude progress: ${e.message}`); } };
+
+		// A folder that is not there fails the spawn with `spawn <bin> ENOENT`,
+		// which names the binary and reads as "claude is not installed". Said
+		// as what it is, before Node gets the chance to say it wrong.
+		if (cwd && !isDir(cwd)) return resolve({ ok: false, kind: "spawn", error: `the folder ${cwd} does not exist` });
 
 		let child;
 		try {

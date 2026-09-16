@@ -161,7 +161,7 @@ export function createStubWorkerEngine({ log } = {}) {
 // server never becomes the second driver of its own worker.
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, appendFileSync, readFileSync, existsSync, unlinkSync, renameSync } from "node:fs";
+import { mkdirSync, appendFileSync, readFileSync, existsSync, unlinkSync, renameSync, statSync } from "node:fs";
 import { PromptFile, fillTemplate } from "./promptFile.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -178,6 +178,8 @@ const MEMORY_DEPTH = TRANSCRIPT_DEPTH;
  *  asked what it is doing. */
 const MAX_QUOTED_CHARS = 4000;
 
+const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
+
 const clip = (s, n = MAX_QUOTED_CHARS) => {
 	const t = String(s ?? "");
 	return t.length <= n ? t : t.slice(0, n) + ` …[${t.length - n} more characters]`;
@@ -192,7 +194,7 @@ const clip = (s, n = MAX_QUOTED_CHARS) => {
 export function createClaudeWorkerEngine({
 	log, dataDir, bin = "claude", runner, tracker = new ChildTracker(),
 	timeoutMs = DEFAULT_WORKER_TIMEOUT_MS, env, permissions = "readonly", promptFile, extraServers,
-	holder
+	holder, sessionCwd
 } = {}) {
 	if (!dataDir) throw new Error("createClaudeWorkerEngine needs a dataDir for transcripts");
 
@@ -310,10 +312,31 @@ export function createClaudeWorkerEngine({
 	const sessionExists = (worker) => worker.sessionCreated === true
 		|| thread(worker).some((e) => e.role === "meta" && e.text === "session-created");
 
+	/** Move the worker to the folder its session is in now.
+	 *
+	 *  A session can change folder in the middle of a turn — `ExitWorktree`
+	 *  takes it back to the repository, and the same turn may then remove the
+	 *  worktree it left. A worker that kept the folder it was created with
+	 *  starts its next turn in a directory that is gone. So the session's own
+	 *  transcript says where it is, before and after every turn. `claude --resume` finds a session by id from any
+	 *  folder (measured, 2.1.273), so following it never loses the session. */
+	const follow = (worker) => {
+		if (!sessionCwd || !worker.engineSessionId || !sessionExists(worker)) return;
+		let now;
+		try { now = sessionCwd(worker.engineSessionId); } catch { return; }
+		if (!now || now === worker.cwd || !isDir(now)) return;
+		log?.info(`worker ${worker.name} follows its session from ${worker.cwd} to ${now}`);
+		worker.cwd = now;
+	};
+
 	const turn = async (worker, text, onProgress) => {
 		const first = !sessionExists(worker);
 		const id = worker.engineSessionId;
 		if (!id) throw new Error(`worker ${worker.name} has no session id`);
+		// Before as well as after: the session may have moved outside a turn of
+		// ours, and a folder that has since come back under the same path — a
+		// worktree recreated from another branch — is not where it is.
+		follow(worker);
 
 		const opts = {
 			prompt: text,
@@ -355,6 +378,9 @@ export function createClaudeWorkerEngine({
 			worker.sessionCreated = true;
 			append(worker, "meta", "session-created");
 		}
+		// Whatever the turn did to its folder, the next one starts where the
+		// session now is — a failed or stopped turn can have moved it too.
+		follow(worker);
 
 		if (!r.ok) {
 			log?.warn(`worker ${worker.name} turn failed (${r.kind}): ${r.error}`);

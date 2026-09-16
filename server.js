@@ -204,7 +204,7 @@ const terminals = createTerminals({
 });
 const engine = config.engine === "stub"
 	? createStubWorkerEngine({ log })
-	: createClaudeWorkerEngine({ permissions: config.workerPerms, promptFile: config.workerPrompt, log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.workerTimeoutMs, holder: terminals.enabled ? (id) => terminals.holder(id) : undefined });
+	: createClaudeWorkerEngine({ permissions: config.workerPerms, promptFile: config.workerPrompt, log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.workerTimeoutMs, holder: terminals.enabled ? (id) => terminals.holder(id) : undefined, sessionCwd: (id) => terminals.lastCwd(id) });
 // How often a terminal session waited on is asked whether it is done. An
 // environment knob only, for the suite that cannot wait five seconds a poll.
 const toolset = createToolset({ registry, engine, log, dirs, terminals, pollMs: Number(process.env.MIKE_TERMINAL_POLL_MS) || undefined });

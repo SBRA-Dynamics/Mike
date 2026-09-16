@@ -74,19 +74,24 @@ export const modelLabelOf = (id) => {
 
 /**
  * Read the end of a Claude Code transcript: the last exchanges said in words,
- * oldest first, and the model the session last answered with.
+ * oldest first, the model the session last answered with, and the folder it
+ * was last in.
+ *
+ * The folder is a property of the session, not of where it was started: a
+ * session that leaves a worktree (`ExitWorktree`) writes its later lines with
+ * the folder it went back to, and may then delete the one it left.
  *
  * Only the tail is read, so the first line may be torn and is dropped. The file
  * is a tree once anything forked it; reading it in order is the right answer
  * for the one thing this is for, which is putting "where it left off" on a lens.
  */
-export function readTranscriptTail(file, { limit = 20 } = {}) {
-	const out = { entries: [], model: null };
+export function readTranscriptTail(file, { limit = 20, bytes = TAIL_BYTES } = {}) {
+	const out = { entries: [], model: null, cwd: null };
 	let fd;
 	try {
 		fd = openSync(file, "r");
 		const size = fstatSync(fd).size;
-		const start = Math.max(0, size - TAIL_BYTES);
+		const start = Math.max(0, size - bytes);
 		const buf = Buffer.alloc(size - start);
 		readSync(fd, buf, 0, buf.length, start);
 		const lines = buf.toString("utf8").split("\n");
@@ -96,7 +101,9 @@ export function readTranscriptTail(file, { limit = 20 } = {}) {
 			if (!line.trim()) continue;
 			let v;
 			try { v = JSON.parse(line); } catch { continue; }
-			if (v?.isMeta || v?.isSidechain) continue;
+			if (v?.isSidechain) continue;
+			if (typeof v?.cwd === "string" && v.cwd.startsWith("/")) out.cwd = v.cwd;
+			if (v?.isMeta) continue;
 			const role = v?.type === "user" ? "user" : v?.type === "assistant" ? "assistant" : null;
 			if (!role) continue;
 			if (role === "assistant" && v.message?.model && v.message.model !== "<synthetic>") out.model = v.message.model;
@@ -114,7 +121,7 @@ export function readTranscriptTail(file, { limit = 20 } = {}) {
 	} finally {
 		if (fd !== undefined) try { closeSync(fd); } catch { }
 	}
-	out.entries = out.entries.slice(-limit);
+	out.entries = limit > 0 ? out.entries.slice(-limit) : [];
 	return out;
 }
 
@@ -128,6 +135,7 @@ export function readTranscriptTail(file, { limit = 20 } = {}) {
  */
 export function createTerminals({ bin = "claude", log, enabled = true, projectsDir = join(homedir(), ".claude", "projects"), own = () => [] } = {}) {
 	let warned = false;
+	const files = new Map();   // sessionId -> transcript path, once found
 
 	/** Every session Claude Code knows, or [] when it cannot be asked. */
 	const list = async () => {
@@ -211,13 +219,25 @@ export function createTerminals({ bin = "claude", log, enabled = true, projectsD
 		 *  guess where looking is not. */
 		transcriptFile(sessionId) {
 			if (!/^[0-9a-f-]{36}$/i.test(String(sessionId))) return null;
+			// A transcript never moves: it stays under the folder the session
+			// was created in, wherever the session goes afterwards.
+			const known = files.get(sessionId);
+			if (known && existsSync(known)) return known;
 			try {
 				for (const d of readdirSync(projectsDir)) {
 					const f = join(projectsDir, d, `${sessionId}.jsonl`);
-					if (existsSync(f)) return f;
+					if (existsSync(f)) { files.set(sessionId, f); return f; }
 				}
 			} catch { }
 			return null;
+		},
+
+		/** The folder a session was last in, by its own transcript. Read after
+		 *  every worker turn, so only the end of the file. Not gated on
+		 *  `enabled`: a worker Mike spawned moves the same way. */
+		lastCwd(sessionId) {
+			const f = this.transcriptFile(sessionId);
+			return f ? readTranscriptTail(f, { limit: 0, bytes: 256 * 1024 }).cwd : null;
 		},
 
 		/** Where a session left off, and the model it ran. */

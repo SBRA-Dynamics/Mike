@@ -51,7 +51,7 @@ try {
 			line("user", [{ type: "tool_result", content: "ok" }]),
 			line("assistant", [{ type: "text", text: "Klart, alla gröna." }]),
 			line("user", "<command-name>/clear</command-name>"),
-			line("user", "meta", { isMeta: true }),
+			line("user", "meta", { isMeta: true, cwd: "/repo" }),
 			"{ torn"
 		].join("\n") + "\n");
 		const t = readTranscriptTail(f);
@@ -63,6 +63,8 @@ try {
 		check("daterat modell-id blir en etikett", modelLabelOf(t.model) === "haiku");
 		check("okänd modell blir ingen etikett", modelLabelOf("gpt-4") === null);
 		check("en fil som saknas är tom, inte ett fel", readTranscriptTail(join(d, "nope.jsonl")).entries.length === 0);
+		check("mappen är den sista raden säger, även en meta-rad", t.cwd === "/repo", String(t.cwd));
+		check("utan repliker när man bara vill veta mappen", readTranscriptTail(f, { limit: 0 }).entries.length === 0);
 	}
 
 	// ============================================================ switched off
@@ -239,6 +241,42 @@ try {
 		check("och terminalen lämnas igång", agent("Greg").pid === 4242);
 		const renamed = await mcp.call("connect_terminal", { session: "Greg", name: "Gregor" });
 		check("med ett eget namn går det", !renamed.isError && /Connected to Gregor/.test(renamed.text), renamed.text);
+	}
+
+	section("arbetaren följer sessionen när den byter mapp, även ur en worktree som tas bort");
+	{
+		const repo = temp("repo-");
+		const wt = join(repo, "worktree");
+		mkdirSync(wt);
+		const S2 = randomUUID();
+		writeAgents([...readAgents(), bg("Milla", S2, { cwd: wt })]);
+		writeFileSync(join(fakeDir, `${S2}.json`), JSON.stringify({ id: S2, turns: [], cwd: wt, createdAt: now }));
+		const tr = join(projects, "-some-folder", `${S2}.jsonl`);
+		writeFileSync(tr, line("user", "jobba i worktree:n", { cwd: wt }) + "\n");
+
+		const conn = await mcp.call("connect_terminal", { session: "Milla" });
+		check("Milla ansluts i worktree:n", !conn.isError && conn.text.includes(wt), conn.text);
+		const first = (await say(c, "Milla, första")).filter((m) => m.type === "text");
+		const st1 = JSON.parse(readFileSync(join(fakeDir, `${S2}.json`), "utf8"));
+		check("första turen körs i worktree:n", first[0]?.text === "turn 1: första" && st1.lastCwd === wt, JSON.stringify({ first, cwd: st1.lastCwd }));
+
+		// What Mannie did: ExitWorktree back to the repository, then
+		// `git worktree remove`. The transcript's later lines carry the new folder.
+		writeFileSync(tr, readFileSync(tr, "utf8") + line("assistant", [{ type: "text", text: "Worktree borttagen." }], { cwd: repo }) + "\n");
+		rmSync(wt, { recursive: true, force: true });
+
+		const second = await say(c, "Milla, vilken gren?");
+		const st2 = JSON.parse(readFileSync(join(fakeDir, `${S2}.json`), "utf8"));
+		check("nästa tur körs där sessionen står nu", second.some((m) => m.type === "text" && m.text === "turn 2: vilken gren?") && st2.lastCwd === repo,
+			JSON.stringify({ second: second.filter((m) => m.type !== "event"), cwd: st2.lastCwd }));
+		check("och arbetaren minns den nya mappen", (await mcp.call("list_workers")).text.includes(`, ${repo}, idle`), (await mcp.call("list_workers")).text);
+		check("flytten loggas", /worker Milla follows its session from .*worktree to /.test(server.log()));
+
+		rmSync(repo, { recursive: true, force: true });
+		const gone = await say(c, "Milla, är du kvar?");
+		const err = gone.find((m) => m.type === "error");
+		check("finns ingen mapp alls sägs det som en saknad mapp", /the folder .* does not exist/.test(err?.message ?? ""), JSON.stringify(gone));
+		check("inte som att claude saknas", !/ENOENT/.test(JSON.stringify(gone)));
 	}
 
 	check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-400));
