@@ -150,6 +150,10 @@ export function createTerminals({ bin = "claude", log, enabled = true, projectsD
 	return {
 		enabled,
 
+		/** Everything Claude Code lists, for a caller that looks at several
+		 *  sessions at once and should not ask once per session. */
+		sessions: list,
+
 		/** Folded names in use by any session Claude Code knows, so a worker
 		 *  spawned by Mike never takes a name a terminal session already has. A
 		 *  finished one counts: it can be attached again, under that name. */

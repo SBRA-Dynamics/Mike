@@ -197,8 +197,10 @@ The session keeps running when the terminal is closed or left with Ctrl+Z, and
 "Mike, connect to Wyoh" takes it over: the background process is stopped (an
 attached terminal drops back to its prompt), and the worker resumes the same
 session in the same folder, on the same model, with where it left off on the
-lens. A session that is in the middle of a turn is refused rather than cut
-off. Back at the computer, `Claude -r Wyoh` opens it in the terminal again —
+lens. A session that is in the middle of a turn is not cut off: it moves over
+by itself once it is done, the title bar says "Minnie moved" until you switch
+to it, and its last answer is what the lens shows when you do. Mike does not
+switch to it for you — "Mike, växla till Minnie" does. Back at the computer, `Claude -r Wyoh` opens it in the terminal again —
 and from then on the worker refuses to take a turn until Mike is told to
 connect to it again, because two drivers of one session silently lose turns.
 New workers never get a name a terminal session already has.

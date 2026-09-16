@@ -331,6 +331,34 @@ try {
 		})(), String(s2.notice()));
 	}
 
+	section("en terminalsession som flyttats över syns i titelraden tills man växlar");
+	{
+		const s = new Store();
+		let n = 0;
+		const feed = (m) => s.apply({ ...m, seq: ++n });
+		feed({ type: "state", busy: false, worker: "Kalle", mode: "byname" });
+		feed({ type: "text", from: "Kalle", text: "Jag tittar på det." });
+		feed({ type: "text", from: "Minnie", text: "Klart, alla tester gröna.", background: true });
+		feed({ type: "event", kind: "workerMoved", data: { worker: { name: "Minnie", model: "opus", cwd: "/tmp" }, terminal: "Minnie" } });
+		feed({ type: "state", busy: false, worker: "Kalle", mode: "byname" });
+		check("titelraden säger att den flyttats", s.notice() === "Minnie moved", String(s.notice()));
+		check("samtalet byts inte", s.state.worker === "Kalle" && s.state.lens.from === "Kalle", JSON.stringify({ worker: s.state.worker, lens: s.state.lens.from }));
+		check("notisen bleknar inte", s.notice(Date.now() + NOTICE_MS * 10) === "Minnie moved", String(s.notice(Date.now() + NOTICE_MS * 10)));
+		check("och står inte på klockan", s.nextNoticeExpiry() === null, String(s.nextNoticeExpiry()));
+		check("arbetaren finns att välja", s.state.workers.some((w) => w.name === "Minnie"), JSON.stringify(s.state.workers));
+		check("svaret ligger i transkriptet", s.state.transcript.some((e) => e.from === "Minnie" && /gröna/.test(e.text)));
+
+		feed({ type: "event", kind: "workerNotice", data: { worker: "Bosse", kind: "said" } });
+		check("en flytt slår ett påstående och räknar resten", s.notice() === "Minnie moved +1", String(s.notice()));
+		feed({ type: "event", kind: "workerNotice", data: { worker: "Doris", kind: "question" } });
+		check("en fråga slår en flytt", s.notice() === "Doris asks +2", String(s.notice()));
+
+		feed({ type: "event", kind: "workerSwitched", data: { active: "Minnie", worker: { name: "Minnie" }, last: { from: "Minnie", text: "Klart, alla tester gröna." } } });
+		feed({ type: "state", busy: false, worker: "Minnie", mode: "byname" });
+		check("växlar man dit försvinner flytt-notisen", s.notice() === "Doris asks +1", String(s.notice()));
+		check("och linsen visar vad den skrev när den blev klar", s.state.lens.from === "Minnie" && /gröna/.test(s.state.lens.text), JSON.stringify(s.state.lens));
+	}
+
 	// ============================================================== modellen
 	section("modellen: linsen och telefonen läser samma tillstånd (R4.4)");
 	{

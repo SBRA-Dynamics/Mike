@@ -126,7 +126,11 @@ export type AppState = {
 
 export type Pending = {
 	worker: string;
-	kind: "question" | "said";
+	/** `moved` is a terminal session that finished and was taken over while the
+	 *  user was elsewhere. It stays until they switch to it, like a question:
+	 *  it is waiting for them, and whoever put the job running went to do
+	 *  something else precisely so they would not have to watch for it. */
+	kind: "question" | "moved" | "said";
 	at: number;
 };
 
@@ -790,15 +794,25 @@ export class Store {
 	 * because "Bosse" tells you where to go and "3" does not.
 	 */
 	notice(now = Date.now()): string | null {
-		const live = this.state.pending.filter((p) => p.kind === "question" || now - p.at < NOTICE_MS);
+		const live = this.state.pending.filter((p) => p.kind !== "said" || now - p.at < NOTICE_MS);
 		if (live.length !== this.state.pending.length) this.state.pending = live;
 		if (!live.length) return null;
 
+		// Most urgent first: a question, then a session that moved over, then a
+		// remark. The first kind present is named; the rest are a count.
 		const asking = live.filter((p) => p.kind === "question");
-		const said = live.length - asking.length;
-		if (asking.length === 1) return said ? `${asking[0].worker} asks +${said}` : `${asking[0].worker} asks`;
-		if (asking.length > 1) return said ? `${asking.length} ask +${said}` : `${asking.length} ask`;
-		return said === 1 ? `${live[0].worker} spoke` : `${said} spoke`;
+		const moved = live.filter((p) => p.kind === "moved");
+		if (asking.length) {
+			const rest = live.length - asking.length;
+			const head = asking.length === 1 ? `${asking[0].worker} asks` : `${asking.length} ask`;
+			return rest ? `${head} +${rest}` : head;
+		}
+		if (moved.length) {
+			const rest = live.length - moved.length;
+			const head = moved.length === 1 ? `${moved[0].worker} moved` : `${moved.length} moved`;
+			return rest ? `${head} +${rest}` : head;
+		}
+		return live.length === 1 ? `${live[0].worker} spoke` : `${live.length} spoke`;
 	}
 
 	/**
@@ -860,7 +874,7 @@ export class Store {
 	/** When the next notice expires, so the caller can repaint exactly then
 	 *  rather than polling. Null when nothing is on a clock. */
 	nextNoticeExpiry(now = Date.now()): number | null {
-		const fading = this.state.pending.filter((p) => p.kind !== "question").map((p) => p.at + NOTICE_MS - now);
+		const fading = this.state.pending.filter((p) => p.kind === "said").map((p) => p.at + NOTICE_MS - now);
 		return fading.length ? Math.max(0, Math.min(...fading)) : null;
 	}
 
@@ -1123,6 +1137,19 @@ export class Store {
 				// A question arrives seconds after the answer it is part of, and
 				// the lens may have gone dark in between.
 				if (d.kind === "question" && d.worker) this.#beckon(String(d.worker));
+				break;
+
+			case "workerMoved":
+				// A terminal session that finished while the user was elsewhere,
+				// now a worker. Deliberately NOT the active one — the server sends
+				// no `active` — so the title bar says so and the list offers it,
+				// and switching is the user's word.
+				if (d.worker?.name) {
+					this.#rememberWorker(d.worker as WorkerInfo);
+					this.#note(String(d.worker.name), "moved");
+					this.#beckon(String(d.worker.name));
+					this.state.lastEvent = `${d.worker.name} moved over`;
+				}
 				break;
 
 			case "workerSpawned":

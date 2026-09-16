@@ -113,7 +113,7 @@ try {
 
 	const server = await startServer(
 		["--claude-bin", FAKE, "--worker-cwd", "/tmp", "--mike-cwd", "/tmp"],
-		{ env: { FAKE_CLAUDE_DIR: fakeDir, MIKE_TERMINALS: "on", MIKE_CLAUDE_PROJECTS: projects } });
+		{ env: { FAKE_CLAUDE_DIR: fakeDir, MIKE_TERMINALS: "on", MIKE_CLAUDE_PROJECTS: projects, MIKE_TERMINAL_POLL_MS: "150" } });
 	servers.push(server);
 	const c = await connect(server);
 	const mcp = new McpClient(await grantTools(c));
@@ -147,7 +147,7 @@ try {
 	section("det som inte går att ta över vägras, och lämnas orört");
 	{
 		const busy = await mcp.call("connect_terminal", { session: "Prof" });
-		check("en upptagen session vägras", busy.isError && /still working/.test(busy.text), busy.text);
+		check("en upptagen session stoppas inte utan väntas på", !busy.isError && /still working.*moves over when it is done/.test(busy.text), busy.text);
 		check("och får jobba vidare", agent("Prof").pid === 4242);
 		const win = await mcp.call("connect_terminal", { session: "Hans" });
 		check("ett öppet terminalfönster vägras", win.isError && /open in a terminal window/.test(win.text), win.text);
@@ -156,6 +156,36 @@ try {
 		const gone = await mcp.call("connect_terminal", { session: "Sidris" });
 		check("en mapp som inte finns vägras", gone.isError && /no folder/.test(gone.text), gone.text);
 		check("innan terminalen stoppas", agent("Sidris").pid === 4242);
+	}
+
+	section("Prof tas över när den är klar, utan att samtalet byts");
+	{
+		const again = await mcp.call("connect_terminal", { session: "prof" });
+		check("att fråga igen blir samma väntan", /already waiting/.test(again.text), again.text);
+		check("listan säger att den väntas på", /Prof — .*\[moves over when done\]/.test((await mcp.call("list_terminals")).text));
+		writeFileSync(join(projects, "-some-folder", `${S.prof}.jsonl`), [
+			line("user", "kör hela testsviten"),
+			line("assistant", [{ type: "text", text: "Alla 212 tester gröna." }])
+		].join("\n") + "\n");
+		writeFileSync(join(fakeDir, `${S.prof}.json`), JSON.stringify({ id: S.prof, turns: [], cwd: worksDir, createdAt: now }));
+
+		// Several polls while it works: nothing moves.
+		await new Promise((r) => setTimeout(r, 1000));
+		check("medan den jobbar händer inget", agent("Prof").pid === 4242 && !(await mcp.call("list_workers")).text.includes("Prof"));
+
+		const since = c.mark();
+		writeAgents(readAgents().map((a) => a.name === "Prof" ? { ...a, status: "idle", state: "done" } : a));
+		const ev = await c.waitFor((m) => m.type === "event" && m.kind === "workerMoved", 10_000, "workerMoved", since);
+		check("den tas över när den blivit ledig", agent("Prof").pid === undefined, JSON.stringify(agent("Prof")));
+		check("händelsen säger vem", ev.data.worker?.name === "Prof" && !("active" in ev.data), JSON.stringify(ev.data));
+		const bgText = c.messages.slice(since).find((m) => m.type === "text" && m.from === "Prof");
+		check("det den skrev sist kommer som bakgrundstext", bgText?.background === true && bgText.text === "Alla 212 tester gröna.", JSON.stringify(bgText));
+		const whoIsActive = c.messages.slice(since).filter((m) => m.type === "state").pop();
+		check("samtalet byttes inte", !whoIsActive || whoIsActive.worker !== "Prof", JSON.stringify(whoIsActive));
+		check("Prof är nu en arbetare", (await mcp.call("list_workers")).text.includes("Prof"));
+
+		const sw = await mcp.call("switch_worker", { name: "Prof" });
+		check("växla till Prof fungerar", !sw.isError, sw.text);
 	}
 
 	section("anslut till Wyoh: terminalen stoppas och samtalet fortsätter här");
