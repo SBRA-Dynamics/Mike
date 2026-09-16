@@ -23,7 +23,7 @@
 
 import { createInterface } from "node:readline";
 import { stdin, stdout } from "node:process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, statSync, readdirSync, accessSync, constants } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { homedir, userInfo, networkInterfaces } from "node:os";
@@ -79,6 +79,75 @@ const pick = async (question, options, def) => {
 	}
 };
 
+/**
+ * The pairing URL, made into one the app can actually read.
+ *
+ * The app parses a scanned link with `new URL()` and takes the ORIGIN as the
+ * server address (client/src/qr.ts). So a typed answer that is only a hostname
+ * is not a link at all — `kontoret.onvo.se/?token=…` throws there and the scan
+ * fails with "That is not a link" — and one with no port silently points the
+ * phone at 443 while the server listens somewhere else. Both were possible to
+ * type here and neither showed up until a phone was held to the screen, so
+ * they are fixed where they are typed:
+ *
+ *   - a missing scheme becomes https when there is a certificate, http without
+ *   - a missing port becomes the port this server was just told to listen on,
+ *     unless the scheme's own default (443/80) is that port
+ *
+ * Nothing is assumed silently: what it made of the answer is printed, and
+ * anything it cannot parse at all is asked again rather than written to the
+ * env file for the phone to fail on.
+ */
+const normalizePublicUrl = (raw, { cert, port }) => {
+	// Trimmed but NOT stripped of its trailing slash yet: "http://" ends in one,
+	// and stripping it first turns it into "http:", which then reads as a host
+	// called "http" instead of the nonsense it is. The path is tidied at the end
+	// instead, once URL has had its say about what is a host and what is not.
+	const typed = String(raw ?? "").trim();
+	if (!typed) return { error: "an address is needed — a hostname or an IP, with the port the phone reaches" };
+
+	const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(typed);
+	const withScheme = scheme ? typed : `${cert ? "https" : "http"}://${typed}`;
+
+	let u;
+	try { u = new URL(withScheme); }
+	catch { return { error: `"${typed}" is not an address the app can read` }; }
+	if (u.protocol !== "https:" && u.protocol !== "http:") {
+		return { error: `the app only follows http and https links, not ${u.protocol.replace(":", "")}` };
+	}
+	if (!u.hostname) return { error: `"${typed}" has no host in it` };
+
+	// `u.port` is empty both when none was typed and when the one typed is the
+	// scheme's default, which is the case where leaving it off is correct.
+	const implied = u.protocol === "https:" ? "443" : "80";
+	if (!u.port && String(port) !== implied) u.port = String(port);
+
+	const url = `${u.protocol}//${u.host}${u.pathname === "/" ? "" : u.pathname.replace(/\/+$/, "")}`;
+	const notes = [];
+	if (!scheme) notes.push(`assumed ${u.protocol.replace(":", "")} (${cert ? "a certificate was given" : "no certificate was given"})`);
+	if (u.port === String(port) && !new RegExp(`:${port}(/|$)`).test(typed)) notes.push(`added port ${port}`);
+	if (u.protocol === "https:" && !cert) notes.push("https with no certificate here, so something in front of the server has to terminate TLS");
+	if (u.protocol === "http:" && cert) notes.push("http, but this server has a certificate and will speak https — nothing will answer on an http link");
+	else if (u.protocol === "http:") notes.push("plain http — the Even app needs https to reach this from a phone that is not on your LAN");
+	return { url, notes };
+};
+
+/** Ask until the answer is one the phone can use. */
+const askPublicUrl = async (def, opts) => {
+	for (;;) {
+		const { url, error, notes } = normalizePublicUrl(await ask("Public URL", def), opts);
+		if (error) {
+			say(`  ${error}`);
+			// --defaults never reads a line, so a bad default must not spin.
+			if (DEFAULTS) throw new Error(`MIKE_PUBLIC_URL: ${error}`);
+			continue;
+		}
+		for (const n of notes) say(`  (${n})`);
+		say(`  the phone will be sent to ${url}`);
+		return url;
+	}
+};
+
 const run = (cmd, argv, opts = {}) => {
 	say(`  $ ${cmd} ${argv.join(" ")}`);
 	if (DRY) return { status: 0 };
@@ -86,6 +155,31 @@ const run = (cmd, argv, opts = {}) => {
 };
 const which = (bin) => { const r = spawnSync("which", [bin], { encoding: "utf8" }); return r.status === 0 ? r.stdout.trim() : null; };
 const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
+const canRead = (p) => { try { accessSync(p, constants.R_OK); return true; } catch { return false; } };
+
+/**
+ * Certificates certbot has already put on this machine.
+ *
+ * Asked for as a path because that is what the server takes, but nobody
+ * remembers the path — it is six directories down and the answer was typed
+ * once, months ago, into a systemd unit rather than into this file. So the
+ * ones that are there are found and offered.
+ *
+ * Only pairs THIS user can read are offered, because the server runs as this
+ * user and a path it cannot open is worse than no path at all: it starts,
+ * and then fails at the first connection. certbot's own permissions keep
+ * `privkey.pem` to root, so a readable one means somebody has already granted
+ * access (an ACL, a group) and meant it.
+ */
+const letsencryptPairs = () => {
+	const root = "/etc/letsencrypt/live";
+	let names;
+	try { names = readdirSync(root); }
+	catch { return []; }
+	return names.sort()
+		.map((name) => ({ name, cert: join(root, name, "fullchain.pem"), key: join(root, name, "privkey.pem") }))
+		.filter((c) => canRead(c.cert) && canRead(c.key));
+};
 
 /** ~/.config/mike/env as it is now, so a second run keeps the token and offers
  *  the previous answers as defaults. */
@@ -154,8 +248,22 @@ const port = await ask("Port", previous.MIKE_PORT ?? "3460");
 const host = await ask("Bind address (0.0.0.0 for every interface, 127.0.0.1 for this machine only)", previous.MIKE_HOST ?? "0.0.0.0");
 say("\nTLS is optional. With a certificate and key the server speaks HTTPS, which");
 say("the Even app needs to reach it from a phone that is not on your LAN.");
-const cert = await ask("TLS certificate chain (blank for plain HTTP)", previous.MIKE_CERT ?? "");
-const key = cert ? await ask("TLS private key", previous.MIKE_KEY ?? "") : "";
+// What is already on the machine, unless the env file already names one — an
+// answer given before beats a guess made now.
+const found = previous.MIKE_CERT ? [] : letsencryptPairs();
+if (found.length === 1) say(`\nFound a certificate for ${found[0].name} that this user can read; it is the default below.`);
+else if (found.length > 1) {
+	say(`\nCertificates this user can read, under /etc/letsencrypt/live:`);
+	for (const c of found) say(`  ${c.name} — ${c.cert}`);
+	say(`The first is the default below; paste another path to use it instead.`);
+}
+const cert = await ask("TLS certificate chain (blank for plain HTTP)", previous.MIKE_CERT ?? found[0]?.cert ?? "");
+// The key that goes with the certificate just chosen, not the first one found:
+// answering the cert prompt with a path from the list above should not then
+// offer somebody else's key.
+const chosenPair = letsencryptPairs().find((c) => c.cert === cert);
+const pairedKey = chosenPair?.key;
+const key = cert ? await ask("TLS private key", previous.MIKE_KEY ?? pairedKey ?? "") : "";
 
 // The address the PHONE uses, which is not the bind address: a router that
 // forwards an outside port, a hostname with a certificate, or just this
@@ -163,8 +271,21 @@ const key = cert ? await ask("TLS private key", previous.MIKE_KEY ?? "") : "";
 const lanIp = Object.values(networkInterfaces()).flat().find((i) => i && i.family === "IPv4" && !i.internal)?.address ?? "localhost";
 say("\nThe public URL is what the phone connects to — through a router, a");
 say("hostname, or straight to this machine on the LAN. It goes into the pairing link.");
-const publicUrl = (await ask("Public URL", previous.MIKE_PUBLIC_URL ?? `https://${lanIp}:3456`)).replace(/\/+$/, "");
-if (publicUrl.startsWith("https://") && !cert) say(`  (https, but no certificate: something in front of the server has to terminate TLS, or the phone will not connect)`);
+// A previous answer is the best default there is, except in one case: it was
+// given when there was no certificate, says http, and there is a certificate
+// now. Offered as https then — as a DEFAULT, still shown and still editable,
+// because the scheme is a fact about what the server will speak and the old
+// answer is simply out of date.
+const storedUrl = previous.MIKE_PUBLIC_URL;
+const defaultUrl = cert && storedUrl?.startsWith("http://")
+	? storedUrl.replace(/^http:\/\//, "https://")
+	// The host a certificate is FOR beats the address of the machine it sits on.
+	// A certificate for kontoret.onvo.se on a link to 192.168.1.177 is a name
+	// mismatch, and the phone rejects it before the token is ever read — which
+	// is a first run that took every default and still could not connect.
+	: storedUrl ?? `${cert ? "https" : "http"}://${chosenPair?.name ?? lanIp}:${port}`;
+if (defaultUrl !== storedUrl && storedUrl) say(`(${storedUrl} was saved before the certificate was; offering it as https)`);
+const publicUrl = await askPublicUrl(defaultUrl, { cert, port });
 const token = previous.MIKE_TOKEN || randomBytes(16).toString("hex");
 if (previous.MIKE_TOKEN) say("\nKeeping the existing token from ~/.config/mike/env.");
 
