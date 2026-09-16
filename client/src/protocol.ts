@@ -24,7 +24,10 @@ export { C2S, S2C, CONTROL, CLOSE, PROTOCOL_VERSION } from "../../src/protocol.j
  *  the addressing mode treats its words as speech and filters them. */
 export type Origin = "typed" | "voice";
 
-export type Framed = { seq: number };
+/** `at` is when the server emitted it — the only way a replayed transcript can
+ *  be told from a live one. Optional because a message from a server built
+ *  before it existed has none, and "now" is the honest fallback there. */
+export type Framed = { seq: number; at?: number };
 
 export type ReadyMsg = {
 	type: "ready";

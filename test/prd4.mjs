@@ -225,8 +225,11 @@ try {
 		// Mike skapar en arbetare: hans bekräftelse, sedan turens state.
 		feed({ type: "text", from: "Mike", text: "Bosse är igång." });
 		feed({ type: "state", busy: false, worker: "Bosse", mode: "byname" });
-		check("efter att en arbetare skapats står arbetaren överst", s.state.lens.from === "Bosse", s.state.lens.from);
+		check("efter att en arbetare skapats står arbetaren överst", s.lensView().from === "Bosse", s.lensView().from);
 		check("och texten står kvar", /Bosse är igång/.test(s.state.lens.text), s.state.lens.text);
+		// …som Mikes ord, inte som arbetarens. Namnraden säger vem nästa mening
+		// går till; orden säger vem som sa dem, och de två är inte samma fråga.
+		check("men det Mike sa står kvar som Mikes", s.state.lens.from === "Mike" && /Mike: Bosse är igång/.test(s.lensView().text), JSON.stringify(s.lensView()));
 
 		// Ett inpass från Mike mitt i: samma arbetare kvar.
 		feed({ type: "text", from: "Mike", text: "Den läser om filerna." });
@@ -235,7 +238,7 @@ try {
 
 		feed({ type: "text", from: "Mike", text: "Nu pratar du med Kalle." });
 		feed({ type: "state", busy: false, worker: "Kalle", mode: "byname" });
-		check("vid växling står den nya arbetaren överst", s.state.lens.from === "Kalle", s.state.lens.from);
+		check("vid växling står den nya arbetaren överst", s.lensView().from === "Kalle", s.lensView().from);
 
 		feed({ type: "state", busy: false, worker: null, mode: "byname" });
 		check("när arbetaren avslutas står Mike överst igen", s.state.lens.from === "Mike", s.state.lens.from);
@@ -265,7 +268,9 @@ try {
 		feed({ type: "text", from: "Mike", text: "Kalle är igång." });
 		feed({ type: "state", busy: false, worker: "Kalle", mode: "byname" });
 		check("en ny arbetare behåller Mike besked", /Kalle är igång/.test(s.state.lens.text), s.state.lens.text);
-		check("men namnet är den nyas", s.state.lens.from === "Kalle", s.state.lens.from);
+		check("men namnet är den nyas", s.lensView().from === "Kalle", s.lensView().from);
+		check("och beskedet står som Mikes, inte som Kalles första ord",
+			/Mike: Kalle är igång/.test(s.lensView().text), s.lensView().text);
 
 		// Det återupptagna får inte dyka upp igen vid en senare, orelaterad växling.
 		feed({ type: "event", kind: "workerSwitched",
@@ -499,8 +504,8 @@ try {
 			renamed(st2, "Kalle", "Karin", "Karin");
 			st2.apply({ type: "state", busy: false, worker: "Karin", mode: MODES.BYNAME, seq: 2 });
 			check("och ett namnbyte flyttar rubriken till det nya namnet",
-				st2.state.lens.from === "Karin" && names(st2) === "Karin",
-				JSON.stringify({ from: st2.state.lens.from, workers: names(st2) }));
+				st2.lensView().from === "Karin" && names(st2) === "Karin",
+				JSON.stringify({ from: st2.lensView().from, workers: names(st2) }));
 		}
 	}
 
@@ -648,6 +653,92 @@ try {
 		s.apply({ type: "text", text: "Alla 41 checkar gröna.", from: "Bosse", seq: 2 });
 		check("svaret tar över linsen när turen är slut", s.lensView().text === "Alla 41 checkar gröna.", s.lensView().text);
 		check("och ingenting påstår längre att något pågår", s.working() === false);
+	}
+
+	section("modellen: ett nytt yttrande tar inte linsen från det som körs");
+	{
+		// The bug, out loud: Bosse is ten minutes into a build, the user says
+		// something else while it runs, and the lens drops what the worker is
+		// doing for an empty turn carrying only the user's own words. The status
+		// the glasses exist to show is replaced by an echo of the wearer.
+		const s = new Store();
+		s.state.connection = "online";
+		s.state.worker = "Bosse";
+		const turn = (id, phase, parts) => s.apply({ type: "event", kind: "turn", data: { id, to: "Bosse", parts, phase } });
+		const progress = (id, data) => s.apply({ type: "event", kind: "progress", data: { from: "Bosse", turn: id, ...data } });
+
+		turn("t1", "started", ["bygg klart testerna"]);
+		progress("t1", { text: "Jag kör sviten." });
+		progress("t1", { tool: "Bash", doing: "Running node test/prd3.mjs" });
+
+		turn("t2", "held", ["och sen commit"]);
+		const lines = () => s.lensView().text.split("\n");
+		check("båda meningarna står kvar", lines().some((l) => /och sen commit/.test(l)) && lines().some((l) => /bygg klart/.test(l)), JSON.stringify(lines()));
+		check("och vad workern gör står kvar under dem",
+			lines().at(-1) === `${MARK_THEIRS} Running node test/prd3.mjs`, JSON.stringify(lines()));
+		check("liksom det den sa att den skulle göra",
+			lines().some((l) => l === `${MARK_THEIRS} Jag kör sviten.`), JSON.stringify(lines()));
+		check("och raden säger fortfarande att någon tänker", s.lensStatus().startsWith("thinking"), String(s.lensStatus()));
+
+		// And the newest turn wins again as soon as it has something of its own.
+		turn("t2", "started", ["och sen commit"]);
+		progress("t2", { tool: "Read", doing: "Reading state.ts" });
+		check("men så fort den nya turen gör något är det den som visas",
+			lines().at(-1) === `${MARK_THEIRS} Reading state.ts`, JSON.stringify(lines()));
+	}
+
+	section("modellen: en växling visar den nyes egna ord, aldrig någons under fel namn");
+	{
+		const s = new Store();
+		let n = 0;
+		const feed = (m) => s.apply({ ...m, seq: ++n });
+
+		feed({ type: "state", busy: false, worker: null, mode: MODES.BYNAME });
+		feed({ type: "text", from: "mike", text: "Jag har startat Bosse." });
+		feed({ type: "event", kind: "workerSwitched", data: { active: "Bosse", worker: { name: "Bosse" } } });
+		feed({ type: "state", busy: false, worker: "Bosse", mode: MODES.BYNAME });
+		// En arbetare som aldrig sagt något har ingenting att återuppta, så det som
+		// står kvar står kvar — men som Mikes ord, inte som arbetarens. Namnraden
+		// säger vem nästa mening går till, orden vem som sa dem.
+		check("en arbetare som inte sagt något får inte Mikes ord under sitt namn",
+			s.state.lens.from === "Mike" && s.state.lens.text === "Jag har startat Bosse.", JSON.stringify(s.state.lens));
+		check("namnraden är ändå den nyes, med Mike utsatt framför orden",
+			s.lensView().from === "Bosse" && s.lensView().text === "Mike: Jag har startat Bosse.", JSON.stringify(s.lensView()));
+
+		feed({ type: "text", from: "Bosse", text: "Bygget är grönt." });
+		feed({ type: "event", kind: "workerSwitched", data: { active: null } });
+		feed({ type: "state", busy: false, worker: null, mode: MODES.BYNAME });
+		check("tillbaka till Mike visar det Mike sa", s.state.lens.text === "Jag har startat Bosse." && s.state.lens.from === "Mike", JSON.stringify(s.state.lens));
+
+		feed({ type: "event", kind: "workerSwitched", data: { active: "Bosse", worker: { name: "Bosse" } } });
+		feed({ type: "state", busy: false, worker: "Bosse", mode: MODES.BYNAME });
+		check("och tillbaka till Bosse visar det Bosse sa (R3.6)", s.state.lens.text === "Bygget är grönt." && s.state.lens.from === "Bosse", JSON.stringify(s.state.lens));
+		check("växlingen tänder linsen utan att datera orden till nu", s.lensDark() === false);
+	}
+
+	section("modellen: en omstartad klient läser historien som historia");
+	{
+		// Everything here used to be dated "now" on a reload: yesterday's last
+		// answer lit the lens as news, the transcript carried one timestamp, and
+		// a `state` from the middle of the log put the client back in front of a
+		// worker that had since been ended.
+		const st = new Store();
+		const long = LENS_IDLE_MS * 4;
+		const then = Date.now() - long;
+		st.applyReady({ sessionId: "s", worker: null, mode: MODES.ALWAYS, workers: [], resumed: false, missed: 0, gap: false });
+		st.applyHistory([
+			{ type: "state", busy: false, worker: "Kalle", mode: MODES.BYNAME, seq: 1, at: then },
+			{ type: "text", from: "Kalle", text: "Jag är klar.", seq: 2, at: then },
+			{ type: "state", busy: true, worker: "Kalle", mode: MODES.BYNAME, seq: 3, at: then }
+		]);
+		check("samtalet kommer tillbaka", st.state.transcript.at(-1).text === "Jag är klar.");
+		check("med tiden det sades, inte tiden det lästes", Math.abs(st.state.transcript.at(-1).at - then) < 50, String(st.state.transcript.at(-1).at - then));
+		check("den aktiva arbetaren är den ready sa, inte den historien slutade på", st.state.worker === null, String(st.state.worker));
+		check("och läget likaså", st.state.mode === MODES.ALWAYS, st.state.mode);
+		check("ingenting påstås pågå efter en omstart", st.state.busy === false && st.working() === false);
+		check("linsen bär det sista som sades", st.state.lens.text === "Jag är klar.", JSON.stringify(st.state.lens));
+		check("den är tänd när appen öppnas", st.lensDark() === false);
+		check("men gammal nog att slockna på vanlig tid", st.lensDark(Date.now() + LENS_IDLE_MS + 100) === true);
 	}
 
 	section("modellen: linsen släcks när ingen har sagt något på trettio sekunder");

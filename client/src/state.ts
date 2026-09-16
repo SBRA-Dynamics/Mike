@@ -450,6 +450,14 @@ export class Store {
 	 *  the one that survived the restart. */
 	applyHistory(messages: SeqMsg[]): void {
 		this.state.transcript = [];
+		// `ready` is the truth about NOW — who is active, what mode we are in —
+		// and the transcript is a record of what was true at each line of it.
+		// Replaying those `state` messages over the top put the client back in
+		// whatever state the session was in when it was last written to: talking
+		// to a worker that has since been ended from another device, in a mode
+		// the user changed after. Kept and put back, so history writes the
+		// conversation and nothing else.
+		const live = { worker: this.state.worker, mode: this.state.mode, workers: this.state.workers };
 		// Replaying a transcript rebuilds the CONVERSATION. It must not rebuild
 		// the registry: `ready.workers` is the server's snapshot of who exists
 		// right now, and a transcript is a record of what was said, which is not
@@ -466,6 +474,23 @@ export class Store {
 			this.#live = true;
 		}
 		this.state.transcript = this.state.transcript.slice(-TRANSCRIPT_LIMIT);
+		this.state.worker = live.worker;
+		this.state.mode = live.mode;
+		this.state.workers = live.workers;
+		// Nothing was running when this client started, whatever the last line
+		// of the transcript said. A `state` with busy true — the session was
+		// written to mid-turn, or the server was restarted under one — left the
+		// lens counting "thinking 3h" against a turn that died with the process.
+		this.state.busy = false;
+		this.state.busySince = null;
+		this.state.progress = null;
+		this.state.turns = [];
+		this.state.heard = null;
+		this.state.commandNote = null;
+		// The conversation is worth seeing when the app opens, and it is old:
+		// lit as a wake, which fades on the idle clock, rather than by dating it
+		// to now. The lens itself is whatever the last thing said set it to.
+		this.#wokeAt = Date.now();
 		this.notify();
 	}
 
@@ -624,15 +649,21 @@ export class Store {
 		const live = this.liveTurns(now);
 		if (!live.length) return null;
 
-		const newest = live[live.length - 1];
-		const newsAt = Math.max(newest.at, newest.doingAt);
+		const newsAt = Math.max(...live.map((t) => Math.max(t.at, t.doingAt)));
 		if (this.state.lensAt > newsAt) return null;
+
+		// The work shown is the newest turn that has any to report, which is not
+		// the newest turn: saying a second sentence while the first is running
+		// opens a held turn with nothing in it, and taking ITS empty plan and
+		// doing would blank out what the worker is in the middle of — replacing
+		// the only account of what is happening with the user's own words.
+		const working = [...live].reverse().find((t) => t.doing || t.plan) ?? live[live.length - 1];
 
 		// Bottom up, because the bottom is the part that must survive: one row
 		// for what it is doing, up to two for what it said it would do, and
 		// whatever is left for the user's own words.
-		const doing = newest.doing ? this.#doingLine(newest, now) : null;
-		const plan = newest.plan ? wrapText(`${MARK_THEIRS} ${newest.plan}`).slice(0, 2) : [];
+		const doing = working.doing ? this.#doingLine(working, now) : null;
+		const plan = working.plan ? wrapText(`${MARK_THEIRS} ${working.plan}`).slice(0, 2) : [];
 		const budget = BODY_ROWS - (doing ? 1 : 0) - plan.length;
 
 		// One group per fragment, so a fragment that is dropped for space is
@@ -833,17 +864,34 @@ export class Store {
 		return fading.length ? Math.max(0, Math.min(...fading)) : null;
 	}
 
-	#say(from: string, text: string, kind: Entry["kind"], seq: number): void {
-		this.state.transcript.push({ seq, from, text, kind, at: Date.now() });
+	#say(from: string, text: string, kind: Entry["kind"], seq: number, at = Date.now()): void {
+		this.state.transcript.push({ seq, from, text, kind, at });
 		// The lens shows the latest thing said, not a scroll (R4.2), and a new
 		// thing said starts at its first page — otherwise a short answer after a
 		// long one would open on page three of nothing.
 		this.state.lens = { from, text, page: 0 };
-		this.state.lensAt = Date.now();
+		// When it was SAID, not when we heard about it. A replayed transcript
+		// would otherwise date yesterday's last answer to now, which is the lens
+		// showing an old sentence as news and the idle clock starting over for
+		// something nobody just said.
+		this.state.lensAt = at;
 		// The question this answers has been answered. Turns that ended without
 		// one time out instead (DONE_LINGER_MS); this is the ordinary path, and
 		// it is what keeps a finished turn from lingering under the reply.
 		this.state.turns = this.state.turns.filter((t) => t.phase !== "done" && t.phase !== "dropped");
+	}
+
+	/** The last thing somebody actually said, out of the transcript. What the
+	 *  lens goes back to when the conversation is switched to them: their own
+	 *  words, or nothing, never somebody else's under their name. */
+	#lastFrom(who: string): { from: string; text: string } | null {
+		for (let i = this.state.transcript.length - 1; i >= 0; i--) {
+			const e = this.state.transcript[i];
+			if (e.kind !== "text" && e.kind !== "error") continue;
+			if (speaker(e.from) !== who) continue;
+			return { from: speaker(e.from), text: e.text };
+		}
+		return null;
 	}
 
 	/** The turn a progress event belongs to. Null for one we never heard of —
@@ -890,18 +938,22 @@ export class Store {
 					// In the transcript, for the phone; in the title bar, for the
 					// lens. Not #say: that would put "Display on." where the
 					// last answer was, and take the turns off the lens with it.
-					this.state.transcript.push({ seq: m.seq, from: speaker(m.from), text: m.text, kind: "note", at: Date.now() });
-					this.state.commandNote = { text: m.text, at: Date.now() };
+					this.state.transcript.push({ seq: m.seq, from: speaker(m.from), text: m.text, kind: "note", at: m.at ?? Date.now() });
+					// The title bar's copy is about this moment, so a replayed one
+					// is already expired — which is what keeps a command answer
+					// from a week ago off a lens that has just started.
+					this.state.commandNote = { text: m.text, at: m.at ?? Date.now() };
 					return;
 				}
+				const at = m.at ?? Date.now();
 				if ((m as { background?: boolean }).background) {
 					// Transcript yes, lens no: the user switched away on purpose,
 					// and a long job finishing is not a reason to interrupt the
 					// conversation they are in. The notice arrives separately, as
 					// `workerNotice`, once the server has read the sentence.
-					this.state.transcript.push({ seq: m.seq, from: m.from, text: m.text, kind: "text", at: Date.now() });
+					this.state.transcript.push({ seq: m.seq, from: m.from, text: m.text, kind: "text", at });
 				} else {
-					this.#say(speaker(m.from), m.text, "text", m.seq);
+					this.#say(speaker(m.from), m.text, "text", m.seq, at);
 				}
 				// Any worker's answer is a worker done with its turn. Mike's are
 				// not: he is the one being talked to, not someone to come back to.
@@ -913,7 +965,7 @@ export class Store {
 			case "error":
 				// Errors reach the lens: a user waiting on an answer that failed
 				// has to learn that from the device they are looking at.
-				this.#say(this.state.worker ?? MIKE, m.message, "error", m.seq);
+				this.#say(this.state.worker ?? MIKE, m.message, "error", m.seq, m.at ?? Date.now());
 				return;
 
 			case "state": {
@@ -944,13 +996,29 @@ export class Store {
 				const changed = this.#pending !== null || (this.state.worker ?? null) !== (before ?? null);
 				if (changed) {
 					// Switching back to somebody shows their conversation again
-					// (R3.6). A worker with nothing to show — one that has just
-					// been created — keeps the text on the lens, which is Mike
-					// saying it exists.
+					// (R3.6) — theirs, and not the last thing on the lens wearing
+					// their name. Relabelling was the bug: switching to Bosse put
+					// "Bosse" over whatever Mike had just said, so a sentence of
+					// his was read as the new worker's own, and a switch made from
+					// another device left an unrelated old answer sitting under a
+					// name that never said it.
+					//
+					// Three sources, in order: what the server named in the event,
+					// what this person last said in the transcript, and — for
+					// somebody who has never said anything — what is already on
+					// the lens, kept under the name of whoever really said it.
+					// The name row still follows the addressee; that is
+					// #addressed's job, and it prefixes the speaker rather than
+					// pretending they said it.
 					const who = this.#pending?.from ?? this.state.worker ?? MIKE;
-					this.state.lens = this.#pending?.text
-						? { from: this.#pending.fromName ?? who, text: this.#pending.text, page: 0 }
-						: { ...this.state.lens, from: who };
+					const last = this.#pending?.text
+						? { from: this.#pending.fromName ?? who, text: this.#pending.text }
+						: this.#lastFrom(who) ?? { from: this.state.lens.from, text: this.state.lens.text };
+					this.state.lens = { from: last.from, text: last.text, page: 0 };
+					// A switch is a reason to look at the lens, and the words on
+					// it are old by definition — so it is lit as a wake rather
+					// than by dating somebody's last sentence to now.
+					this.#wokeAt = Date.now();
 				}
 				this.#pending = null;
 				return;
@@ -962,8 +1030,8 @@ export class Store {
 				// above, so "it heard me and decided I wasn't talking to it" and
 				// "it didn't hear me" look different — and, through lensView, it
 				// is what the lens carries back while the turn runs.
-				this.state.heard = { text: m.text, confidence: m.confidence ?? null, at: Date.now() };
-				this.state.said = { text: m.text, at: Date.now() };
+				this.state.heard = { text: m.text, confidence: m.confidence ?? null, at: m.at ?? Date.now() };
+				this.state.said = { text: m.text, at: m.at ?? Date.now() };
 				// A dropped utterance's `heard` arrives with no sequence number:
 				// the server sends it per connection rather than writing every
 				// overheard sentence into the transcript. Give it a local one, or
@@ -971,7 +1039,7 @@ export class Store {
 				// render memo.
 				this.state.transcript.push({
 					seq: typeof m.seq === "number" ? m.seq : -(++this.#localSeq),
-					from: "you", text: m.text, kind: "said", at: Date.now()
+					from: "you", text: m.text, kind: "said", at: m.at ?? Date.now()
 				});
 				return;
 

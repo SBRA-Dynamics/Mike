@@ -40,7 +40,12 @@ export class Session {
 	/** Send to every attached connection, and remember it for replay. */
 	emit(message) {
 		const seq = ++this.seq;
-		const framed = { ...message, seq };
+		// When, as well as what. A transcript replayed into a client that has
+		// just started has to be readable as history: without this every line of
+		// it arrived "now", the last answer of a conversation from yesterday lit
+		// the lens as if it had just been said, and the companion stamped a
+		// week of talk with one timestamp.
+		const framed = { ...message, seq, at: Date.now() };
 
 		this.recent.push({ seq, msg: framed });
 		if (this.recent.length > REPLAY_DEPTH) this.recent.shift();
