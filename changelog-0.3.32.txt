@@ -1,0 +1,6 @@
+Scanning the server's QR code with the phone camera now works.
+
+- A photograph of the code on a screen carries moire from the display, and the sizes the app tried to read it at all sat in the band where that moire hides the code. The app now starts smaller and climbs, and reads the same photograph on its first try.
+- On the phone, the keyboard no longer covers the text box: the lens preview folds away while typing, the column scrolls with the text box at the bottom, a tap anywhere else puts the keyboard away, and the return key sends.
+- The lens preview fits the width of the phone: fifty columns, scaled to the screen.
+- Tap the connection status in the top bar to see which server the phone is paired with, and to forget it: two taps, and the Scan QR screen is back.
