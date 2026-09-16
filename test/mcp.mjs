@@ -82,8 +82,8 @@ try {
 	section("verktygen — PRD 2 'Tools'");
 	const listed = await mcp.listTools();
 	const names = listed.result.tools.map((t) => t.name).sort();
-	check("exakt de sju verktygen finns",
-		JSON.stringify(names) === JSON.stringify(["end_worker", "leave_worker", "list_workers", "read_worker", "rename_worker", "reset_worker", "spawn_worker", "switch_worker"]),
+	check("exakt de tio verktygen finns",
+		JSON.stringify(names) === JSON.stringify(["connect_terminal", "end_worker", "leave_worker", "list_terminals", "list_workers", "read_worker", "rename_worker", "reset_worker", "spawn_worker", "switch_worker"]),
 		JSON.stringify(names));
 	check("inget skal-verktyg exponeras", !names.some((n) => /bash|shell|exec|run/.test(n)));
 	check("varje verktyg har ett schema", listed.result.tools.every((t) => t.inputSchema?.type === "object"));

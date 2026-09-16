@@ -1,4 +1,5 @@
-// The six tools from PRD 2, and nothing else.
+// The tools from PRD 2, the reset PRD 3 added, and the two that bring a
+// terminal's Claude Code session in as a worker (terminals.js) — nothing else.
 //
 // Each tool is a name, a description the model reads, a JSON schema, and a run
 // function. They are declared here and served by mcp.js, which owns the
@@ -21,6 +22,7 @@
 import { MODEL_LIST } from "./models.js";
 import { msg } from "./protocol.js";
 import { ToolError } from "./workers.js";
+import { describeTerminal, modelLabelOf } from "./terminals.js";
 
 /** Largest transcript read_worker will return, whatever it is asked for.
  *  The cost of this lands in Mike's context, not in a log file. */
@@ -93,7 +95,7 @@ const publicWorker = (w) => ({
  * conversation the tool call belongs to — that is what makes spawn_worker able
  * to switch "the active conversation" rather than some global.
  */
-export function createToolset({ registry, engine, log, dirs }) {
+export function createToolset({ registry, engine, log, dirs, terminals }) {
 
 	/** Setting the active worker is one operation with one event, because PRD 2
 	 *  R2.2 says switching is part of spawning and not a second call. The
@@ -164,7 +166,9 @@ export function createToolset({ registry, engine, log, dirs }) {
 			run: async (args, { session }) => {
 				// No name is not an error: the worker gets one of the book's
 				// names, free at the moment of asking (names.js).
-				const name = optStr(args.name, "name")?.trim() || registry.freeName();
+				// Nor may it take a name a terminal session already answers to:
+				// "connect to Wyoh" would then have two candidates.
+				const name = optStr(args.name, "name")?.trim() || registry.freeName(await terminals?.takenNames() ?? []);
 				const model = optStr(args.model, "model");
 				const cwd = optStr(args.cwd, "cwd");
 				const prompt = optStr(args.prompt, "prompt");
@@ -188,6 +192,99 @@ export function createToolset({ registry, engine, log, dirs }) {
 					kind: "workerSpawned",
 					text: `${worker.name} is running ${worker.model} in ${worker.cwd}. You are now talking to ${worker.name}.`,
 					data: { worker: publicWorker(worker), active }
+				};
+			}
+		},
+
+		{
+			name: "list_terminals",
+			description: "List the Claude Code sessions running in terminals on this machine that can be taken over as workers: name, folder, busy or idle, and when each started. Use this when the user asks what is running on the computer, or names a session you do not have as a worker.",
+			inputSchema: { type: "object", properties: {}, additionalProperties: false },
+			run: async () => {
+				const running = await terminals?.running() ?? [];
+				const workerFor = (s) => registry.list().find((w) => w.engineSessionId === s.sessionId);
+				const text = running.length
+					? running.map((s) => describeTerminal(s) + (workerFor(s) ? `  [was worker ${workerFor(s).name}]` : "")).join("\n")
+					: "no Claude Code sessions are running in a terminal";
+				return {
+					kind: "terminalsListed",
+					text,
+					data: { terminals: running.map((s) => ({ name: s.name ?? null, id: s.id, cwd: s.cwd, busy: s.status === "busy", started: s.startedAt ?? null })) }
+				};
+			}
+		},
+
+		{
+			name: "connect_terminal",
+			description: "Take over a Claude Code session running in a terminal on this machine and make it a worker the user is talking to, in one step. Its process in the terminal is stopped, so the conversation has one driver — the same conversation continues here, with its history, folder and model. Use this when the user says connect to, take over, or continue a session by name (\"anslut till Wyoh\", \"ta över Prof\"). Fails if the session is busy with a turn.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					session: { type: "string", description: "The session's name as spoken, or its id." },
+					name: { type: "string", description: "What to call the worker, only if the user asked for a different name than the session has." }
+				},
+				required: ["session"],
+				additionalProperties: false
+			},
+			run: async (args, { session }) => {
+				if (!terminals?.enabled) throw new ToolError("terminal sessions are switched off on this server");
+				const ref = str(args.session, "session").trim();
+				const found = await terminals.find(ref);
+				if (!found) throw new ToolError(`no terminal session called "${ref.slice(0, 24)}"`);
+				const label = found.name ?? found.id ?? found.sessionId.slice(0, 8);
+				const live = terminals.isLive(found);
+
+				// Somebody already driving it outside the background service — a
+				// plain `claude` in a window, or `claude -p`. Stopping that is
+				// killing a terminal the user may be typing into.
+				if (live && found.kind !== "background") {
+					const own = registry.list().find((w) => w.engineSessionId === found.sessionId);
+					if (own?.busy) throw new ToolError(`${own.name} is busy with a turn right now`);
+					throw new ToolError(`${label} is open in a terminal window; close it there first`);
+				}
+				// Stopping a turn in flight would throw away work the user left
+				// running on purpose.
+				if (live && found.status === "busy") throw new ToolError(`${label} is still working; ask again when it is done`);
+
+				const existing = registry.get(registry.list().find((w) => w.engineSessionId === found.sessionId)?.name ?? "");
+				let worker = existing;
+				let created = false;
+				let history = [];
+				if (!worker) {
+					const wanted = optStr(args.name, "name")?.trim() || found.name || registry.freeName(await terminals.takenNames());
+					if (registry.get(wanted)) throw new ToolError(`a worker is already called ${registry.get(wanted).name}; say what to call this one`);
+					const tail = terminals.tail(found.sessionId);
+					// Created before the terminal is stopped: a folder that no
+					// longer exists must fail here, while the session is still
+					// running where the user left it.
+					worker = registry.create({ name: wanted, model: modelLabelOf(tail.model) ?? undefined, cwd: found.cwd, systemPrompt: "" });
+					history = tail.entries;
+					created = true;
+				}
+
+				if (live && !(await terminals.stop(found))) {
+					if (created) registry.remove(worker.name);
+					throw new ToolError(`could not take ${label} from the terminal`);
+				}
+
+				if (created) {
+					try {
+						const r = await engine.adopt(worker, { sessionId: found.sessionId, history });
+						registry.touch(worker, { engineSessionId: r?.engineSessionId ?? found.sessionId, sessionCreated: true });
+					} catch (e) {
+						registry.remove(worker.name);
+						log?.error(`connect ${label}: engine adopt failed: ${e.stack || e.message}`);
+						throw new ToolError(`could not connect to ${label}`);
+					}
+				} else {
+					registry.touch(worker);
+				}
+
+				const active = setActive(session, worker);
+				return {
+					kind: "workerSpawned",
+					text: `${created ? "Connected to" : "Took back"} ${worker.name} (${worker.model}, ${worker.cwd}).${live ? " It is no longer running in the terminal." : ""} You are now talking to ${worker.name}.`,
+					data: { worker: publicWorker(worker), active, last: lastSaid(engine, worker), terminal: found.id ?? null }
 				};
 			}
 		},

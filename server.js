@@ -34,6 +34,7 @@ import { WorkerRegistry } from "./src/workers.js";
 import { NamedDirs } from "./src/namedDirs.js";
 import { createStubWorkerEngine, createClaudeWorkerEngine } from "./src/workerEngine.js";
 import { createToolset } from "./src/tools.js";
+import { createTerminals } from "./src/terminals.js";
 import { createClassifier } from "./src/classify.js";
 import { createClaudeRunner, DEFAULT_WORKER_TIMEOUT_MS } from "./src/claudeCli.js";
 import { createMcpServer } from "./src/mcp.js";
@@ -69,6 +70,7 @@ if (has("help")) {
   --handler <h>        mike (default) or echo, which pins PRD 1's transport
   --engine <e>         claude (default) or stub, which spends no money
   --claude-bin <path>  the Claude Code binary to drive (default: claude)
+  --terminals <on|off> let Mike list and take over Claude Code sessions in terminals (default on)
   --worker-perms <p>   readonly (default), edits, or full — what a worker may do
   --worker-prompt <f>  the worker system prompt template (default ./prompts/worker.md)
   --mike-model <m>   the model Mike runs (default opus)
@@ -129,6 +131,10 @@ const config = {
 	handler: flag("handler", process.env.MIKE_HANDLER || "mike"),
 	engine: flag("engine", process.env.MIKE_ENGINE || "claude"),
 	claudeBin: flag("claude-bin", process.env.MIKE_CLAUDE_BIN || "claude"),
+	// Whether Mike can see and take over the Claude Code sessions running in
+	// terminals on this machine (src/terminals.js). The test harness turns it
+	// off, so a suite never sees, or stops, the sessions of whoever runs it.
+	terminals: flag("terminals", process.env.MIKE_TERMINALS || "on"),
 	mikeModel: flag("mike-model", process.env.MIKE_MODEL || "opus"),
 	mikeCwd: flag("mike-cwd", process.env.MIKE_CWD || null),
 	mikePrompt: flag("mike-prompt", process.env.MIKE_PROMPT || path.join(HERE, "prompts", "mike.md")),
@@ -169,6 +175,7 @@ if (!isKnownModel(config.workerModel)) { log.error(`--worker-model "${config.wor
 if (!isKnownModel(config.mikeModel)) { log.error(`--mike-model "${config.mikeModel}" is unknown; use ${MODEL_LIST}`); process.exit(1); }
 if (!isMode(config.defaultMode)) { log.error(`--mode must be one of ${Object.values(MODES).join(", ")}`); process.exit(1); }
 if (!["mike", "echo"].includes(config.handler)) { log.error(`--handler must be mike or echo`); process.exit(1); }
+if (!["on", "off"].includes(config.terminals)) { log.error(`--terminals must be on or off`); process.exit(1); }
 if (!["claude", "stub"].includes(config.engine)) { log.error(`--engine must be claude or stub`); process.exit(1); }
 if (config.whisper !== "off" && !/^https?:\/\//.test(config.whisper)) { log.error(`--whisper must be a URL or "off", got "${config.whisper}"`); process.exit(1); }
 for (const [name, v] of [["--context-turns", config.contextTurns], ["--context-budget", config.contextBudget], ["--turn-timeout", config.turnTimeoutMs],
@@ -187,10 +194,18 @@ const registry = new WorkerRegistry({
 	file: path.join(config.dataDir, "workers.json"),
 	log, defaultModel: config.workerModel, defaultCwd: config.workerCwd, dirs
 });
+// PRD 3's PC → glasses handoff. `own` keeps Mike's own session out of every
+// list: his `claude -p` turns show up in Claude Code's session list like any
+// other process. Read at call time, when `mike` exists.
+const terminals = createTerminals({
+	bin: config.claudeBin, log, enabled: config.terminals === "on",
+	projectsDir: process.env.MIKE_CLAUDE_PROJECTS || undefined,
+	own: () => [mike.sessionId]
+});
 const engine = config.engine === "stub"
 	? createStubWorkerEngine({ log })
-	: createClaudeWorkerEngine({ permissions: config.workerPerms, promptFile: config.workerPrompt, log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.workerTimeoutMs });
-const toolset = createToolset({ registry, engine, log, dirs });
+	: createClaudeWorkerEngine({ permissions: config.workerPerms, promptFile: config.workerPrompt, log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.workerTimeoutMs, holder: terminals.enabled ? (id) => terminals.holder(id) : undefined });
+const toolset = createToolset({ registry, engine, log, dirs, terminals });
 const mcp = createMcpServer({ store, toolset, registry, log });
 
 // ------------------------------------------------------------------- mike

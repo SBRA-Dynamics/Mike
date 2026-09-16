@@ -177,6 +177,18 @@ errors — turns are silently lost instead.
   was written). So a terminal-started session's turns *are* on disk and
   adoptable by id. It is simply not built — it falls outside R3.1–R3.7 — and
   whoever builds it measures the read path first.
+- *PC → server, built (claude 2.1.273, 2026-09-16).* Terminal sessions run as
+  `claude --bg` with a book name (`scripts/terminal-session.mjs`), and
+  `connect_terminal` adopts one: `claude agents --json --all` finds it by name
+  (a live process has a `pid`; a finished or stopped one says `done` without
+  one), `claude stop` ends its process — an attached terminal drops back to its
+  prompt — and the worker resumes the session id in the session's cwd. Measured
+  with the real CLI: a background session stopped that way and then resumed
+  with `claude -p --resume` in the same folder answered from its history.
+  A `-p` process is listed too, as `interactive`, so a live entry is not
+  proof of a terminal. A session busy with a turn is refused, not stopped, and
+  every worker turn first asks whether a process holds its session — a
+  terminal that picked it up again gets the baton back instead of a fork.
 - Turn cost, one-shot per turn: ~8.7 s cold, ~5 s warm (haiku, trivial prompt).
 
 **What requirement 3 can honestly promise**: handoff, not sharing. The server

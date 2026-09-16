@@ -176,9 +176,32 @@ sentences go to it by default.
 | "Mike, end Wyoh" | the worker is stopped; its name is free again |
 | "Mike, what is Prof doing?" | Mike reads Prof's last turns and tells you |
 | "Mike, rename Wyoh to Firmware" | a new spoken name |
+| "Mike, what is running on the computer?" | the Claude Code sessions running in terminals |
+| "Mike, connect to Prof" / "Mike, anslut till Prof" | a terminal session becomes a worker: its terminal process is stopped and the conversation continues here |
 
 Names from the book, when you do not pick one: Mannie, Wyoh, Prof, Mum,
 Grandpaw, Milla, Greg, Hans, Sidris.
+
+**From the computer to the glasses.** Start Claude Code in a terminal as a
+background session, and give it a name from the book — the `Claude` shell
+function in the dotfiles does both, through `scripts/terminal-session.mjs`:
+
+```bash
+Claude() {   # sketch; the real one also passes subcommands and -p straight through
+	out=$(claude --dangerously-skip-permissions --bg -n "$(node ~/mike/scripts/terminal-session.mjs name)" "$@")
+	claude attach "$(sed -n 's/.*backgrounded · \([0-9a-f]\{8\}\).*/\1/p' <<<"$out")"
+}
+```
+
+The session keeps running when the terminal is closed or left with Ctrl+Z, and
+"Mike, connect to Wyoh" takes it over: the background process is stopped (an
+attached terminal drops back to its prompt), and the worker resumes the same
+session in the same folder, on the same model, with where it left off on the
+lens. A session that is in the middle of a turn is refused rather than cut
+off. Back at the computer, `Claude -r Wyoh` opens it in the terminal again —
+and from then on the worker refuses to take a turn until Mike is told to
+connect to it again, because two drivers of one session silently lose turns.
+New workers never get a name a terminal session already has.
 
 **Asides.** While you are talking to a worker, "Mike, …" still reaches Mike,
 and he knows which worker you are with: "Mike, list the files in the folder
@@ -461,6 +484,7 @@ src/
   mcp.js tools.js    the tool surface Mike acts through
   routing.js         who an utterance is for, the addressing modes, the commands
   names.js           spoken names, folded for matching; the book's names
+  terminals.js       Claude Code sessions in terminals, for connect_terminal
   whisper.js audio.js  transcription client and audio intake
 client/              the Even Hub plugin: lens + companion, one build
   src/lens/render.ts     the frame: title bar, body, bottom edge, both budgets

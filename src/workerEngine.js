@@ -37,6 +37,12 @@
 //        The caller keeps name, model, folder and system prompt — a reset
 //        forgets the conversation, not the job.
 //
+//   async adopt(worker, { sessionId, history }) -> { engineSessionId }
+//        Make the worker the driver of a Claude Code session that already
+//        exists — one started in a terminal (terminals.js). `history` is where
+//        that conversation left off, [{ role, text, at }], so the worker is
+//        quoted from where it was and not as someone who never spoke.
+//
 //   interrupt(worker)                -> boolean
 //        Stop a turn in flight, for PRD 1's `interrupt`. True when there was
 //        one. Added by PRD 3: a turn that takes minutes has to be stoppable
@@ -111,6 +117,12 @@ export function createStubWorkerEngine({ log } = {}) {
 			// Transcript intentionally kept: PRD 3 keeps it too.
 		},
 
+		async adopt(worker, { sessionId, history = [] } = {}) {
+			threads.set(worker.id, history.slice(-TRANSCRIPT_DEPTH).map((e) => ({ ...e })));
+			log?.info(`worker adopt ${worker.name} session ${String(sessionId).slice(0, 8)} (stub engine)`);
+			return { engineSessionId: sessionId ?? null };
+		},
+
 		async reset(worker) {
 			threads.delete(worker.id);
 			log?.info(`worker reset ${worker.name} (stub engine)`);
@@ -179,7 +191,8 @@ const clip = (s, n = MAX_QUOTED_CHARS) => {
  */
 export function createClaudeWorkerEngine({
 	log, dataDir, bin = "claude", runner, tracker = new ChildTracker(),
-	timeoutMs = DEFAULT_WORKER_TIMEOUT_MS, env, permissions = "readonly", promptFile, extraServers
+	timeoutMs = DEFAULT_WORKER_TIMEOUT_MS, env, permissions = "readonly", promptFile, extraServers,
+	holder
 } = {}) {
 	if (!dataDir) throw new Error("createClaudeWorkerEngine needs a dataDir for transcripts");
 
@@ -260,8 +273,8 @@ export function createClaudeWorkerEngine({
 		return t;
 	};
 
-	const append = (worker, role, text) => {
-		const entry = { role, text: clip(text), at: Date.now() };
+	const append = (worker, role, text, at = Date.now()) => {
+		const entry = { role, text: clip(text), at };
 		const t = thread(worker);
 		t.push(entry);
 		if (t.length > MEMORY_DEPTH) t.splice(0, t.length - MEMORY_DEPTH);
@@ -401,6 +414,19 @@ export function createClaudeWorkerEngine({
 					e.kind = "interrupted";
 					throw e;
 				}
+				// A session somebody has open in a terminal again is theirs until
+				// it is taken back. A turn here would be T1's second driver: both
+				// sides answered, one of them silently unsaid. Refused before the
+				// words reach the transcript, because they never reached a model.
+				if (holder && worker.sessionCreated) {
+					const h = await holder(worker.engineSessionId);
+					if (h) {
+						log?.warn(`worker ${worker.name} turn refused: session ${String(worker.engineSessionId).slice(0, 8)} is held by pid ${h.pid}`);
+						const e = new Error(`open in a terminal — connect to ${worker.name} to take it back`);
+						e.kind = "held";
+						throw e;
+					}
+				}
 				if (ticket) ticket.begun = true;
 				append(worker, "user", text);
 				try {
@@ -429,6 +455,24 @@ export function createClaudeWorkerEngine({
 			// about, and read_worker's cost is paid in his context.
 			const t = thread(worker).filter((e) => e.role !== "meta");
 			return t.slice(-Math.max(1, turns) * 2);
+		},
+
+		async adopt(worker, { sessionId, history = [] } = {}) {
+			if (!/^[0-9a-f-]{36}$/i.test(String(sessionId))) throw new Error(`not a session id: ${sessionId}`);
+			// Whatever this record was driving before is let go of first, the
+			// same way a reset does it.
+			this.interrupt(worker);
+			await (queues.get(worker.id) ?? Promise.resolve());
+			threads.delete(worker.id);
+			// The terminal's conversation becomes this worker's transcript from
+			// here on. Written, not just held in memory: a restart must still
+			// quote it.
+			for (const e of history.slice(-MEMORY_DEPTH)) append(worker, e.role, e.text, e.at);
+			worker.engineSessionId = sessionId;
+			worker.sessionCreated = true;
+			append(worker, "meta", "session-created");
+			log?.info(`worker adopt ${worker.name} session ${sessionId.slice(0, 8)} cwd=${worker.cwd} (${history.length} lines of history)`);
+			return { engineSessionId: sessionId };
 		},
 
 		/** Stop a turn in flight. Nothing else to stop: there is no resident

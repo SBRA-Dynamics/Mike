@@ -72,6 +72,31 @@ const dir = process.env.FAKE_CLAUDE_DIR;
 if (!dir) die("fake-claude: FAKE_CLAUDE_DIR is not set");
 mkdirSync(dir, { recursive: true });
 
+// `claude agents --json [--all]` and `claude stop <id>`, the two subcommands
+// src/terminals.js reads the terminal sessions through. The sessions are
+// whatever a test wrote to $FAKE_CLAUDE_DIR/agents.json, in the shape 2.1.273
+// prints: a live one has a `pid`, a stopped one does not and says "done".
+// `stop` drops the pid, the way the real one ends the process.
+if (argv[0] === "agents" || argv[0] === "stop") {
+	const agentsFile = join(dir, "agents.json");
+	const agents = existsSync(agentsFile) ? JSON.parse(readFileSync(agentsFile, "utf8")) : [];
+	if (process.env.FAKE_CLAUDE_AGENTS_FAIL) die("fake-claude: agents is broken");
+	if (argv[0] === "agents") {
+		const shown = has("--all") ? agents : agents.filter((a) => a.pid);
+		process.stdout.write(JSON.stringify(shown, null, 2) + "\n");
+		process.exit(0);
+	}
+	const a = agents.find((x) => x.id === argv[1] || x.sessionId === argv[1]);
+	if (!a) die(`fake-claude: no background session ${argv[1]}`);
+	if (process.env.FAKE_CLAUDE_STOP_FAIL) die("fake-claude: stop is broken");
+	delete a.pid;
+	delete a.status;
+	a.state = "done";
+	writeFileSync(agentsFile, JSON.stringify(agents, null, 1));
+	process.stdout.write(`stopped ${a.id}\n`);
+	process.exit(0);
+}
+
 // A simulated failure, so the server's error paths can be exercised without
 // breaking the binary. FAKE_CLAUDE_FAIL=exit|error|error-once|hang|slow|
 // created-then-hang|created-then-die|exit-quiet|say-then-hang.
@@ -203,6 +228,7 @@ const READ = R(`(?:what\\s+(?:is|was)\\s+${NAME}\\s+(?:working on|doing|up to)|v
 const LIST_WORKERS = R("(?:list|show|lista|visa)\\s+(?:the\\s+|alla\\s+)?(?:workers|arbetare|arbetarna)");
 const END = R(`(?:end|stop|avsluta|stoppa)\\s+(?:the\\s+)?(?:worker\\s+)?${NAME}\\s*[.!?]?\\s*$`);
 const RESET = R(`(?:reset|nollställ|nollstall)\\s+(?:the\\s+)?(?:worker\\s+|arbetaren\\s+)?${NAME}\\s*[.!?]?\\s*$`);
+const CONNECT = R(`(?:connect to|take over|anslut till|ta över|ta over)\\s+${NAME}\\s*[.!?]?\\s*$`);
 const LIST_FILES = R("(?:list|show|lista|visa)\\s+(?:the\\s+|de\\s+)?(?:files|filerna|filer)");
 
 /** The bracketed block PRD 3 injects. Reading the working directory out of it
@@ -249,6 +275,10 @@ const answer = async () => {
 	}
 	if ((m = said.match(END))) {
 		const r = await callTool("end_worker", { name: m[1] });
+		return r.isError ? `Could not: ${r.text}` : r.text;
+	}
+	if ((m = said.match(CONNECT))) {
+		const r = await callTool("connect_terminal", { session: m[1] });
 		return r.isError ? `Could not: ${r.text}` : r.text;
 	}
 	if ((m = said.match(SWITCH))) {

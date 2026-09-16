@@ -11,6 +11,9 @@
 //   terminal-session.mjs find <ref>    the short id of the background session
 //                                      <ref> names (id, id prefix or name);
 //                                      exit 1 when none does
+//   terminal-session.mjs after <id>    after `claude attach <id>` returns: a
+//                                      line saying so when Mike has taken the
+//                                      session over, nothing otherwise
 //
 // Taken names are every background session Claude Code still knows — a stopped
 // one can be attached again, so its name is not free — every live interactive
@@ -32,10 +35,10 @@ const sessions = () => {
 	}
 };
 
-const workerNames = () => {
+const workers = () => {
 	const dataDir = process.env.MIKE_DATA || path.join(homedir(), ".local", "share", "mike");
 	try {
-		return JSON.parse(readFileSync(path.join(dataDir, "workers.json"), "utf8")).workers?.map((w) => w.name) ?? [];
+		return JSON.parse(readFileSync(path.join(dataDir, "workers.json"), "utf8")).workers ?? [];
 	} catch {
 		return [];
 	}
@@ -44,7 +47,7 @@ const workerNames = () => {
 const [cmd, ref] = process.argv.slice(2);
 
 if (cmd === "name") {
-	const taken = new Set([...sessions().map((s) => s.name), ...workerNames()].filter(Boolean).map(normalizeName));
+	const taken = new Set([...sessions().map((s) => s.name), ...workers().map((w) => w.name)].filter(Boolean).map(normalizeName));
 	console.log(pickName(taken));
 } else if (cmd === "find" && ref) {
 	const key = normalizeName(ref);
@@ -52,7 +55,14 @@ if (cmd === "name") {
 		s.id === ref || s.sessionId === ref || (ref.length >= 8 && s.sessionId?.startsWith(ref)) || (s.name && normalizeName(s.name) === key));
 	if (!hit) process.exit(1);
 	console.log(hit.id);
+} else if (cmd === "after" && ref) {
+	// The attached terminal ends with "Session … has exited." whether the user
+	// stopped it or Mike took it; only the second is worth a sentence.
+	const s = sessions().find((x) => x.id === ref || x.sessionId === ref);
+	if (!s || s.pid) process.exit(0);
+	const w = workers().find((x) => x.engineSessionId === s.sessionId);
+	if (w) console.log(`${w.name} continues in Mike. Back here: Claude -r ${s.name ?? s.id}`);
 } else {
-	console.error("usage: terminal-session.mjs name | find <id|name>");
+	console.error("usage: terminal-session.mjs name | find <id|name> | after <id>");
 	process.exit(2);
 }

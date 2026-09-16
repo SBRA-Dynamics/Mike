@@ -77,9 +77,11 @@ export class WorkerRegistry {
 	 * Create a worker. Throws ToolError on a collision, a reserved name, an
 	 * unknown model or a working directory that is not there.
 	 */
-	/** A name for a worker nobody named: one from the book that is free. */
-	freeName() {
-		return pickName(new Set(this.workers.keys()));
+	/** A name for a worker nobody named: one from the book that is free.
+	 *  `alsoTaken` holds folded names in use elsewhere — the Claude Code
+	 *  sessions in terminals, which are workers-to-be under their own names. */
+	freeName(alsoTaken = []) {
+		return pickName(new Set([...this.workers.keys(), ...alsoTaken]));
 	}
 
 	create({ name, model, cwd, systemPrompt }) {

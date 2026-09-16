@@ -8,7 +8,7 @@
     "start": "node --env-file-if-exists=$HOME/.config/mike/env server.js",
     "build:client": "npm --prefix client install && npm --prefix client run build",
     "publish": "node scripts/publish.mjs",
-    "test": "node test/run.mjs && node test/crash-recovery.mjs && node test/mcp.mjs && node test/prd3.mjs && node test/prd4.mjs && node test/prd5a.mjs && node test/prd5b.mjs && node test/noise.mjs && node test/prd6-timers.mjs",
+    "test": "node test/run.mjs && node test/crash-recovery.mjs && node test/mcp.mjs && node test/prd3.mjs && node test/terminals.mjs && node test/prd4.mjs && node test/prd5a.mjs && node test/prd5b.mjs && node test/noise.mjs && node test/prd6-timers.mjs",
     "test:car": "node test/car-noise.mjs",
     "test:lens": "node test/prd4-lens.mjs",
     "test:live": "node test/mcp-live.mjs && node test/e2e-live.mjs",

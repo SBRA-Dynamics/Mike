@@ -53,7 +53,12 @@ export async function startServer(extraArgs = [], { env: extraEnv = {} } = {}) {
 	// the assertions here are written against, and the suite would pass or fail
 	// depending on whose machine it ran on. A suite that wants extra servers
 	// passes its own path in `env`, which still wins.
-	const env = { MIKE_HOLD_MS: "0", ...process.env, MIKE_MCP_SERVERS: join(dataDir, "no-extra-mcp.json"), ...extraEnv };
+	//
+	// MIKE_TERMINALS is off for the same reason and a stronger one: with it on,
+	// a suite would list the Claude Code sessions of whoever runs it, and a
+	// connect_terminal test could stop one. test/terminals.mjs turns it on
+	// against the stand-in binary.
+	const env = { MIKE_HOLD_MS: "0", ...process.env, MIKE_MCP_SERVERS: join(dataDir, "no-extra-mcp.json"), MIKE_TERMINALS: "off", ...extraEnv };
 
 	// Port 0: the OS hands out one that is free, and tells us which.
 	//
