@@ -154,7 +154,7 @@ import { PromptFile, fillTemplate } from "./promptFile.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createClaudeRunner, ChildTracker } from "./claudeCli.js";
+import { createClaudeRunner, ChildTracker, DEFAULT_WORKER_TIMEOUT_MS } from "./claudeCli.js";
 import { extraMcpServers, mcpWildcard } from "./mcpServers.js";
 
 /** Kept in memory per worker; the file on disk is the authority across a
@@ -179,7 +179,7 @@ const clip = (s, n = MAX_QUOTED_CHARS) => {
  */
 export function createClaudeWorkerEngine({
 	log, dataDir, bin = "claude", runner, tracker = new ChildTracker(),
-	timeoutMs, env, permissions = "readonly", promptFile, extraServers
+	timeoutMs = DEFAULT_WORKER_TIMEOUT_MS, env, permissions = "readonly", promptFile, extraServers
 } = {}) {
 	if (!dataDir) throw new Error("createClaudeWorkerEngine needs a dataDir for transcripts");
 
@@ -302,28 +302,43 @@ export function createClaudeWorkerEngine({
 		const id = worker.engineSessionId;
 		if (!id) throw new Error(`worker ${worker.name} has no session id`);
 
-		const r = await cli.run({
+		const opts = {
 			prompt: text,
 			cwd: worker.cwd,
 			model: worker.modelId ?? worker.model,
 			permissions,
 			appendSystemPrompt: promptFor(worker),
 			...(extraConfig ? { mcpConfig: extraConfig, allowedTools: extraTools } : {}),
-			...(first ? { sessionId: id } : { resume: id }),
 			onSpawn: (child) => inflight.set(worker.id, child),
 			// PRD 6: partial answers and tool names, while the turn is still
 			// running. The caller decides whether anyone is listening.
 			onProgress
-		});
+		};
+
+		let r = await cli.run({ ...opts, ...(first ? { sessionId: id } : { resume: id }) });
+
+		// The CLI refused to create the id because it already has it: a first
+		// turn that was stopped or timed out after the session existed, or a
+		// process of ours that was killed and left the id behind. Resuming is
+		// what we would have done had we known, and the retry is the difference
+		// between that and a worker nobody can talk to again.
+		if (first && r.sessionTaken) {
+			log?.warn(`worker ${worker.name} session ${String(id).slice(0, 8)} already exists; resuming it instead of creating it`);
+			worker.sessionCreated = true;
+			append(worker, "meta", "session-created");
+			r = await cli.run({ ...opts, resume: id });
+		}
 		inflight.delete(worker.id);
 
 		// Recorded on the strength of the CLI having named the session, not of
 		// the turn having worked. Both halves matter: a spawn that never got off
 		// the ground must NOT be recorded, or every later turn resumes an id
-		// that was never created; and an API error — which arrives as exit 0
-		// with is_error set, after the session exists — must be, or every later
-		// turn tries to create it again and fails with "already exists".
-		if (first && (r.ok || r.sessionId)) {
+		// that was never created; and every failure AFTER the session exists —
+		// an API error (exit 0 with is_error), a turn the user stopped, a
+		// timeout — must be, or every later turn tries to create it again and
+		// fails with "already in use". The CLI names the session on the stream's
+		// first event, which is what makes that knowable.
+		if (first && (r.ok || r.sessionId) && !worker.sessionCreated) {
 			worker.sessionCreated = true;
 			append(worker, "meta", "session-created");
 		}
@@ -332,6 +347,9 @@ export function createClaudeWorkerEngine({
 			log?.warn(`worker ${worker.name} turn failed (${r.kind}): ${r.error}`);
 			const e = new Error(r.error || "the worker could not answer");
 			e.kind = r.kind;
+			// See mike.js: a turn cut at the cap still said something, and that
+			// something is the answer as far as anyone is concerned.
+			if (r.partial) e.partial = r.partial;
 			throw e;
 		}
 		log?.info(`worker ${worker.name} turn ok in ${r.durationMs}ms cost=$${(r.costUsd ?? 0).toFixed(4)}`);
@@ -395,7 +413,11 @@ export function createClaudeWorkerEngine({
 					// a worker that was never asked. An interrupt is recorded as
 					// what it was: Mike reading "(no answer: stopped)" back would
 					// have him apologising for something the user chose.
-					append(worker, "assistant", e.kind === "interrupted" ? "(stopped by the user)" : `(no answer: ${e.message})`);
+					// A cut-off turn goes in as what it said, with a note of the
+					// cut — not as "(no answer)", which would be a lie the next
+					// turn reads back as if the worker had sat there silent.
+					if (e.partial) append(worker, "assistant", `${e.partial}\n(${e.message})`);
+					else append(worker, "assistant", e.kind === "interrupted" ? "(stopped by the user)" : `(no answer: ${e.message})`);
 					throw e;
 				}
 			});

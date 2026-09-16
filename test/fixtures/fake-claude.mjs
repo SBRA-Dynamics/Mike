@@ -62,20 +62,40 @@ const emit = (v) => process.stdout.write(JSON.stringify(v) + "\n");
 const assistant = (content) => { if (streaming) emit({ type: "assistant", message: { role: "assistant", content }, session_id: id }); };
 
 const die = (msg, code = 1) => { process.stderr.write(msg + "\n"); process.exit(code); };
+/** Never comes back, and keeps the process alive while it does not. Awaited,
+ *  not just scheduled: a bare `setInterval` leaves the script RUNNING, so a
+ *  "hang" answered the turn in full and then refused to exit, which is a
+ *  different failure from the one the caller asked for. */
+const stall = () => { setInterval(() => { }, 1 << 30); return new Promise(() => { }); };
 
 const dir = process.env.FAKE_CLAUDE_DIR;
 if (!dir) die("fake-claude: FAKE_CLAUDE_DIR is not set");
 mkdirSync(dir, { recursive: true });
 
 // A simulated failure, so the server's error paths can be exercised without
-// breaking the binary. FAKE_CLAUDE_FAIL=exit|error|error-once|hang|slow.
+// breaking the binary. FAKE_CLAUDE_FAIL=exit|error|error-once|hang|slow|
+// created-then-hang|created-then-die|exit-quiet|say-then-hang.
 // `error-once` is the nasty one worth reproducing: the real CLI reports an API
 // failure as exit 0 with is_error set, AFTER it has created the session — so a
 // server that does not record the session as existing tries to create it again
 // on the next turn and is wedged for good.
+// The `created-then-*` pair is the same nastiness from the other side: the real
+// CLI creates the session as it starts up, so a turn that is killed or crashes
+// halfway leaves a session that EXISTS and is empty. `created-then-hang` says so
+// on the stream first (an `init` event naming the session); `created-then-die`
+// says nothing at all, which is the case the server can only recover from by
+// reading the refusal on the NEXT turn.
+// `exit-quiet` exits non-zero having written nothing but the stream: the case
+// where the only thing a server could quote back is a line of JSON.
+// `say-then-hang` is the long job that runs into the cap: it says one sentence
+// and then never finishes, so there is something for the server to report when
+// it cuts the process off.
+// The three of them fail only on the turn that CREATES the session (`--session-id`),
+// because the bug each one sets up is about what the NEXT turn does — a fixture
+// that failed for ever could not show a recovery.
 const failMode = process.env.FAKE_CLAUDE_FAIL ?? "";
 if (failMode === "exit") die("fake-claude: simulated crash", 2);
-if (failMode === "hang") { setInterval(() => { }, 1 << 30); }
+if (failMode === "hang") await stall();
 if (failMode === "slow") await new Promise((r) => setTimeout(r, Number(process.env.FAKE_CLAUDE_SLOW_MS ?? 3000)));
 
 const sessionId = opt("--session-id");
@@ -96,6 +116,37 @@ if (sessionId) {
 	if (!existsSync(file)) die(`fake-claude: no conversation found with session id ${id}`);
 	state = JSON.parse(readFileSync(file, "utf8"));
 }
+
+// A turn killed before this point leaves the server nothing to go on: the
+// session is there, and nobody said so. The only way out of it is the refusal
+// the next turn gets, which is what the server now acts on.
+if (failMode === "created-then-die" && sessionId) {
+	writeFileSync(file, JSON.stringify(state, null, 1));
+	die("fake-claude: simulated crash after the session was created", 2);
+}
+
+// The stream's first event, framed the way the real CLI frames it. Its
+// `session_id` is how the server learns the session exists even when the turn
+// goes on to be killed or to time out — see claudeCli.js.
+if (streaming) emit({ type: "system", subtype: "init", session_id: id, cwd: process.cwd(), model: opt("--model") });
+
+if (failMode === "created-then-hang" && sessionId) {
+	writeFileSync(file, JSON.stringify(state, null, 1));
+	await stall();
+}
+
+// A turn that says something and then never finishes — the long job that runs
+// into the cap. What it managed to say is on the stream before the hang, which
+// is the whole of what the server has to report when it cuts the process off.
+if (failMode === "say-then-hang" && sessionId) {
+	writeFileSync(file, JSON.stringify(state, null, 1));
+	assistant([{ type: "text", text: "Jag har läst filen och börjar med testerna." }]);
+	await stall();
+}
+
+// Nothing readable, a non-zero exit, and a stream on stdout: the shape that used
+// to put `{"type":"system","subtype":"init",…` on the lens as the answer.
+if (failMode === "exit-quiet") process.exit(1);
 
 // Recorded so a test can assert what the server actually passed without having
 // to intercept a process: the model, the system prompt, the allowed tools.

@@ -198,11 +198,10 @@ export function createMike({
 		const first = !identity.started;
 		const context = contextFor(session);
 
-		const r = await cli.run({
+		const opts = {
 			prompt: composePrompt(text, context),
 			cwd,
 			model,
-			...(first ? { sessionId: identity.sessionId } : { resume: identity.sessionId }),
 			appendSystemPrompt: prompt.read() || undefined,
 			// sessionConfig, not config: this process is spawned here, on this
 			// machine, so it is the one that may hold the operator's extra
@@ -216,21 +215,40 @@ export function createMike({
 			// PRD 6: the turn is read as it is written, so the lens can stop
 			// saying "thinking" and start saying what he is doing.
 			onProgress
-		});
+		};
+
+		let r = await cli.run({ ...opts, ...(first ? { sessionId: identity.sessionId } : { resume: identity.sessionId }) });
+
+		// The session is there and somebody else made it: a first turn that was
+		// stopped or timed out after the CLI had already created it, or a process
+		// of ours that was killed and left the id behind. Resuming is what we
+		// would have done had we known, and one retry is the difference between
+		// that and Mike being unreachable until his identity file is deleted.
+		if (first && r.sessionTaken) {
+			log?.warn(`mike: session ${String(identity.sessionId).slice(0, 8)} already exists; resuming it instead of creating it`);
+			identity.markStarted();
+			r = await cli.run({ ...opts, resume: identity.sessionId });
+		}
 		child = null;
 
 		// Marked before the failure is raised, and on the strength of the CLI
-		// having named the session rather than of the turn having worked. An API
-		// error arrives as exit 0 with is_error set, and by then the session
-		// exists — so retrying the next turn with --session-id would fail
-		// forever with "already exists", and Mike would be unreachable because
-		// of one bad minute at Anthropic.
+		// having named the session rather than of the turn having worked. Every
+		// kind of failure that happens AFTER the session exists has to mark it:
+		// an API error (exit 0 with is_error), a turn the user stopped, a
+		// timeout. All three carry the session id off the stream, and without
+		// the mark the next turn would try to create the id again and fail
+		// forever with "already in use" — Mike unreachable because of one bad
+		// minute at Anthropic, or one "stop" said too early.
 		if (first && (r.ok || r.sessionId)) identity.markStarted();
 
 		if (!r.ok) {
 			log?.warn(`mike turn failed (${r.kind}): ${r.error}`);
 			const e = new Error(r.error || "I could not answer that");
 			e.kind = r.kind;
+			// What he had already said when the turn was cut at the cap. Carried
+			// on the error rather than swallowed: the turn failed, and the words
+			// are still his and still the only account of ten minutes of work.
+			if (r.partial) e.partial = r.partial;
 			throw e;
 		}
 		identity.countTurn();

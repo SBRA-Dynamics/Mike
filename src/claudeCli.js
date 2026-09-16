@@ -30,9 +30,19 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
-/** A turn that never comes back must not wedge the worker forever. Ten minutes
- *  is longer than any answer and shorter than a lost afternoon. */
+/** A turn that never comes back must not wedge the caller forever. Ten minutes
+ *  is longer than any answer someone is waiting on and shorter than a lost
+ *  afternoon. It is what Mike and the classifier run on: a turn a person is
+ *  listening to has gone wrong long before ten minutes are up. */
 export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** What a WORKER gets instead. Nobody is waiting on a lens for it — the point
+ *  of a worker is that it is given a build, a migration, a long read and left
+ *  to it — so the cap is not "how long before the user gives up" but "how long
+ *  before a wedged process is certainly wedged". Ten minutes cut real work in
+ *  half; three hours is longer than any job it is sane to hand one and still
+ *  short enough that a hung child is reaped the same day. */
+export const DEFAULT_WORKER_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
 /** How often a turn that is producing nothing readable still says it is alive.
  *  The stream writes a line per event — a tool call, a tool's answer — and
@@ -41,9 +51,70 @@ export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
  *  enough to be free. */
 export const ALIVE_MS = 5000;
 
+/** How long before the cap a turn says it is about to be cut off. A ten-minute
+ *  turn that dies in silence is indistinguishable from a hang, and the minute
+ *  is enough for the user to decide whether to say something about it. */
+export const CUTOFF_WARN_MS = 60 * 1000;
+
+/** How much of a cut-off turn's own words are kept to hand back. The point is
+ *  that nothing it managed to say is lost, not that a lens can read all of it —
+ *  the transcript is where the rest of it is read. */
+const PARTIAL_KEEP = 4000;
+
+/** The cap as a person says it. A worker's cap is hours, a test's is seconds,
+ *  and "cut off after 180 min" is a number the reader has to divide. */
+const humanMs = (ms) => {
+	if (ms >= 60 * 60 * 1000) {
+		const h = ms / (60 * 60 * 1000);
+		return `${Number.isInteger(h) ? h : h.toFixed(1)} h`;
+	}
+	return Math.round(ms / 60000) >= 1 ? `${Math.round(ms / 60000)} min` : `${Math.round(ms / 1000)}s`;
+};
+
 /** What we keep of a run that failed, for the log. Full stderr from a crashed
  *  CLI can be megabytes of stack. */
 const errTail = (s) => String(s ?? "").trim().split("\n").slice(-4).join(" ").slice(0, 400);
+
+/** The lines of a stream that a person could read. A `--output-format
+ *  stream-json` turn writes JSON objects, one per line, and the tail of that is
+ *  the WORST thing to hand a caller as an error: it ends up on a fifty-column
+ *  lens as `{"type":"system","subtype":"init","cwd":"/home…`, which says
+ *  nothing and hides the one line that did. */
+const prose = (s) => String(s ?? "").split("\n")
+	.map((l) => l.trim())
+	.filter((l) => l && !l.startsWith("{") && !l.startsWith("["))
+	.slice(-2).join(" ").replace(/\s+/g, " ").slice(0, 200);
+
+/**
+ * Why a run failed, as a sentence.
+ *
+ * In order of preference: what the CLI said in plain words (stderr first, then
+ * stdout), then the message carried INSIDE a stream event, and nothing at all
+ * rather than a raw event. The caller has no way to tell a sentence from a
+ * stream line once it is in an Error, so the choice is made here — this is the
+ * one file that knows what the CLI's output looks like.
+ */
+export function readableError(err, out) {
+	const said = prose(err) || prose(out);
+	if (said) return said;
+	for (const line of String(out ?? "").split("\n").reverse()) {
+		const t = line.trim();
+		if (!t.startsWith("{")) continue;
+		try {
+			const v = JSON.parse(t);
+			const m = v?.error?.message ?? v?.message ?? (typeof v?.result === "string" ? v.result : null);
+			if (typeof m === "string" && m.trim()) return m.replace(/\s+/g, " ").trim().slice(0, 200);
+		} catch { /* a torn line; the next one up may be whole */ }
+	}
+	return "";
+}
+
+/** The CLI refusing a session id because something else has it: another process
+ *  still holding it, or one that was killed and left it behind. It is a
+ *  recoverable state — the session exists, so it can be resumed — and the
+ *  callers act on it, so it is detected here in the one place that reads the
+ *  CLI's words. */
+const SESSION_TAKEN = /session id\b[^.]*\b(?:is already in use|already exists)|already in use|already exists/i;
 
 /** How much of the raw stream is kept. Only the tail is ever used — for an
  *  error message, or for a CLI that printed one object instead of a stream —
@@ -150,7 +221,7 @@ export function createClaudeRunner({
 	env = process.env
 } = {}) {
 
-	const run = ({
+	const spawnTurn = ({
 		prompt, cwd, model, sessionId, resume,
 		appendSystemPrompt, systemPrompt, mcpConfig, allowedTools = [], permissions = "readonly", effort,
 		extraArgs = [], timeoutMs: perCall, onSpawn, onProgress
@@ -241,24 +312,47 @@ export function createClaudeRunner({
 		let result = null;
 		let pending = "";
 		let aliveAt = 0;
+		// The id the CLI itself named, off the stream, which is the only proof
+		// that the session now EXISTS. It arrives on the `init` event, before a
+		// word of the answer — so a turn that is killed, times out or crashes
+		// halfway still comes back knowing its session was created. Without it a
+		// first turn stopped by the user was indistinguishable from one that
+		// never started, and the next turn tried to create the same id again.
+		let streamSessionId = null;
+		// What the turn has said so far, and what it was last doing. A turn that
+		// is killed at the cap used to come back as nothing at all — ten minutes
+		// of work, one line of "no answer in 600s", and the half of the answer
+		// that had already been written thrown away with the process. It is kept
+		// here so the cut can be reported WITH what there is (see the killer
+		// below), which is the difference between a lost turn and a short one.
+		let said = "";
+		let lastDoing = null;
 
 		/** One event of the stream. Only two shapes matter to a lens: words the
 		 *  model has written, and the name of a tool it is running. Everything
 		 *  else — init, token estimates, rate limits — is bookkeeping. */
 		const event = (v) => {
+			if (!streamSessionId && typeof v?.session_id === "string") streamSessionId = v.session_id;
 			if (v?.type === "result") { result = v; return; }
-			if (v?.type !== "assistant" || !onProgress) return;
+			// Read whether or not anyone is listening: `said` is what a cut-off
+			// turn is reported with, and that has to be true of a turn nobody
+			// was watching the progress of.
+			if (v?.type !== "assistant") return;
 			for (const block of v.message?.content ?? []) {
 				// A thinking block is not an answer, and putting it on the lens
 				// would be quoting the model's notes to itself as if it had said
 				// them out loud.
-				if (block?.type === "text" && block.text) onProgress({ kind: "text", text: String(block.text) });
+				if (block?.type === "text" && block.text) {
+					if (said.length < PARTIAL_KEEP) said += (said ? "\n" : "") + String(block.text);
+					progress({ kind: "text", text: String(block.text) });
+				}
 				// `tool` is the raw name and `doing` is the sentence a lens shows.
 				// Both, because they answer different questions: the log wants the
 				// name, and the person looking up from what they were doing wants
 				// to know it is reading workerEngine.js.
 				else if (block?.type === "tool_use" && block.name) {
-					onProgress({ kind: "tool", tool: String(block.name), doing: describeTool(block.name, block.input) });
+					lastDoing = describeTool(block.name, block.input);
+					progress({ kind: "tool", tool: String(block.name), doing: lastDoing });
 				}
 			}
 		};
@@ -273,12 +367,41 @@ export function createClaudeRunner({
 				catch { /* a half-written line, or a CLI that said something in prose */ }
 			}
 		};
-		const finish = (v) => { if (!settled) { settled = true; clearTimeout(killer); resolve(v); } };
+		const finish = (v) => { if (!settled) { settled = true; clearTimeout(killer); clearTimeout(warner); resolve(v); } };
+
+		const cap = perCall ?? timeoutMs;
+
+		// Said before the kill, not after it: the cap is the one failure the
+		// user can do something about while it is still avoidable — ten minutes
+		// in, a turn that announces it is about to be cut is a turn they can
+		// answer, and one that simply stops is a hang they have to guess about.
+		//
+		// A minute's notice where there is a minute to give, and half the cap
+		// where there is not: a short cap is what the tests and the classifier
+		// use, and warning at t=0 that the turn ends in a minute would be a
+		// sentence that is simply untrue.
+		const warnAt = cap > CUTOFF_WARN_MS ? cap - CUTOFF_WARN_MS : Math.round(cap / 2);
+		const leftMs = cap - warnAt;
+		const warner = setTimeout(() => {
+			log?.warn(`claude turn ${Math.round(warnAt / 1000)}s in; cutting off in ${Math.round(leftMs / 1000)}s`);
+			progress({ kind: "warn", doing: `cut off in ${Math.max(1, Math.round(leftMs / 1000))}s`, ms: leftMs });
+		}, warnAt);
 
 		const killer = setTimeout(() => {
 			try { child.kill("SIGKILL"); } catch { }
-			finish({ ok: false, kind: "timeout", error: `no answer in ${Math.round((perCall ?? timeoutMs) / 1000)}s`, durationMs: Date.now() - started });
-		}, perCall ?? timeoutMs);
+			// With what it managed to say. The turn is over either way, and the
+			// half-answer is worth more than the sentence saying there is none —
+			// a ten-minute turn that ends in "no answer in 600s" is work thrown
+			// away, and this is the whole of what "report before it is cut" is.
+			const partial = said.trim();
+			log?.warn(`claude cut off at ${Math.round(cap / 1000)}s with ${partial.length} chars said${lastDoing ? `, last doing: ${lastDoing}` : ""}`);
+			finish({
+				ok: false, kind: "timeout",
+				error: `cut off after ${humanMs(cap)}`,
+				partial, doing: lastDoing,
+				sessionId: streamSessionId, durationMs: Date.now() - started
+			});
+		}, cap);
 
 		// A decoder rather than d.toString(): the stream is split on buffer
 		// boundaries, and a chunk that ends mid-character would otherwise put a
@@ -309,11 +432,20 @@ export function createClaudeRunner({
 			// did on purpose.
 			if (child.interrupted) {
 				log?.info(`claude interrupted after ${durationMs}ms`);
-				return finish({ ok: false, kind: "interrupted", error: "stopped", durationMs });
+				return finish({ ok: false, kind: "interrupted", error: "stopped", sessionId: streamSessionId, durationMs });
 			}
 			if (code !== 0) {
+				// The log gets the tail, raw. The CALLER gets a sentence: its
+				// error reaches a lens, and stream lines are not reading matter.
 				log?.warn(`claude exited ${code} in ${durationMs}ms: ${errTail(err) || errTail(out)}`);
-				return finish({ ok: false, kind: "exit", code, error: errTail(err) || errTail(out) || `claude exited ${code}`, durationMs });
+				return finish({
+					ok: false, kind: "exit", code,
+					error: readableError(err, out) || `claude exited ${code}`,
+					// A session the CLI refused to open because it is taken is a
+					// session that EXISTS; the caller can resume it instead.
+					sessionTaken: SESSION_TAKEN.test(`${err} ${out}`),
+					sessionId: streamSessionId, durationMs
+				});
 			}
 			try { consume("", true); } catch { /* the last line was torn; `result` decides below */ }
 
@@ -322,7 +454,10 @@ export function createClaudeRunner({
 			let parsed = result;
 			if (!parsed) {
 				try { parsed = JSON.parse(out); }
-				catch { return finish({ ok: false, kind: "parse", error: `unreadable answer: ${errTail(out)}`, durationMs }); }
+				catch {
+					log?.warn(`claude answered unreadably in ${durationMs}ms: ${errTail(out)}`);
+					return finish({ ok: false, kind: "parse", error: readableError(err, out) || "nothing readable came back", sessionId: streamSessionId, durationMs });
+				}
 			}
 
 			// `is_error` is the CLI saying the turn itself failed (an API error,
@@ -330,17 +465,53 @@ export function createClaudeRunner({
 			// would put an error string in the transcript as if Mike had said
 			// it, which is how a bad model name becomes a personality.
 			if (parsed?.is_error) {
-				return finish({ ok: false, kind: "model", error: errTail(parsed.result) || "the model could not answer", durationMs, sessionId: parsed.session_id });
+				return finish({ ok: false, kind: "model", error: errTail(parsed.result) || "the model could not answer", durationMs, sessionId: parsed.session_id ?? streamSessionId });
 			}
 			finish({
 				ok: true,
 				text: typeof parsed?.result === "string" ? parsed.result : "",
-				sessionId: parsed?.session_id ?? sessionId ?? resume ?? null,
+				sessionId: parsed?.session_id ?? streamSessionId ?? sessionId ?? resume ?? null,
 				costUsd: parsed?.total_cost_usd ?? 0,
 				durationMs
 			});
 		});
 	});
+
+	/** The turn in flight for each session id, so the next one can wait for it.
+	 *  Keyed by the id itself: `--session-id X` and `--resume X` are two ways of
+	 *  asking for the same conversation. */
+	const inFlight = new Map();
+
+	/**
+	 * One turn — and, per session, one at a time.
+	 *
+	 * The queue is not an optimisation, it is the invariant: two processes on one
+	 * session id is the failure T1 measured (a forked transcript, one turn
+	 * silently unsaid) and the one the CLI refuses outright with "Session ID … is
+	 * already in use". mike.js and workerEngine.js each serialise their own
+	 * turns, which is where a waiting utterance is visible to the user; this is
+	 * the floor under both of them, and it covers everything that reaches the CLI
+	 * by any other route — a tool call, a retry, a second server-side caller
+	 * added later.
+	 *
+	 * Waiting rather than refusing: the words were said, and the turn in flight
+	 * is bounded by its own timeout, so the wait is bounded too.
+	 */
+	const run = (opts) => {
+		const key = opts?.sessionId ?? opts?.resume ?? null;
+		if (!key) return spawnTurn(opts);
+
+		const prev = inFlight.get(key);
+		if (prev) log?.warn(`claude: session ${String(key).slice(0, 8)} is busy; this turn waits for the one in flight`);
+		const mine = prev ? prev.then(() => spawnTurn(opts)) : spawnTurn(opts);
+		// The chain the NEXT caller waits on must never reject: one failed turn
+		// would otherwise fail every turn queued behind it (same reasoning as
+		// workerEngine's enqueue).
+		const tail = mine.then(() => { }, () => { });
+		inFlight.set(key, tail);
+		tail.then(() => { if (inFlight.get(key) === tail) inFlight.delete(key); });
+		return mine;
+	};
 
 	return {
 		run,

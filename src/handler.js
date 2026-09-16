@@ -81,8 +81,20 @@ function createAudioIntake({ transcriber, maxBytes = DEFAULT_MAX_AUDIO_BYTES, lo
 }
 
 /** One line, no stack, short enough for a lens — the same rule the tools
- *  answer errors by (PRD 2 R2.5). */
-const lens = (e) => String(e?.message ?? e ?? "something went wrong").replace(/\s+/g, " ").trim().slice(0, 100);
+ *  answer errors by (PRD 2 R2.5).
+ *
+ *  And never a machine's own output. A turn that dies badly can carry the CLI's
+ *  raw stream in its message, and a line of `--output-format stream-json` on the
+ *  lens is the worst answer there is: it fills the screen, it says nothing, and
+ *  it reads as the server having lost its mind. claudeCli.js keeps JSON out of
+ *  its errors; this is the backstop at the seam where words reach a person, for
+ *  every other thing that can end up in an Error. */
+const lens = (e) => {
+	const t = String(e?.message ?? e ?? "something went wrong").replace(/\s+/g, " ").trim();
+	if (!t) return "something went wrong";
+	if (/^[[{]/.test(t) || /"(?:type|session_id|subtype)"\s*:/.test(t)) return "that turn ended badly — nothing readable came back";
+	return t.slice(0, 100);
+};
 
 export function createEchoHandler({ log, transcriber, audioMaxBytes }) {
 	// The echo handler is PRD 1's transport pin, and it gets the audio path too:
@@ -489,6 +501,10 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 		}
 
 		const at = { from, turn: turn?.id ?? null };
+		// The cap is a minute away. Said as a `doing` line because that is the
+		// row the user is already reading to know what the turn is up to, and
+		// because "cut off in 60s" is the most useful thing it can say there.
+		if (p?.kind === "warn") return session.transient(msg.event("progress", { ...at, doing: p.doing ?? null, warn: true }));
 		if (p?.kind === "tool" && p.tool) session.transient(msg.event("progress", { ...at, tool: p.tool, doing: p.doing ?? null }));
 		else if (p?.kind === "text" && p.text) session.transient(msg.event("progress", { ...at, text: p.text }));
 		else if (p?.kind === "alive") session.transient(msg.event("progress", { ...at, alive: true }));
@@ -510,6 +526,13 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 			// An interrupted turn is not a failure to report: the user asked for
 			// it and has already been told "Stopped."
 			if (e.kind === "interrupted") log?.info("mike turn stopped");
+			else if (e.partial) {
+				// The turn was cut, and what it had said is the answer. Emitted
+				// as words rather than as an error: it IS the conversation, and
+				// the note says why it stops where it does.
+				log?.warn(`mike turn cut off: ${e.message}`);
+				session.emit(msg.text(`${e.partial}\n(${lens(e)})`, "mike"));
+			}
 			else {
 				log?.error(`mike turn: ${e.stack || e.message}`);
 				session.emit(msg.error(lens(e)));
@@ -556,6 +579,14 @@ export function createMikeHandler({ log, mike, registry, engine, classifier, tra
 			finishTurn(session, turn);
 			// Interrupted is the user's own doing, same as for Mike above.
 			if (e.kind === "interrupted") log?.info(`worker ${worker.name} turn stopped`);
+			else if (e.partial) {
+				// Same as Mike above, and with the same background rule as a
+				// finished answer: a worker the user has switched away from does
+				// not take the lens, whether its turn ended or was cut.
+				log?.warn(`worker ${worker.name} turn cut off: ${e.message}`);
+				const background = session.worker !== worker.name;
+				session.emit(msg.text(`${e.partial}\n(${lens(e)})`, worker.name, background ? { background: true } : {}));
+			}
 			else {
 				log?.error(`worker ${worker.name} turn: ${e.stack || e.message}`);
 				session.emit(msg.error(`${worker.name}: ${lens(e)}`));

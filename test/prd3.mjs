@@ -13,11 +13,12 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { startServer, connect, check, failed, section, sleep, ROOT, grantTools, McpClient } from "./harness.mjs";
 import { route, stripAddress, matchModeCommand, applyModeCommand, MODES, ORIGIN } from "../src/routing.js";
 import { buildWorkerContext, composePrompt } from "../src/mike.js";
-import { describeTool } from "../src/claudeCli.js";
+import { describeTool, createClaudeRunner } from "../src/claudeCli.js";
 
 const FAKE = join(ROOT, "test", "fixtures", "fake-claude.mjs");
 
@@ -378,6 +379,127 @@ try {
 			okWorker[0]?.text === "turn 2: andra", JSON.stringify(okWorker));
 		c.close();
 		server.stop();
+	}
+
+	// The other half of the same wedge. `error-once` above is a session that
+	// exists because the CLI answered with an error; these are sessions that
+	// exist because the process was KILLED after creating one — a first turn
+	// stopped, a timeout, a crash. That is what took Mike out in the field: the
+	// next turn asked for the same id, the CLI refused it with "Session ID … is
+	// already in use", and a line of raw stream JSON went to the lens as the
+	// answer.
+	section("en session som redan skapats återupptas i stället för att skapas om");
+	{
+		// Nothing was said on the stream before the crash, so the only way the
+		// server can learn the session exists is the refusal on the NEXT turn.
+		const server = track(await startMike([], { FAKE_CLAUDE_FAIL: "created-then-die" }));
+		const c = await connect(server);
+		const bad = await say(c, "Mike, hej");
+		check("en tur som dör efter att sessionen skapats blir ett fel", bad.some((m) => m.type === "error"), JSON.stringify(bad));
+
+		const good = await say(c, "Mike, hej igen");
+		check("nästa tur går fram ändå — id:t är taget, så det återupptas",
+			textsOf(good).length === 1 && !good.some((m) => m.type === "error"), JSON.stringify(good));
+		check("och servern säger varför i loggen",
+			/already exists; resuming it instead/.test(server.log()), server.log().slice(-300));
+		check("ingen \"already in use\" når användaren",
+			!bad.concat(good).some((m) => m.type === "error" && /already (exists|in use)/i.test(m.message)),
+			JSON.stringify(bad.concat(good).filter((m) => m.type === "error")));
+
+		// Samma sak för en arbetare: dess första tur dör efter att sessionen
+		// skapats, och nästa tur måste hitta tillbaka till den.
+		const t = await say(c, "Mike, start a worker called Bosse");
+		check("en arbetare kan startas", !!eventOf(t, "workerSpawned"), JSON.stringify(t));
+		check("arbetarens första tur misslyckas", (await say(c, "Bosse, första")).some((m) => m.type === "error"));
+		const okWorker = textsOf(await say(c, "Bosse, andra"));
+		check("men arbetaren går att prata med igen", okWorker[0]?.text === "turn 1: andra", JSON.stringify(okWorker));
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
+	// The same session, left behind by a turn that was CUT rather than one that
+	// crashed. Here the CLI did name the session on the stream before it hung,
+	// which is what lets the server know without having to be refused first.
+	section("en tur som kapas lämnar ändå sessionen läsbar för nästa tur");
+	{
+		const server = track(await startMike(["--turn-timeout", "3000", "--worker-timeout", "3000"],
+			{ FAKE_CLAUDE_FAIL: "created-then-hang" }));
+		const c = await connect(server);
+		const cut = await say(c, "Mike, hej");
+		const err = cut.find((m) => m.type === "error");
+		check("turen kapas vid taket", !!err && /cut off after/.test(err.message), JSON.stringify(cut.filter((m) => m.type === "error")));
+		check("och felet är läsbart, inte en rad av strömmen", !err || !/[{[]/.test(err.message), err?.message);
+		check("den varnar innan den kapas", cut.some((m) => m.type === "event" && m.kind === "progress" && m.data?.warn === true),
+			JSON.stringify(cut.filter((m) => m.type === "event" && m.kind === "progress").map((m) => m.data)));
+
+		const good = await say(c, "Mike, hej igen");
+		check("och nästa tur återupptar sessionen som skapades",
+			textsOf(good).length === 1 && !good.some((m) => m.type === "error"), JSON.stringify(good));
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
+	// A cut turn still said something, and what it said is the answer as far as
+	// anyone is concerned. It used to come back as "no answer in 600s" — ten
+	// minutes of work reported as silence.
+	section("det en kapad tur hann säga är svaret, inte tystnad");
+	{
+		const server = track(await startMike(["--turn-timeout", "3000"], { FAKE_CLAUDE_FAIL: "say-then-hang" }));
+		const c = await connect(server);
+		const cut = await say(c, "Mike, hej");
+		const said = textsOf(cut).find((m) => /Jag har läst filen/.test(m.text));
+		check("det som hanns sägas kommer fram", !!said, JSON.stringify(cut));
+		check("med en not om varför det slutar där", said && /\(cut off after/.test(said.text), said?.text);
+		check("och det är inte ett fel — det är vad som sades", !cut.some((m) => m.type === "error"), JSON.stringify(cut.filter((m) => m.type === "error")));
+		check("inga ouppfångade undantag", !server.log().includes("UNCAUGHT"), server.log().slice(-300));
+		c.close();
+		server.stop();
+	}
+
+	// The worst answer a lens can be given: the machine's own stream, quoted
+	// back as if it were words. Anything that cannot be read as prose has to
+	// come out as something that can.
+	section("rå JSON når aldrig linsen");
+	{
+		const server = track(await startMike([], { FAKE_CLAUDE_FAIL: "exit-quiet" }));
+		const c = await connect(server);
+		const turn = await say(c, "Mike, hej");
+		const err = turn.find((m) => m.type === "error");
+		check("ett tyst misslyckande blir ändå något läsbart", !!err, JSON.stringify(turn));
+		check("och det är inte en rad av strömmen",
+			err && !/[{[]/.test(err.message) && !/session_id|"type"/.test(err.message), err?.message);
+		check("felet ryms på en lins", err && err.message.length <= 100 && !/\n/.test(err.message), err?.message);
+		c.close();
+		server.stop();
+	}
+
+	// Two processes on one session id is the failure the CLI refuses outright,
+	// and a forked transcript when it does not. mike.js and workerEngine.js each
+	// serialise their own turns; this is the floor under both of them, and it
+	// covers everything else that reaches the CLI by any other route.
+	section("motorn: två turer på samma session kör aldrig samtidigt");
+	{
+		const fakeDir = newFakeDir();
+		const cli = createClaudeRunner({
+			bin: FAKE,
+			env: { ...process.env, FAKE_CLAUDE_DIR: fakeDir, FAKE_CLAUDE_FAIL: "slow", FAKE_CLAUDE_SLOW_MS: "800" }
+		});
+		const id = randomUUID();
+		const first = await cli.run({ prompt: "första", cwd: ROOT, sessionId: id });
+		check("sessionen skapas av den första turen", first.ok === true, JSON.stringify(first));
+
+		// Utan kön läser båda processerna samtalet samtidigt, svarar båda "turn
+		// 2" och skriver över varandras fil: en tur sagd och osparad.
+		const [a, b] = await Promise.all([
+			cli.run({ prompt: "andra", cwd: ROOT, resume: id }),
+			cli.run({ prompt: "tredje", cwd: ROOT, resume: id })
+		]);
+		check("båda turerna svarar", a.ok && b.ok, JSON.stringify([a, b]));
+		check("och den andra såg den första", a.text === "turn 2: andra" && b.text === "turn 3: tredje", JSON.stringify([a.text, b.text]));
+		const saved = JSON.parse(readFileSync(join(fakeDir, `${id}.json`), "utf8")).turns;
+		check("ingen tur gick förlorad", saved.length === 3, JSON.stringify(saved.map((t) => t.result)));
 	}
 
 	// ============================================== mike identity + prompt

@@ -35,7 +35,7 @@ import { NamedDirs } from "./src/namedDirs.js";
 import { createStubWorkerEngine, createClaudeWorkerEngine } from "./src/workerEngine.js";
 import { createToolset } from "./src/tools.js";
 import { createClassifier } from "./src/classify.js";
-import { createClaudeRunner } from "./src/claudeCli.js";
+import { createClaudeRunner, DEFAULT_WORKER_TIMEOUT_MS } from "./src/claudeCli.js";
 import { createMcpServer } from "./src/mcp.js";
 import { isKnownModel, MODEL_LIST, resolveModel } from "./src/models.js";
 import { createMike, DEFAULT_CONTEXT_TURNS, DEFAULT_CONTEXT_BUDGET_TOKENS } from "./src/mike.js";
@@ -76,7 +76,9 @@ if (has("help")) {
   --mike-prompt <f>  his system prompt file (default ./prompts/mike.md)
   --context-turns <n>  worker turns quoted to Mike when addressed (default 6)
   --context-budget <n> token budget for that quote (default 1200)
-  --turn-timeout <ms>  how long one model turn may take (default 600000)
+  --turn-timeout <ms>  how long one of Mike's turns may take (default 600000)
+  --worker-timeout <ms>  how long one worker turn may take (default 10800000,
+                       three hours: nobody is waiting on a lens for a worker)
   --mode <m>           addressing mode for a fresh session (default byname)
   --hold <ms>          how long an utterance waits for the rest of the
                        sentence before it becomes a turn (default 2000, 0 off)
@@ -133,6 +135,10 @@ const config = {
 	contextTurns: parseInt(flag("context-turns", process.env.MIKE_CONTEXT_TURNS ?? String(DEFAULT_CONTEXT_TURNS)), 10),
 	contextBudget: parseInt(flag("context-budget", process.env.MIKE_CONTEXT_BUDGET ?? String(DEFAULT_CONTEXT_BUDGET_TOKENS)), 10),
 	turnTimeoutMs: parseInt(flag("turn-timeout", process.env.MIKE_TURN_TIMEOUT ?? "600000"), 10),
+	// Separate from Mike's on purpose. Ten minutes is a cap on a turn someone is
+	// listening to; a worker is handed a job and left to it, and cutting that at
+	// ten minutes threw away real work. See DEFAULT_WORKER_TIMEOUT_MS.
+	workerTimeoutMs: parseInt(flag("worker-timeout", process.env.MIKE_WORKER_TIMEOUT ?? String(DEFAULT_WORKER_TIMEOUT_MS)), 10),
 	defaultMode: flag("mode", process.env.MIKE_MODE || DEFAULT_MODE),
 	// PRD 6. Dictation arrives in fragments; this is how long one waits for the
 	// rest of itself. Tunable because the right number is a fact about how the
@@ -166,7 +172,7 @@ if (!["mike", "echo"].includes(config.handler)) { log.error(`--handler must be m
 if (!["claude", "stub"].includes(config.engine)) { log.error(`--engine must be claude or stub`); process.exit(1); }
 if (config.whisper !== "off" && !/^https?:\/\//.test(config.whisper)) { log.error(`--whisper must be a URL or "off", got "${config.whisper}"`); process.exit(1); }
 for (const [name, v] of [["--context-turns", config.contextTurns], ["--context-budget", config.contextBudget], ["--turn-timeout", config.turnTimeoutMs],
-	["--whisper-timeout", config.whisperTimeoutMs], ["--audio-max-bytes", config.audioMaxBytes]]) {
+	["--worker-timeout", config.workerTimeoutMs], ["--whisper-timeout", config.whisperTimeoutMs], ["--audio-max-bytes", config.audioMaxBytes]]) {
 	if (!Number.isInteger(v) || v <= 0) { log.error(`${name} must be a positive number`); process.exit(1); }
 }
 
@@ -183,7 +189,7 @@ const registry = new WorkerRegistry({
 });
 const engine = config.engine === "stub"
 	? createStubWorkerEngine({ log })
-	: createClaudeWorkerEngine({ permissions: config.workerPerms, promptFile: config.workerPrompt, log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.turnTimeoutMs });
+	: createClaudeWorkerEngine({ permissions: config.workerPerms, promptFile: config.workerPrompt, log, dataDir: config.dataDir, bin: config.claudeBin, timeoutMs: config.workerTimeoutMs });
 const toolset = createToolset({ registry, engine, log, dirs });
 const mcp = createMcpServer({ store, toolset, registry, log });
 
@@ -206,8 +212,8 @@ const mike = createMike({
 });
 
 // The one-word judgement behind a background notice (handler.js). Its own CLI
-// runner: a worker's turn timeout is ten minutes and this must never sit that
-// long, and it borrows nothing from the engine but the binary.
+// runner: a worker's turn timeout is hours and this must never sit anywhere
+// near that long, and it borrows nothing from the engine but the binary.
 const classifier = config.engine === "stub" ? null : createClassifier({ cli: createClaudeRunner({ bin: config.claudeBin, log }), log });
 
 // ---------------------------------------------------------------- listening
