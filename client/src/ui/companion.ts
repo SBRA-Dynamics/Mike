@@ -15,11 +15,17 @@
 // glasses are sent, in a box that is exactly fifty columns by ten rows, so a
 // layout problem is visible on a desktop without wearing anything.
 
+import { fitToKeyboard } from "./keyboard.ts";
+import { after, cancel } from "../timers.ts";
+import type { Timer } from "../timers.ts";
 import { LENS } from "../lens/render.ts";
 import type { LensFrame } from "../lens/render.ts";
 import { MODES } from "../../../src/routing.js";
 import type { AppState, ListeningState } from "../state.ts";
 import { thinkingText } from "../state.ts";
+
+/** How long the first press on "Forget this server" waits for the second. */
+const FORGET_ARM_MS = 4000;
 
 export type CompanionActions = {
 	say: (text: string) => boolean;
@@ -28,12 +34,25 @@ export type CompanionActions = {
 	 *  a browser scanner needs; the camera and the decoding belong to qr.ts.
 	 *  Pressed while a scan is running, it stops the scan. */
 	scanQr: (ui: { video: HTMLVideoElement; canvas: HTMLCanvasElement; show: (on: boolean) => void }) => void;
+	/** The same code, out of the photo library instead of the camera. A picture
+	 *  of a screen is the hardest thing to hand a QR decoder — moire, focus,
+	 *  glare, a code a few pixels a module wide — and a screenshot has none of
+	 *  those problems. Only useful where a host picker exists. */
+	pickQr: () => void;
 	/** The microphone switch — PRD 5a R5a.1. The only thing that asks for
 	 *  permission, because it is the only thing the user touched. */
 	setMic: (on: boolean) => void;
 	/** Press and release of the hold-to-talk control (R5a.4). */
 	holdStart: () => void;
 	holdEnd: () => void;
+	/** Which server the phone is paired with, as a host for a human — or ""
+	 *  when there is none. */
+	pairedWith: () => string;
+	/** Forget the server: token, address and session go, the connection is
+	 *  closed, and the pairing screen comes back. The only way to leave a
+	 *  server short of reinstalling the app, and therefore the only way to
+	 *  move to another one. */
+	forget: () => void;
 };
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = ""): HTMLElementTagNameMap[K] => {
@@ -85,8 +104,16 @@ export class Companion {
 		this.#actions = actions;
 		// The pairing screen is first in the tree and covers the rest while it
 		// is up: with no server there is nothing behind it worth showing.
-		root.replaceChildren(this.#buildPairing(), this.#buildBar(), this.#buildNotice(), this.#buildLens(), this.#buildTranscript(),
+		root.replaceChildren(this.#buildPairing(), this.#buildBar(), this.#buildServerRow(), this.#buildNotice(), this.#buildLens(), this.#buildTranscript(),
 			this.#buildLastEvent(), this.#buildVoice(), this.#buildComposer());
+		// The keyboard takes the bottom of the screen, where the composer is.
+		// A transcript that was showing its newest line keeps showing it
+		// across the shrink, the same rule render() applies to a new entry.
+		let atEnd = false;
+		fitToKeyboard(root, {
+			before: () => { atEnd = this.#transcriptAtEnd(); },
+			after: () => { if (atEnd) this.#nodes.transcript.scrollTop = this.#nodes.transcript.scrollHeight; }
+		});
 	}
 
 	// ------------------------------------------------------------------ build
@@ -103,8 +130,67 @@ export class Companion {
 		// last thing in the bar and one test reads it as ":last-child".
 		const listening = el("span", "chip listening");
 		bar.append(dot, title, el("span", "spacer"), worker, listening, glasses, version, status);
+		// The transport chip is also the way to the server row: the one place
+		// the server is named is the one place it can be left. A chip and not
+		// a button, so the bar keeps its shape and the test its ":last-child".
+		status.classList.add("tappable");
+		status.setAttribute("role", "button");
+		status.tabIndex = 0;
+		status.title = "Server";
+		status.addEventListener("click", () => this.#toggleServerRow());
+		status.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.#toggleServerRow(); } });
 		Object.assign(this.#nodes, { dot, status, worker, glasses, listening, version });
 		return bar;
+	}
+
+	/** Under the bar, on request: which server this is, and the way to leave
+	 *  it. Hidden by default and whenever the pairing screen is up, because
+	 *  there is nothing to leave then. */
+	#buildServerRow(): HTMLElement {
+		const row = el("div", "serverrow");
+		row.hidden = true;
+		const text = el("span", "serverhost");
+		const forget = el("button", "forget", "Forget this server");
+		// Two presses, four seconds apart at most. The cost of a mistake is a
+		// rescan, which is small, but a thumb on a phone in a pocket should not
+		// be able to pay it; a second deliberate press is the right price.
+		forget.addEventListener("click", () => {
+			if (!this.#forgetArmed) {
+				this.#forgetArmed = true;
+				forget.textContent = "Tap again to forget";
+				forget.classList.add("armed");
+				cancel(this.#forgetTimer);
+				this.#forgetTimer = after(() => this.#disarmForget(), FORGET_ARM_MS);
+				return;
+			}
+			this.#disarmForget();
+			row.hidden = true;
+			this.#actions.forget();
+		});
+		row.append(text, el("span", "spacer"), forget);
+		Object.assign(this.#nodes, { serverRow: row, serverHost: text, forget });
+		return row;
+	}
+
+	#forgetArmed = false;
+	#forgetTimer: Timer | null = null;
+
+	#disarmForget(): void {
+		cancel(this.#forgetTimer);
+		this.#forgetTimer = null;
+		this.#forgetArmed = false;
+		const b = this.#nodes.forget;
+		if (b) { b.textContent = "Forget this server"; b.classList.remove("armed"); }
+	}
+
+	#toggleServerRow(): void {
+		const row = this.#nodes.serverRow;
+		if (!row) return;
+		if (!row.hidden) { row.hidden = true; this.#disarmForget(); return; }
+		const host = this.#actions.pairedWith();
+		if (!host) return;
+		this.#nodes.serverHost.textContent = `Paired with ${host}.`;
+		row.hidden = false;
 	}
 
 	/** Standing notices — "no glasses", "no token". Deliberately NOT part of the
@@ -254,10 +340,20 @@ export class Companion {
 		screen.hidden = true;
 		const card = el("div", "card");
 		card.append(el("h2", "", "Mike"));
+		// The build that is actually running, under the title where it cannot be
+		// missed. The status bar already carries a version chip, but the pairing
+		// screen covers the status bar — so the one moment the version matters
+		// most, when a scan will not take and the question is whether the phone
+		// is even running the build you just made, is the one moment it was
+		// invisible.
+		card.append(el("p", "build", `v${VERSION}`));
 		const why = el("p", "why");
 		const scan = el("button", "primary scan", "Scan QR");
 		scan.type = "button";
 		const hint = el("p", "hint", "Point the camera at the code the server printed.");
+		const pick = el("button", "pick", "Choose a photo instead");
+		pick.type = "button";
+		pick.addEventListener("click", () => this.#actions.pickQr());
 		const video = el("video", "scanvideo") as HTMLVideoElement;
 		video.hidden = true;
 		const canvas = el("canvas") as HTMLCanvasElement;
@@ -266,9 +362,17 @@ export class Companion {
 			video, canvas,
 			show: (on) => { video.hidden = !on; scan.textContent = on ? "Stop scanning" : "Scan QR"; }
 		}));
-		card.append(why, scan, hint, video, canvas);
+		// Where note() is actually readable while unpaired. The notice bar lives
+		// in the normal flow and this screen is a fixed opaque overlay above it,
+		// so every word the scan path writes — "No picture taken", "No QR code
+		// in that picture", "Scanned … Connecting…" — was being written behind
+		// this. Pressing the button looked like it did nothing whatever went
+		// wrong, which is the one thing a diagnostic message must never do.
+		const scanNote = el("p", "scannote");
+		scanNote.hidden = true;
+		card.append(why, scan, hint, pick, scanNote, video, canvas);
 		screen.append(card);
-		Object.assign(this.#nodes, { pairing: screen, pairingWhy: why });
+		Object.assign(this.#nodes, { pairing: screen, pairingWhy: why, pairingNote: scanNote });
 		return screen;
 	}
 
@@ -280,6 +384,7 @@ export class Companion {
 		// "no token" and "the server has been unreachable for a while" want
 		// different things done about them even though the button is the same.
 		n.pairing.hidden = !pairing;
+		if (pairing && n.serverRow && !n.serverRow.hidden) { n.serverRow.hidden = true; this.#disarmForget(); }
 		if (pairing) {
 			n.pairingWhy.textContent = state.connection === "fatal"
 				? (state.connectionDetail === "no token" ? "Not paired with a server yet." : `The server refused this phone: ${state.connectionDetail}.`)
@@ -363,6 +468,13 @@ export class Companion {
 						: "";
 	}
 
+	/** Showing its newest line, give or take a couple of rows — the reader's
+	 *  position is theirs, and only a reader at the end is following along. */
+	#transcriptAtEnd(): boolean {
+		const box = this.#nodes.transcript;
+		return box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+	}
+
 	#renderTranscript(state: AppState): void {
 		const last = state.transcript[state.transcript.length - 1];
 		const signature = last ? `${last.seq}:${last.text.length}` : "";
@@ -371,7 +483,7 @@ export class Companion {
 		this.#renderedLast = signature;
 
 		const box = this.#nodes.transcript;
-		const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+		const atBottom = this.#transcriptAtEnd();
 		box.replaceChildren(...state.transcript.map((e) => {
 			const node = el("div", `entry ${e.kind}`);
 			node.append(el("div", "who", e.from), el("div", "what", e.text));
@@ -388,6 +500,11 @@ export class Companion {
 		const n = this.#nodes.notice;
 		n.textContent = text;
 		n.hidden = !text;
+		// And on the pairing screen, which covers the one above. Both, rather
+		// than moving it: once paired the notice bar is the right place for
+		// "no glasses", and the overlay is not there to be written to.
+		const p = this.#nodes.pairingNote;
+		if (p) { p.textContent = text; p.hidden = !text; }
 	}
 
 	focusInput(): void { try { this.#input.focus(); } catch { /* not focusable yet */ } }

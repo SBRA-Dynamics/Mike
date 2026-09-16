@@ -27,6 +27,14 @@ const CONTAINER = { id: 1, name: "mike" } as const;
  *  this we give up on that update and let the next one try. */
 const CALL_TIMEOUT_MS = 5000;
 
+/** The deadline for a call that is waiting on a PERSON rather than on hardware.
+ *  Opening the camera, framing a QR code, pressing the shutter and confirming
+ *  the shot is a job measured in tens of seconds, and the five above killed it
+ *  every time: the picker was still open when the call had already been given
+ *  up on, so taking the picture did nothing at all. Still bounded, because a
+ *  host that loses the callback should not leave the promise pending forever. */
+const PICKER_TIMEOUT_MS = 5 * 60 * 1000;
+
 /** What createStartUpPageContainer accepts as a container's text. */
 const STARTUP_MAX_BYTES = 1000;
 
@@ -273,12 +281,12 @@ export class Glasses {
 
 	/** Every bridge call gets a deadline: one flaky BLE hop otherwise hangs the
 	 *  update loop for as long as the host is willing to wait. */
-	#call<T>(p: Promise<T>): Promise<T> {
+	#call<T>(p: Promise<T>, timeoutMs?: number): Promise<T> {
 		let timer: Timer = null;
 		return Promise.race([
 			p,
 			new Promise<T>((_, reject) => {
-				timer = after(() => reject(new Error("glasses call timed out")), this.opts.callTimeoutMs ?? CALL_TIMEOUT_MS);
+				timer = after(() => reject(new Error("glasses call timed out")), timeoutMs ?? this.opts.callTimeoutMs ?? CALL_TIMEOUT_MS);
 			})
 		// The loser of the race still holds a timer; without this a long-lived
 		// page accumulates one per update.
@@ -314,9 +322,12 @@ export class Glasses {
 	async captureImage(from: "camera" | "album"): Promise<string | null> {
 		if (!this.bridge) return null;
 		try {
+			// PICKER_TIMEOUT_MS, not the ordinary one: this waits on the user,
+			// not on the glasses, and it is not on the update loop the short
+			// deadline exists to protect.
 			const asset = await this.#call<any>(from === "album"
 				? this.bridge.pickImageFromAlbum()
-				: this.bridge.captureImageFromCamera());
+				: this.bridge.captureImageFromCamera(), PICKER_TIMEOUT_MS);
 			const b64 = asset?.base64;
 			if (typeof b64 !== "string" || !b64) return null;
 			// Some hosts hand back a bare base64 payload and some a data: URL.

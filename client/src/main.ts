@@ -15,12 +15,20 @@ const applyScan = (text: string): void => {
 	const read = settingsFromScan(text);
 	if (!read.ok) { companion.note(read.error); return; }
 	companion.note(`Scanned ${read.host}. Connecting…`);
-	void applySettings({ server: read.settings.server, token: read.settings.token });
+	// Awaited through a catch, not fired and forgotten. A `void` here meant a
+	// storage write that rejected went nowhere: the scan looked like it had
+	// worked, the settings were unchanged, and the app carried on offering the
+	// token it already had — which reads, from the outside, as a button that
+	// does nothing. Whatever went wrong, the person holding the phone is the
+	// one who has to be told.
+	void applySettings({ server: read.settings.server, token: read.settings.token })
+		.catch((e: unknown) => companion.note((e as Error)?.message ?? "Could not save the scanned settings."));
 };
 
 /** The camera, while it is reading a code. Null the rest of the time — a
  *  scanner left alive is a camera light left on. */
 let scanner: Scanner | null = null;
+
 import { Connection, wsUrlFrom } from "./connection.ts";
 import { Glasses, hasHostChannel } from "./glasses.ts";
 import { renderLens } from "./lens/render.ts";
@@ -30,7 +38,7 @@ import { after, cancel, looksNative, natives } from "./timers.ts";
 import type { Timer } from "./timers.ts";
 import { CONTROL } from "./protocol.ts";
 import { MODES } from "../../src/routing.js";
-import { SettingsStore, browserStorage, bridgeStorage, readUrlSettings, scrubUrl } from "./settings.ts";
+import { EMPTY, SettingsStore, browserStorage, bridgeStorage, readUrlSettings, scrubUrl } from "./settings.ts";
 import { Companion } from "./ui/companion.ts";
 
 /** Stamped into the bundle at build time (vite.config.ts). Not read from a
@@ -272,7 +280,10 @@ const companion = new Companion(root, {
 			void (async () => {
 				companion.note("Opening the camera…");
 				const image = await glasses.captureImage("camera");
-				if (!image) { companion.note("No picture taken."); return; }
+				// With the reason, when there is one. "No picture taken" alone
+				// cannot tell a cancelled picker from a call that was given up
+				// on before the shutter — and those want opposite things done.
+				if (!image) { companion.note(`No picture taken.${glasses.error ? ` (${glasses.error})` : ""}`); return; }
 				const text = await decodeImage(image);
 				if (!text) { companion.note("No QR code in that picture. Try again, closer."); return; }
 				applyScan(text);
@@ -294,11 +305,41 @@ const companion = new Companion(root, {
 		ui.show(true);
 		void scanner.start().then((ok) => { if (!ok) { ui.show(false); scanner = null; } });
 	},
+	/** The code out of the photo library. No camera, so nothing to stop and no
+	 *  video element — and on a host without a picker, one honest sentence
+	 *  rather than a button that quietly does nothing. */
+	pickQr: () => {
+		if (!hasHostChannel()) { companion.note("Choosing a photo needs the Even app; in a browser, use Scan QR."); return; }
+		void (async () => {
+			companion.note("Opening your photos…");
+			const image = await glasses.captureImage("album");
+			if (!image) { companion.note(`No photo chosen.${glasses.error ? ` (${glasses.error})` : ""}`); return; }
+			const text = await decodeImage(image);
+			if (!text) { companion.note("No QR code in that photo. Try a screenshot of the code, not a picture of the screen."); return; }
+			applyScan(text);
+		})();
+	},
 	// R5a.1: the microphone is asked for when the user turns it on, never at
 	// page load. This is the only path to getUserMedia in the client.
 	setMic: (on) => { void voice.setEnabled(on); },
 	holdStart: () => { void voice.holdStart(); },
-	holdEnd: () => { voice.holdEnd(); }
+	holdEnd: () => { voice.holdEnd(); },
+	pairedWith: () => {
+		const { token, server } = settingsStore.value;
+		if (!token) return "";
+		try { return new URL(server || wsUrlFrom(location.href)).host; } catch { return server || "the server"; }
+	},
+	// Everything the scan wrote, unwritten: token, address and the session that
+	// belonged to them. Through save(), so both stores see it — the SDK's, which
+	// is what an app restart on the phone reads, and the browser's mirror.
+	// openConnection() then finds no token and hands over to the pairing
+	// screen, which is the whole point.
+	forget: () => {
+		void settingsStore.save({ ...EMPTY })
+			.catch((e: unknown) => companion.note(`Could not forget the server: ${(e as Error)?.message ?? e}`));
+		openConnection();
+		companion.note("Forgot the server. Scan its code to pair again.");
+	}
 });
 
 // ------------------------------------------------------------------ painting
@@ -523,8 +564,16 @@ const openConnection = (): void => {
 };
 
 const applySettings = async (patch: { token?: string; server?: string }): Promise<void> => {
-	await settingsStore.save(patch);
+	// save() updates the in-memory settings before it writes them, so by the
+	// time a write can fail the values this connection needs are already right.
+	// Connecting anyway is the difference between "you will have to scan again
+	// after a restart" and "this app cannot be paired at all" — and only the
+	// first of those is true when storage is the thing that is broken.
+	let failed: unknown = null;
+	try { await settingsStore.save(patch); }
+	catch (e) { failed = e; }
 	openConnection();
+	if (failed) throw failed;
 };
 
 // --------------------------------------------------------------------- start

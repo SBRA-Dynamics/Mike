@@ -115,7 +115,9 @@ try {
 		};
 	})()`);
 	check("parkopplingsskärmen finns men är dold när servern svarar", pairing.exists && pairing.hidden === true, JSON.stringify(pairing));
-	check("dess enda knapp är QR-skanning", JSON.stringify(pairing.buttons) === JSON.stringify(["Scan QR"]), JSON.stringify(pairing.buttons));
+	// Two ways to read the code — the camera and the photo library — and
+	// nothing else: no settings, no fields. Both buttons scan; neither configures.
+	check("dess knappar är bara skanning (kamera och bild)", JSON.stringify(pairing.buttons) === JSON.stringify(["Scan QR", "Choose a photo instead"]), JSON.stringify(pairing.buttons));
 	check("inställningslådan är borta", pairing.drawer === false);
 	check("och inget fält för server eller token finns kvar", !pairing.inputs.some((p) => /token|wss/.test(p)), JSON.stringify(pairing.inputs));
 
@@ -169,6 +171,27 @@ try {
 	await waitFor(`document.querySelector(".transcript").textContent.includes("echo: ${AFTER}")`, 10_000, "svaret efteråt");
 	check("och en tur går igenom efteråt",
 		(await evaluate(`document.querySelector(".transcript").textContent`)).includes(AFTER));
+
+	// Allra sist, för att det här lämnar servern. Statuschipet i listen är
+	// vägen till serverraden; knappen där kräver två tryck; efteråt är token
+	// borta ur lagret och parkopplingsskärmen tillbaka med rätt besked.
+	section("glömma servern: två tryck, sedan QR-skärmen igen");
+	const rowBefore = await evaluate(`document.querySelector(".serverrow").hidden`);
+	check("serverraden är dold tills chipet trycks", rowBefore === true);
+	await evaluate(`(document.querySelector("header .chip:last-child").click(), true)`);
+	const row = await evaluate(`(() => { const r = document.querySelector(".serverrow"); return { hidden: r.hidden, text: r.querySelector(".serverhost").textContent, button: r.querySelector("button").textContent }; })()`);
+	check("chipet fäller ut raden med serverns värdnamn", row.hidden === false && row.text.includes(`127.0.0.1:${server.port}`), JSON.stringify(row));
+	check("och en knapp för att glömma", row.button === "Forget this server", row.button);
+	await evaluate(`(document.querySelector(".serverrow button").click(), true)`);
+	const armed = await evaluate(`(() => { const b = document.querySelector(".serverrow button"); return { text: b.textContent, armed: b.classList.contains("armed"), pairing: document.querySelector(".pairing").hidden }; })()`);
+	check("ett tryck beväpnar bara knappen", armed.armed === true && armed.text === "Tap again to forget" && armed.pairing === true, JSON.stringify(armed));
+	await evaluate(`(document.querySelector(".serverrow button").click(), true)`);
+	await waitFor(`document.querySelector(".pairing").hidden === false`, 5_000, "parkopplingsskärmen");
+	const why = await evaluate(`document.querySelector(".pairing .why").textContent`);
+	check("det andra trycket tar fram parkopplingsskärmen som oparad, inte som nekad", why === "Not paired with a server yet.", why);
+	const stored = await evaluate(`Object.values(localStorage).join(" ")`);
+	check("token och adress är borta ur lagret", !stored.includes(server.token) && !stored.includes("127.0.0.1"), stored.slice(0, 120));
+	check("och serverraden är dold igen", (await evaluate(`document.querySelector(".serverrow").hidden`)) === true);
 
 } catch (err) {
 	console.error("\ntestriggen kraschade:", err.stack || err.message);

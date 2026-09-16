@@ -1,6 +1,6 @@
 // Reading the server's link off a QR code instead of typing it.
 //
-// The settings panel asks for a server address and a 64-character hex token.
+// The settings panel asks for a server address and a 32-character hex token.
 // Both are unreasonable to type on a phone: the address needs a keyboard the
 // field then hides behind, and one wrong character in the token reads as
 // "unauthorized" with nothing to say which character it was. The link already
@@ -61,10 +61,20 @@ export const settingsFromScan = (text: string): ScanResult => {
 	return { ok: true, settings, host: u.host };
 };
 
-/** Decode one frame. Separated so a test can hand it pixels from a file. */
-export const decodeFrame = (data: Uint8ClampedArray, width: number, height: number): string | null => {
+/**
+ * Decode one frame. Separated so a test can hand it pixels from a file.
+ *
+ * `both` tries the inverted image as well, at roughly twice the work. The live
+ * loop does not: it has sixty chances a second and wants each one cheap. A
+ * still photograph has exactly one chance, and the thing being photographed is
+ * very often a QR code printed in a TERMINAL — where a dark colour scheme
+ * renders it light-on-dark, which is inverted, which "dontInvert" will not read
+ * at any distance or focus. That is not an exotic case; it is the default
+ * terminal on most machines.
+ */
+export const decodeFrame = (data: Uint8ClampedArray, width: number, height: number, both = false): string | null => {
 	try {
-		const found = jsQR(data, width, height, { inversionAttempts: "dontInvert" });
+		const found = jsQR(data, width, height, { inversionAttempts: both ? "attemptBoth" : "dontInvert" });
 		return found?.data ?? null;
 	} catch {
 		// A decoder that throws on a noisy frame must not end the scan — the
@@ -84,17 +94,49 @@ export const decodeImage = (dataUrl: string): Promise<string | null> => new Prom
 	const img = new Image();
 	img.onload = () => {
 		try {
-			const canvas = document.createElement("canvas");
-			// A 12-megapixel photograph decoded at full size is slow enough to
-			// look like a hang. The code is large in the frame; a long edge of
-			// 1400 px is plenty, and jsQR is happier with fewer pixels.
-			const scale = Math.min(1, 1400 / Math.max(img.width, img.height));
-			canvas.width = Math.max(1, Math.round(img.width * scale));
-			canvas.height = Math.max(1, Math.round(img.height * scale));
-			const ctx = canvas.getContext("2d", { willReadFrequently: true });
-			if (!ctx) return resolve(null);
-			ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-			resolve(decodeFrame(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height));
+			// Several long edges rather than one.
+			//
+			// A single 1400 px pass was a guess that a code fills the frame. It
+			// does not when the picture is of a screen across a desk, and the
+			// downscale that makes a 12-megapixel photograph quick to decode is
+			// the same downscale that smears a module three pixels wide into its
+			// neighbour. Full size reads the small code; the reductions read the
+			// large blurry one, which jsQR prefers with fewer pixels. Whichever
+			// answers first wins, and nothing is decoded twice if the first does.
+			const longest = Math.max(img.width, img.height);
+			// SMALLEST FIRST, and the smallest is small. A photograph of a QR
+			// code on a SCREEN carries the display's pixel grid beating against
+			// the sensor's — moire, fine banding across every light module —
+			// and at full resolution the binariser reads that banding as
+			// structure and gives up. Scaling down averages it away, and the
+			// canvas downscale a browser does is a cheap one: measured in
+			// Chrome on a real 12-megapixel photograph of a real terminal, the
+			// SAME picture that Node's jsQR reads at 640 px, the browser's
+			// drawImage reads it at every size from 240 to 500 px and at
+			// nothing above 640. The first ladder started at 640 and sat in the
+			// dead band, which is why photographing the code never once
+			// worked on the phone. So the ladder starts where a large code is
+			// three or four pixels a module and climbs; the large passes stay
+			// for the opposite case, a small code far away in the frame, and
+			// cost nothing when an early one succeeds.
+			const edges = [320, 400, 480, 640, 800, 1000, 1600, longest].filter((e, i, a) => e <= longest && a.indexOf(e) === i);
+			const ctxOf = (edge: number) => {
+				const canvas = document.createElement("canvas");
+				const scale = Math.min(1, edge / longest);
+				canvas.width = Math.max(1, Math.round(img.width * scale));
+				canvas.height = Math.max(1, Math.round(img.height * scale));
+				const ctx = canvas.getContext("2d", { willReadFrequently: true });
+				if (!ctx) return null;
+				ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+				return { ctx, w: canvas.width, h: canvas.height };
+			};
+			for (const edge of edges) {
+				const c = ctxOf(edge);
+				if (!c) continue;
+				const found = decodeFrame(c.ctx.getImageData(0, 0, c.w, c.h).data, c.w, c.h, true);
+				if (found) return resolve(found);
+			}
+			resolve(null);
 		} catch { resolve(null); }
 	};
 	img.onerror = () => resolve(null);

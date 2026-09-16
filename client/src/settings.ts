@@ -31,10 +31,26 @@ export const browserStorage = (): KeyValue => ({
 	async set(key, value) { try { globalThis.localStorage?.setItem(key, value); } catch { /* private mode */ } }
 });
 
-/** The SDK's storage, which is what survives an app restart on the phone. */
+/**
+ * The SDK's storage, which is what survives an app restart on the phone.
+ *
+ * Wrapped like browserStorage above, and for a sharper reason. A read that
+ * throws must not stop the client starting. A WRITE that throws must not be
+ * silent: this is the store the pairing token goes into, and a rejected set()
+ * used to travel up through save() into a caller that had no catch — so a
+ * scanned code did nothing at all, changed nothing, said nothing, and the app
+ * went on retrying the token it already had. The throw is kept, so the caller
+ * can tell the user; what is added is that it says WHAT failed.
+ */
 export const bridgeStorage = (bridge: any): KeyValue => ({
-	async get(key) { return (await bridge.getLocalStorage(key)) ?? ""; },
-	async set(key, value) { await bridge.setLocalStorage(key, value); }
+	async get(key) {
+		try { return (await bridge.getLocalStorage(key)) ?? ""; }
+		catch { return ""; }
+	},
+	async set(key, value) {
+		try { await bridge.setLocalStorage(key, value); }
+		catch (e) { throw new Error(`the app could not save its settings (${(e as Error)?.message ?? e})`); }
+	}
 });
 
 export class SettingsStore {
