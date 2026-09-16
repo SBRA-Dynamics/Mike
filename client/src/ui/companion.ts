@@ -111,8 +111,17 @@ export class Companion {
 		// across the shrink, the same rule render() applies to a new entry.
 		let atEnd = false;
 		fitToKeyboard(root, {
+			input: this.#input,
 			before: () => { atEnd = this.#transcriptAtEnd(); },
 			after: () => { if (atEnd) this.#nodes.transcript.scrollTop = this.#nodes.transcript.scrollHeight; }
+		});
+		// A tap anywhere but the composer puts the keyboard away. A WebView does
+		// not do that on its own the way a native screen does, and the only
+		// other way off the keyboard is the host's own bar above it.
+		root.addEventListener("pointerdown", (e) => {
+			if (document.activeElement !== this.#input) return;
+			if (this.#nodes.composer.contains(e.target as Node)) return;
+			this.#input.blur();
 		});
 	}
 
@@ -246,6 +255,9 @@ export class Companion {
 		// Dictation on a phone keyboard capitalises and punctuates; the server
 		// folds that away (routing.js), so nothing is done to it here.
 		input.autocapitalize = "sentences";
+		// The return key is the send key: the form submits on it already, and
+		// the hint makes the keyboard say so.
+		input.enterKeyHint = "send";
 		const send = el("button", "primary", "Send");
 		send.type = "submit";
 		const stop = el("button", "", "Stop");
@@ -265,6 +277,7 @@ export class Companion {
 
 		this.#input = input;
 		this.#nodes.send = send;
+		this.#nodes.composer = form;
 		form.append(input, send, stop);
 		return form;
 	}

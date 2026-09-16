@@ -44,9 +44,13 @@ html, body {
 	height: 100dvh;
 	padding-bottom: env(safe-area-inset-bottom, 0px);
 }
-/* The keyboard sits over the home indicator, so the inset it reserves would
-   be a blank strip above the keys. */
-#app.keyboard { padding-bottom: 0; }
+/* While the keyboard is up (keyboard.ts): the inset for the home indicator
+   would be a blank strip above the keys; the lens preview is folded away,
+   because the bar, the preview and the microphone row do not fit above a
+   keyboard and nobody reads the lens while typing; and the column may scroll,
+   with the composer kept at the bottom of it. */
+#app.keyboard { padding-bottom: 0; overflow-y: auto; }
+#app.keyboard .lenswrap { display: none; }
 
 /* ------------------------------------------------------------------- header */
 
@@ -97,11 +101,22 @@ html, body {
 	margin-bottom: 6px;
 }
 
-/* The real thing: fifty columns by ten rows. The box is sized in `ch` so it is
-   exactly as wide as the text it may contain — a line that overflows it is a
-   bug the eye can catch without measuring. */
+/* The real thing: fifty columns by ten rows. The box is sized in `ch` of its
+   own monospace font so it is exactly as wide as the text it may contain — a
+   line that overflows it is a bug the eye can catch without measuring.
+
+   The size follows the screen: fifty columns of 13 px monospace are about
+   400 px, which a phone does not have once the paddings are paid (14 px
+   either side of the wrap, 8 px either side inside, the border). A monospace
+   glyph is 0.6 em wide, so fifty of them are 30 em, and the em that fits is
+   the free width over thirty — a little more, for fonts whose glyph is a
+   hair wider. On anything wider than a phone the 13 px cap applies as before. */
 .lens {
-	width: 50ch; max-width: 100%;
+	font: 13px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-size: min(13px, calc((100vw - 46px) / 30.5));
+	/* Fifty columns of content; the box is border-box, so its own padding and
+	   border are added on top or the last two glyphs pay for them. */
+	width: calc(50ch + 18px); max-width: 100%;
 	background: #05140a;
 	border: 1px solid #1d4a2b;
 	border-radius: 6px;
@@ -109,7 +124,6 @@ html, body {
 	overflow-x: auto;
 }
 .lens .row {
-	font: 13px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 	color: var(--lens);
 	white-space: pre;
 	min-height: 1.35em;
