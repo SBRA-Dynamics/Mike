@@ -182,28 +182,30 @@ sentences go to it by default.
 Names from the book, when you do not pick one: Mannie, Wyoh, Prof, Mum,
 Grandpaw, Milla, Greg, Hans, Sidris.
 
-**From the computer to the glasses.** Start Claude Code in a terminal as a
-background session, and give it a name from the book — the `Claude` shell
-function in the dotfiles does both, through `scripts/terminal-session.mjs`:
+**From the computer to the glasses.** Start Claude Code in a terminal with
+`Claude` instead of `claude`. It comes with the repository — add this to
+`~/.bashrc`:
 
 ```bash
-Claude() {   # sketch; the real one also passes subcommands and -p straight through
-	out=$(claude --dangerously-skip-permissions --bg -n "$(node ~/mike/scripts/terminal-session.mjs name)" "$@")
-	claude attach "$(sed -n 's/.*backgrounded · \([0-9a-f]\{8\}\).*/\1/p' <<<"$out")"
-}
+export MIKE_CLAUDE_FLAGS="--dangerously-skip-permissions"   # optional: flags for every session
+. ~/mike/scripts/claude-shell.sh
 ```
 
-The session keeps running when the terminal is closed or left with Ctrl+Z, and
-"Mike, connect to Wyoh" takes it over: the background process is stopped (an
-attached terminal drops back to its prompt), and the worker resumes the same
-session in the same folder, on the same model, with where it left off on the
-lens. A session that is in the middle of a turn is not cut off: it moves over
-by itself once it is done, the title bar says "Minnie moved" until you switch
-to it, and its last answer is what the lens shows when you do. Mike does not
-switch to it for you — "Mike, växla till Minnie" does. Back at the computer, `Claude -r Wyoh` opens it in the terminal again —
-and from then on the worker refuses to take a turn until Mike is told to
-connect to it again, because two drivers of one session silently lose turns.
-New workers never get a name a terminal session already has.
+Every session then runs in the background with a name from the book, which the
+terminal shows in its frame (`scripts/terminal-session.mjs` picks one no worker
+or other session has). The session keeps running when the terminal is closed or
+left with Ctrl+Z, and "Mike, connect to Wyoh" takes it over: the background
+process is stopped (an attached terminal drops back to its prompt), and the
+worker resumes the same session in the same folder, on the same model, with
+where it left off on the lens. A session that is in the middle of a turn is not
+cut off: it moves over by itself once it is done, the title bar says "Minnie
+moved" until you switch to it, and its last answer is what the lens shows when
+you do. Mike does not switch to it for you — "Mike, växla till Minnie" does.
+
+Back at the computer, `Claude -r Wyoh` opens it in the terminal again — and from
+then on the worker refuses to take a turn until Mike is told to connect to it
+again, because two drivers of one session silently lose turns. New workers never
+get a name a terminal session already has.
 
 **Asides.** While you are talking to a worker, "Mike, …" still reaches Mike,
 and he knows which worker you are with: "Mike, list the files in the folder
