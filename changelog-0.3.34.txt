@@ -1,0 +1,4 @@
+A Claude Code session running in a terminal can move over to the glasses.
+
+- "Mike, connect to Minnie" takes over a terminal session as a worker; if it is still working, it moves over by itself when it is done.
+- The title bar says "Minnie moved" until you switch to it, and switching shows what it wrote when it finished. Mike never switches to it for you.

@@ -1,0 +1,8 @@
+Everything since 0.3.21.
+
+- Pair by photographing the server's QR code with the phone camera.
+- The keyboard no longer covers the text box, and return sends.
+- The lens preview fits the phone; tap the status to see or forget the paired server.
+- Saying something new keeps the worker's status on the lens instead of your own words.
+- Switching shows that person's own last words, under the right name.
+- After a restart the conversation reads as history, and nothing claims to still be running.
