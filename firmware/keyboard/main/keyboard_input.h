@@ -45,3 +45,15 @@ void keyboard_input_start(key_handler_t handler);
 
 /* True while a keyboard is attached (always true for the serial source). */
 bool keyboard_input_attached(void);
+
+/* What the USB side has seen since boot, for diagnosing wiring from the web page. */
+typedef struct {
+    bool attached;
+    uint32_t interfaces;      /* HID interfaces enumerated, keyboards or not */
+    uint32_t reports;         /* input reports received */
+    uint32_t transfer_errors;
+    uint32_t keys;            /* key presses turned into events */
+    uint8_t last_usage;       /* HID usage of the last key pressed */
+} keyboard_stats_t;
+
+void keyboard_input_stats(keyboard_stats_t *out);

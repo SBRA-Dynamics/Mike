@@ -13,10 +13,17 @@ static const char *TAG = "keyboard";
 
 static key_handler_t s_handler;
 static volatile bool s_attached;
+static keyboard_stats_t s_stats;
 
 bool keyboard_input_attached(void)
 {
     return s_attached;
+}
+
+void keyboard_input_stats(keyboard_stats_t *out)
+{
+    *out = s_stats;
+    out->attached = s_attached;
 }
 
 /* ------------------------------------------------------------ dead keys -- */
@@ -207,6 +214,7 @@ void keyboard_input_start(key_handler_t handler)
  * which takes it away from the serial console and from flashing: hold BOOT while
  * resetting to flash again.
  */
+#include "driver/gpio.h"
 #include "usb/hid_host.h"
 #include "usb/hid_usage_keyboard.h"
 #include "usb/usb_host.h"
@@ -287,8 +295,16 @@ static void press(uint8_t mods, uint8_t usage)
     default: break;
     }
 
+    s_stats.keys++;
+    s_stats.last_usage = usage;
+
     if (usage >= HID_KEY_A && usage <= HID_KEY_Z) {
         char letter = 'a' + (usage - HID_KEY_A);
+        /* Ctrl+Alt+S opens the settings too, for keyboards whose F-row sends media keys. */
+        if (letter == 's' && (mods & (MOD_LCTRL | MOD_RCTRL)) && (mods & (MOD_LALT | MOD_RALT))) {
+            emit(KEY_SETTINGS, 0);
+            return;
+        }
         if (ctrl) {
             switch (letter) {
             case 'c': emit(KEY_INTERRUPT, 0); break;
@@ -425,8 +441,39 @@ static void usb_lib_task(void *arg)
     }
 }
 
+/*
+ * Before the USB host takes the pins: a full-speed device pulls D+ (GPIO20) up
+ * with 1.5 k, which beats the pad's weak pulldown. D+ high and D- low is a
+ * device on the wire; both low is no device (or no power, or a broken D+);
+ * D- high means the pair is swapped.
+ */
+static void probe_usb_lines(void)
+{
+    const gpio_num_t dp = GPIO_NUM_20;
+    const gpio_num_t dm = GPIO_NUM_19;
+    gpio_reset_pin(dp);
+    gpio_reset_pin(dm);
+    gpio_set_direction(dp, GPIO_MODE_INPUT);
+    gpio_set_direction(dm, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(dp, GPIO_PULLDOWN_ONLY);
+    gpio_set_pull_mode(dm, GPIO_PULLDOWN_ONLY);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    int dp_level = gpio_get_level(dp);
+    int dm_level = gpio_get_level(dm);
+    mike_link_log("usb lines before host start: D+ (GPIO20) %d, D- (GPIO19) %d -> %s", dp_level, dm_level,
+                  dp_level && !dm_level   ? "a full-speed device is there"
+                  : !dp_level && dm_level ? "D+ and D- look swapped (or a low-speed device)"
+                  : dp_level && dm_level  ? "both high: short or wrong wiring"
+                                          : "nothing pulls up: no device, no power, or D+ not connected");
+    gpio_set_pull_mode(dp, GPIO_FLOATING);
+    gpio_set_pull_mode(dm, GPIO_FLOATING);
+}
+
 static void keyboard_task(void *arg)
 {
+    if (KEYBOARD_DEBUG) {
+        probe_usb_lines();
+    }
     xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, xTaskGetCurrentTaskHandle(), 8, NULL, 0);
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
 
@@ -461,6 +508,7 @@ static void keyboard_task(void *arg)
         }
 
         if (item.kind == ITEM_ERROR) {
+            s_stats.transfer_errors++;
             if (KEYBOARD_DEBUG) {
                 mike_link_log("usb: transfer error");
             }
@@ -468,11 +516,13 @@ static void keyboard_task(void *arg)
         }
         if (item.kind == ITEM_DEVICE) {
             if (item.event == HID_HOST_DRIVER_EVENT_CONNECTED) {
+                s_stats.interfaces++;
                 open_device(item.device);
             }
             continue;
         }
 
+        s_stats.reports++;
         if (KEYBOARD_DEBUG) {
             char hex[3 * sizeof(item.report) + 1] = "";
             for (int i = 0; i < item.len; i++) {

@@ -1,5 +1,5 @@
 set(requires esp32_s3_touch_amoled_1_8 lvgl__lvgl esp_wifi esp_netif esp_event nvs_flash esp_http_client esp-tls
-             mbedtls esp_driver_usb_serial_jtag usb esp_http_server app_update esp_timer)
+             mbedtls esp_driver_usb_serial_jtag esp_driver_gpio usb esp_http_server app_update esp_timer)
 if("${IDF_VERSION_MAJOR}" LESS 6)
     list(APPEND requires json)
 endif()

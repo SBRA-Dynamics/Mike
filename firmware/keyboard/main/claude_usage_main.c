@@ -393,6 +393,9 @@ void app_main(void)
 
     /* The keyboard: settings on F2, everything else -> line editor -> the text box on the glasses. */
     mike_link_start();
+    if (KEYBOARD_DEBUG) {
+        mike_link_forward_logs();
+    }
     line_editor_init();
     keyboard_input_start(on_key);
 

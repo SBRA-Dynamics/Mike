@@ -21,7 +21,7 @@
 static const char *TAG = "mike_link";
 
 #define PROTOCOL_VERSION 1
-#define OUTBOX_MAX 16
+#define OUTBOX_MAX 64
 #define RX_MAX 8192
 /* Mike pings every 20 s; three missed pings means the socket is dead. */
 #define SILENCE_TIMEOUT_MS 65000
@@ -177,6 +177,20 @@ void mike_link_interrupt(void)
     enqueue(MSG_OTHER, strdup("{\"type\":\"interrupt\"}"));
 }
 
+/* A line into the server's log, without going through ESP_LOG (which may be forwarding here). */
+static void log_line(const char *text)
+{
+    /* Little stack: this runs inside whichever task logged. */
+    sbuf_t sb = {0};
+    sb_str(&sb, "{\"type\":\"control\",\"action\":\"clientLog\",\"args\":{\"text\":\"");
+    for (const char *p = text; *p; p++) {
+        uint32_t c = (uint8_t)*p;
+        sb_json_text(&sb, &c, 1);
+    }
+    sb_str(&sb, "\"}}");
+    enqueue(MSG_LOG, sb.buf);
+}
+
 void mike_link_log(const char *fmt, ...)
 {
     char text[256];
@@ -185,17 +199,40 @@ void mike_link_log(const char *fmt, ...)
     vsnprintf(text, sizeof(text), fmt, args);
     va_end(args);
     ESP_LOGI(TAG, "%s", text);
+    log_line(text);
+}
 
-    uint32_t cps[sizeof(text)];
-    size_t n = 0;
-    for (const char *p = text; *p && n < sizeof(cps); p++) {
-        cps[n++] = (uint8_t)*p;
+static vprintf_like_t s_console;
+static volatile bool s_forwarding;
+
+static int forward_log(const char *fmt, va_list args)
+{
+    va_list copy;
+    va_copy(copy, args);
+    int n = s_console ? s_console(fmt, args) : 0;
+    if (!s_forwarding) {
+        char text[160];
+        vsnprintf(text, sizeof(text), fmt, copy);
+        /* The link's own lines and the WiFi driver's chatter would feed back or drown the rest. */
+        if (strstr(text, "mike_link") == NULL && strstr(text, "wifi:") == NULL) {
+            s_forwarding = true;
+            size_t len = strlen(text);
+            while (len > 0 && (text[len - 1] == '\n' || text[len - 1] == '\r')) {
+                text[--len] = '\0';
+            }
+            if (len > 0) {
+                log_line(text);
+            }
+            s_forwarding = false;
+        }
     }
-    sbuf_t sb = {0};
-    sb_str(&sb, "{\"type\":\"control\",\"action\":\"clientLog\",\"args\":{\"text\":\"");
-    sb_json_text(&sb, cps, n);
-    sb_str(&sb, "\"}}");
-    enqueue(MSG_LOG, sb.buf);
+    va_end(copy);
+    return n;
+}
+
+void mike_link_forward_logs(void)
+{
+    s_console = esp_log_set_vprintf(forward_log);
 }
 
 /* ------------------------------------------------------------- WebSocket -- */

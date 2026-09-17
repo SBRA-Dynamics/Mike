@@ -35,6 +35,9 @@ void mike_link_interrupt(void);
  * is a host and it has no serial console. printf-style, ASCII. */
 void mike_link_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+/* Sends every ESP_LOG line to the server's log as well (KEYBOARD_DEBUG). */
+void mike_link_forward_logs(void);
+
 /* True while the socket is open and hello was answered. */
 bool mike_link_connected(void);
 

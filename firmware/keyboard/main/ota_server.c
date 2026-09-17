@@ -17,6 +17,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "keyboard_input.h"
 #include "mdns.h"
 #include "mike_link.h"
 #include "settings.h"
@@ -79,7 +80,10 @@ static const char PAGE[] =
     "progress{width:100%;height:1rem}.muted{color:#9a9893;white-space:pre-line}.msg{white-space:pre-line;margin:.4rem 0}"
     "a{color:#d97757;word-break:break-all}"
     "</style></head><body><h1>Keyboard settings</h1><div id=status class=muted>...</div>"
-    "<label>Admin password (set on the board with F2)</label><input id=pw type=password autocomplete=current-password>"
+    "<div id=first hidden><h2>Set an admin password</h2><div class=msg>None is set yet. The first one can be set here; "
+    "after that it is changed on the board (F2).</div><input id=newpw type=password autocomplete=new-password placeholder='At least 6 characters'>"
+    "<button id=setpw>Set admin password</button><div id=firstMsg class=msg></div></div>"
+    "<label>Admin password</label><input id=pw type=password autocomplete=current-password>"
 
     "<h2>Mike</h2>"
     "<label>Server address on the LAN</label><input id=host placeholder=192.168.1.10>"
@@ -108,10 +112,17 @@ static const char PAGE[] =
     "const info=()=>fetch('/info').then(r=>r.json()).then(i=>{"
     "$('status').textContent=`Firmware ${i.version} (${i.partition})\\nWiFi ${i.wifi.ssid||'not set'} ${i.wifi.ip||''}\\n`+"
     "`Mike ${i.mike.host?i.mike.host+':'+i.mike.port:'not set'}${i.mike.connected?' - connected':''}\\n`+"
-    "`Claude ${i.claude.logged_in?'logged in':'not logged in'}`+(i.admin_set?'':'\\n\\nNo admin password yet: press F2 on the keyboard.');"
+    "`Claude ${i.claude.logged_in?'logged in':'not logged in'}\\n`+"
+    "`Keyboard ${i.keyboard.attached?'attached':'not attached'}, ${i.keyboard.interfaces} USB interfaces, `+"
+    "`${i.keyboard.reports} reports, ${i.keyboard.keys} keys, ${i.keyboard.transfer_errors} transfer errors`;"
+    "$('first').hidden=i.admin_set;"
     "if(!$('host').value){$('host').value=i.mike.host;$('port').value=i.mike.port;$('tls').value=i.mike.tls_name}"
     "$('token').placeholder=i.mike.token_set?'stored':'';return i});"
     "info();"
+    "$('setpw').onclick=()=>fetch('/api/admin',{method:'POST',body:JSON.stringify({password:$('newpw').value})})"
+    ".then(async r=>{const t=await r.text();if(!r.ok)throw new Error(t);$('pw').value=$('newpw').value;"
+    "try{localStorage.adminPw=$('pw').value}catch(e){}$('firstMsg').textContent='Saved.';info()})"
+    ".catch(e=>$('firstMsg').textContent=e.message);"
     "$('saveMike').onclick=()=>{$('mikeMsg').textContent='Saving...';"
     "post('/api/mike',JSON.stringify({host:$('host').value.trim(),port:+$('port').value||3456,"
     "tls_name:$('tls').value.trim(),token:$('token').value.trim()}))"
@@ -247,6 +258,16 @@ static esp_err_t info_get(httpd_req_t *req)
 
     cJSON *c = cJSON_AddObjectToObject(root, "claude");
     cJSON_AddBoolToObject(c, "logged_in", usage_client_has_credentials());
+
+    keyboard_stats_t kb;
+    keyboard_input_stats(&kb);
+    cJSON *k = cJSON_AddObjectToObject(root, "keyboard");
+    cJSON_AddBoolToObject(k, "attached", kb.attached);
+    cJSON_AddNumberToObject(k, "interfaces", kb.interfaces);
+    cJSON_AddNumberToObject(k, "reports", kb.reports);
+    cJSON_AddNumberToObject(k, "transfer_errors", kb.transfer_errors);
+    cJSON_AddNumberToObject(k, "keys", kb.keys);
+    cJSON_AddNumberToObject(k, "last_usage", kb.last_usage);
     return send_json(req, root);
 }
 
@@ -279,6 +300,39 @@ static esp_err_t mike_post(httpd_req_t *req)
     httpd_resp_sendstr(req, "OK");
     xTaskCreate(restart_task, "restart", 2048, NULL, 5, NULL);
     return ESP_OK;
+}
+
+/* ------------------------------------------------------------------ admin -- */
+
+/*
+ * The first admin password can be set from the web page, while none is set.
+ * Without this a board whose keyboard does not work could never be given one,
+ * and without one it refuses firmware updates: a board that locks itself out.
+ * Once set, only the settings screen on the board changes it.
+ */
+static esp_err_t admin_post(httpd_req_t *req)
+{
+    if (settings_admin_password_set()) {
+        return fail(req, "403 Forbidden", "An admin password is already set; change it on the board (F2).");
+    }
+    cJSON *root = read_json(req);
+    if (root == NULL) {
+        return ESP_OK;
+    }
+    const char *password = cJSON_GetStringValue(cJSON_GetObjectItem(root, "password"));
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (password != NULL && strlen(password) >= 6 && strlen(password) < 64) {
+        err = settings_set_admin_password(password);
+    }
+    cJSON_Delete(root);
+    if (err == ESP_ERR_INVALID_ARG) {
+        return fail(req, "400 Bad Request", "At least 6 characters.");
+    }
+    if (err != ESP_OK) {
+        return fail(req, "500 Internal Server Error", "Could not save.");
+    }
+    ESP_LOGI(TAG, "admin password set from the web page");
+    return httpd_resp_sendstr(req, "OK");
 }
 
 /* ----------------------------------------------------------------- claude -- */
@@ -398,6 +452,7 @@ void ota_server_start(void)
         {.uri = "/", .method = HTTP_GET, .handler = page_get},
         {.uri = "/info", .method = HTTP_GET, .handler = info_get},
         {.uri = "/api/mike", .method = HTTP_POST, .handler = mike_post},
+        {.uri = "/api/admin", .method = HTTP_POST, .handler = admin_post},
         {.uri = "/api/claude/start", .method = HTTP_POST, .handler = claude_start_post},
         {.uri = "/api/claude/finish", .method = HTTP_POST, .handler = claude_finish_post},
         {.uri = "/update", .method = HTTP_POST, .handler = update_post},
