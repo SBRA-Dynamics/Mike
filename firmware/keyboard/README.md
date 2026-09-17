@@ -13,11 +13,14 @@ Firmware for the Waveshare ESP32-S3-Touch-AMOLED-1.8, ESP-IDF 5.5, built on the
 Nothing secret is compiled in. Everything is set on the board and kept in its
 NVS, so a firmware update keeps it:
 
-1. **On the board** — connect the keyboard and press **F2** (the settings
-   screen also opens by itself when no WiFi is set). Choose the WiFi network
-   from the list (or type one under *Other network*), type its password, and
-   set an **admin password** of at least six characters. Up/Down chooses,
-   Enter opens and saves, Esc goes back, Tab shows a password while typing it.
+1. **On the board** — hold **BOOT** for 5 seconds (the settings screen also
+   opens by itself when no WiFi is set). Choose the WiFi network from the list
+   (or type one under *Other network*), type its password, and set an **admin
+   password** of at least six characters. Everything works by touch: tap a line
+   to open it, and type on the on-screen keyboard, whose tick saves and cross
+   goes back. A tap on BOOT closes the settings. With a USB keyboard, Up/Down
+   chooses, Enter opens and saves, Esc goes back and Tab shows a password while
+   it is typed.
 2. **On the web page** — open `http://claude-usage.local/` (the settings
    screen also shows the board's address) and enter the admin password.
    - **Mike**: the server's URL, e.g. `https://mike.example.com:3456` (what
