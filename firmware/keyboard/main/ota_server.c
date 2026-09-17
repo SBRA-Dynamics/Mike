@@ -23,6 +23,7 @@
 #include "power.h"
 #include "settings.h"
 #include "usage_client.h"
+#include "wifi.h"
 
 static const char *TAG = "web";
 
@@ -109,7 +110,8 @@ static const char PAGE[] =
     "headers:{'X-Admin-Password':$('pw').value,'Content-Type':type}})"
     ".then(async r=>{const t=await r.text();if(!r.ok)throw new Error(t||r.status);return t});"
     "const info=()=>fetch('/info').then(r=>r.json()).then(i=>{"
-    "$('status').textContent=`Firmware ${i.version} (${i.partition})\\nWiFi ${i.wifi.ssid||'not set'} ${i.wifi.ip||''}\\n`+"
+    "$('status').textContent=`Firmware ${i.version} (${i.partition})\\nWiFi ${i.wifi.ssid||'not set'} ${i.wifi.ip||''}`+"
+    "`${i.wifi.rssi!==undefined?' ('+i.wifi.rssi+' dBm)':''}\\n`+"
     "`Mike ${i.mike.url||'not set'}${i.mike.connected?' - connected':''}\\n`+"
     "`Claude ${i.claude.logged_in?'logged in':'not logged in'}\\n`+"
     "`Battery ${i.battery.present?i.battery.percent+'%, '+(i.battery.millivolts/1000).toFixed(2)+' V, '+i.battery.state:'none'}`+"
@@ -248,6 +250,10 @@ static esp_err_t info_get(httpd_req_t *req)
         snprintf(ip_text, sizeof(ip_text), IPSTR, IP2STR(&ip.ip));
     }
     cJSON_AddStringToObject(wifi, "ip", ip_text);
+    int dbm;
+    if (wifi_rssi(&dbm)) {
+        cJSON_AddNumberToObject(wifi, "rssi", dbm);
+    }
 
     mike_settings_t mike;
     settings_get_mike(&mike);

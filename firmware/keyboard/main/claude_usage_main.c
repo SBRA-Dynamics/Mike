@@ -50,6 +50,8 @@ static lv_obj_t *s_content;
 static lv_obj_t *s_footer;
 static lv_obj_t *s_status_dot;
 static lv_obj_t *s_battery;
+static lv_obj_t *s_wifi;
+static lv_obj_t *s_wifi_bars[4];
 static usage_data_t s_data;
 static bool s_have_data;
 static char s_error[128];
@@ -236,9 +238,26 @@ static void battery_render(void)
     lv_obj_align_to(s_battery, s_status_dot, LV_ALIGN_OUT_LEFT_MID, -10, 0);
 }
 
+/* WiFi strength as four bars; all dim and the first one red while not connected. */
+static void wifi_render(void)
+{
+    int dbm = 0;
+    bool connected = wifi_rssi(&dbm);
+    int lit = !connected ? 0 : dbm >= -55 ? 4 : dbm >= -65 ? 3 : dbm >= -75 ? 2 : 1;
+    for (int i = 0; i < 4; i++) {
+        lv_color_t color = i < lit ? COLOR_TEXT : COLOR_TRACK;
+        if (!connected && i == 0) {
+            color = COLOR_CRIT;
+        }
+        lv_obj_set_style_bg_color(s_wifi_bars[i], color, 0);
+    }
+    lv_obj_align_to(s_wifi, s_battery, LV_ALIGN_OUT_LEFT_BOTTOM, -12, 0);
+}
+
 static void battery_timer_cb(lv_timer_t *timer)
 {
     battery_render();
+    wifi_render();
 }
 
 static void tick_timer_cb(lv_timer_t *timer)
@@ -292,6 +311,19 @@ static void ui_create(void)
     s_battery = label(header, &lv_font_montserrat_14, COLOR_MUTED, "");
     lv_obj_align_to(s_battery, s_status_dot, LV_ALIGN_OUT_LEFT_MID, -10, 0);
 
+    s_wifi = lv_obj_create(header);
+    lv_obj_remove_style_all(s_wifi);
+    lv_obj_set_size(s_wifi, 4 * 4 + 3 * 2, 14);
+    for (int i = 0; i < 4; i++) {
+        s_wifi_bars[i] = lv_obj_create(s_wifi);
+        lv_obj_remove_style_all(s_wifi_bars[i]);
+        lv_obj_set_size(s_wifi_bars[i], 4, 5 + i * 3);
+        lv_obj_set_style_radius(s_wifi_bars[i], 1, 0);
+        lv_obj_set_style_bg_opa(s_wifi_bars[i], LV_OPA_COVER, 0);
+        lv_obj_align(s_wifi_bars[i], LV_ALIGN_BOTTOM_LEFT, i * 6, 0);
+    }
+    wifi_render();
+
     s_content = plain_container(s_root);
     lv_obj_set_flex_flow(s_content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_content, 14, 0);
@@ -303,6 +335,8 @@ static void ui_create(void)
     lv_label_set_long_mode(s_footer, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_footer, lv_pct(100));
 
+    battery_render();
+    wifi_render();
     render();
     lv_timer_create(tick_timer_cb, 20 * 1000, NULL);
     lv_timer_create(battery_timer_cb, 5 * 1000, NULL);

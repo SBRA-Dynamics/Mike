@@ -28,6 +28,9 @@ bool wifi_wait_connected(uint32_t timeout_ms);
 /* The stored network name, "" when none. */
 void wifi_stored_ssid(char *out, size_t len);
 
+/* Signal strength of the connection in dBm; false while not connected. */
+bool wifi_rssi(int *dbm);
+
 /* The address this board has, "" while not connected. */
 void wifi_ip(char *out, size_t len);
 

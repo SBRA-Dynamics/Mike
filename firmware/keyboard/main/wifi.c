@@ -103,6 +103,16 @@ void wifi_stored_ssid(char *out, size_t len)
     }
 }
 
+bool wifi_rssi(int *dbm)
+{
+    wifi_ap_record_t ap;
+    if (!wifi_connected() || esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return false;
+    }
+    *dbm = ap.rssi;
+    return true;
+}
+
 void wifi_ip(char *out, size_t len)
 {
     esp_netif_ip_info_t ip;
