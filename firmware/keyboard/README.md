@@ -20,9 +20,12 @@ NVS, so a firmware update keeps it:
    Enter opens and saves, Esc goes back, Tab shows a password while typing it.
 2. **On the web page** — open `http://claude-usage.local/` (the settings
    screen also shows the board's address) and enter the admin password.
-   - **Mike**: the server's LAN address, its port, the name on its
-     certificate (empty for a server without TLS) and its token (`MIKE_TOKEN`
-     in `~/.config/mike/env`). Saving restarts the board.
+   - **Mike**: the server's URL, e.g. `https://mike.example.com:3456` (what
+     the phone uses; `http://` for a server without TLS), and its token
+     (`MIKE_TOKEN` in `~/.config/mike/env`). Saving restarts the board. The
+     certificate is checked against the name in the URL, so on the same LAN as
+     the server the router has to route its public address back in (hairpin
+     NAT); most do.
    - **Claude login**: *Start login* opens claude.ai; authorize, paste the code
      it shows and press *Finish login*. The board then renews the 8-hour access
      token by itself and keeps the rotated tokens.

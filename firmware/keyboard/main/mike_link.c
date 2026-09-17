@@ -304,7 +304,7 @@ static bool ws_handshake(esp_tls_t *tls)
     int n = snprintf(req, sizeof(req),
                      "GET /ws HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                      "Sec-WebSocket-Key: %.*s\r\nSec-WebSocket-Version: 13\r\n\r\n",
-                     s_cfg.tls_name[0] ? s_cfg.tls_name : s_cfg.host, s_cfg.port, (int)key_len, key);
+                     s_cfg.host, s_cfg.port, (int)key_len, key);
     if (!tls_write_all(tls, (const uint8_t *)req, n)) {
         return false;
     }
@@ -424,10 +424,8 @@ static esp_tls_t *connect_tls(void)
 {
     esp_tls_cfg_t cfg = {
         .timeout_ms = 10000,
-        .is_plain_tcp = s_cfg.tls_name[0] == '\0',
-        .crt_bundle_attach = s_cfg.tls_name[0] ? esp_crt_bundle_attach : NULL,
-        /* Connected by LAN address, verified against the certificate's own name. */
-        .common_name = s_cfg.tls_name[0] ? s_cfg.tls_name : NULL,
+        .is_plain_tcp = !s_cfg.tls,
+        .crt_bundle_attach = s_cfg.tls ? esp_crt_bundle_attach : NULL,
     };
     esp_tls_t *tls = esp_tls_init();
     if (tls == NULL) {
@@ -561,7 +559,7 @@ void mike_link_start(void)
 {
     s_enabled = settings_get_mike(&s_cfg);
     if (!s_enabled) {
-        ESP_LOGI(TAG, "no Mike address or token set (web page), keyboard link off");
+        ESP_LOGI(TAG, "no Mike URL or token set (web page), keyboard link off");
         return;
     }
     s_lock = xSemaphoreCreateMutex();

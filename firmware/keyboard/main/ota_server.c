@@ -86,9 +86,7 @@ static const char PAGE[] =
     "<label>Admin password</label><input id=pw type=password autocomplete=current-password>"
 
     "<h2>Mike</h2>"
-    "<label>Server address on the LAN</label><input id=host placeholder=192.168.1.10>"
-    "<label>Port</label><input id=port type=number placeholder=3456>"
-    "<label>Name on the server's certificate (empty for no TLS)</label><input id=tls placeholder=mike.example.com>"
+    "<label>Server URL</label><input id=url placeholder=https://mike.example.com:3456 autocomplete=off>"
     "<label>Token (MIKE_TOKEN; empty keeps the stored one)</label><input id=token type=password autocomplete=off>"
     "<button id=saveMike>Save and restart</button><div id=mikeMsg class=msg></div>"
 
@@ -111,12 +109,12 @@ static const char PAGE[] =
     ".then(async r=>{const t=await r.text();if(!r.ok)throw new Error(t||r.status);return t});"
     "const info=()=>fetch('/info').then(r=>r.json()).then(i=>{"
     "$('status').textContent=`Firmware ${i.version} (${i.partition})\\nWiFi ${i.wifi.ssid||'not set'} ${i.wifi.ip||''}\\n`+"
-    "`Mike ${i.mike.host?i.mike.host+':'+i.mike.port:'not set'}${i.mike.connected?' - connected':''}\\n`+"
+    "`Mike ${i.mike.url||'not set'}${i.mike.connected?' - connected':''}\\n`+"
     "`Claude ${i.claude.logged_in?'logged in':'not logged in'}\\n`+"
     "`Keyboard ${i.keyboard.attached?'attached':'not attached'}, ${i.keyboard.interfaces} USB interfaces, `+"
     "`${i.keyboard.reports} reports, ${i.keyboard.keys} keys, ${i.keyboard.transfer_errors} transfer errors`;"
     "$('first').hidden=i.admin_set;"
-    "if(!$('host').value){$('host').value=i.mike.host;$('port').value=i.mike.port;$('tls').value=i.mike.tls_name}"
+    "if(!$('url').value){$('url').value=i.mike.url}"
     "$('token').placeholder=i.mike.token_set?'stored':'';return i});"
     "info();"
     "$('setpw').onclick=()=>fetch('/api/admin',{method:'POST',body:JSON.stringify({password:$('newpw').value})})"
@@ -124,8 +122,7 @@ static const char PAGE[] =
     "try{localStorage.adminPw=$('pw').value}catch(e){}$('firstMsg').textContent='Saved.';info()})"
     ".catch(e=>$('firstMsg').textContent=e.message);"
     "$('saveMike').onclick=()=>{$('mikeMsg').textContent='Saving...';"
-    "post('/api/mike',JSON.stringify({host:$('host').value.trim(),port:+$('port').value||3456,"
-    "tls_name:$('tls').value.trim(),token:$('token').value.trim()}))"
+    "post('/api/mike',JSON.stringify({url:$('url').value.trim(),token:$('token').value.trim()}))"
     ".then(()=>{$('mikeMsg').textContent='Saved. Restarting...';$('token').value='';setTimeout(()=>info().catch(()=>{}),8000)})"
     ".catch(e=>$('mikeMsg').textContent=e.message)};"
     "$('login').onclick=()=>post('/api/claude/start','').then(t=>{const u=JSON.parse(t).url;"
@@ -250,9 +247,7 @@ static esp_err_t info_get(httpd_req_t *req)
     mike_settings_t mike;
     settings_get_mike(&mike);
     cJSON *m = cJSON_AddObjectToObject(root, "mike");
-    cJSON_AddStringToObject(m, "host", mike.host);
-    cJSON_AddNumberToObject(m, "port", mike.port);
-    cJSON_AddStringToObject(m, "tls_name", mike.tls_name);
+    cJSON_AddStringToObject(m, "url", mike.url);
     cJSON_AddBoolToObject(m, "token_set", mike.token[0] != '\0');
     cJSON_AddBoolToObject(m, "connected", mike_link_connected());
 
@@ -282,18 +277,14 @@ static esp_err_t mike_post(httpd_req_t *req)
     if (root == NULL) {
         return ESP_OK;
     }
-    mike_settings_t in = {0};
-    const char *host = cJSON_GetStringValue(cJSON_GetObjectItem(root, "host"));
-    const char *tls = cJSON_GetStringValue(cJSON_GetObjectItem(root, "tls_name"));
+    const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(root, "url"));
     const char *token = cJSON_GetStringValue(cJSON_GetObjectItem(root, "token"));
-    cJSON *port = cJSON_GetObjectItem(root, "port");
-    strlcpy(in.host, host ? host : "", sizeof(in.host));
-    strlcpy(in.tls_name, tls ? tls : "", sizeof(in.tls_name));
-    strlcpy(in.token, token ? token : "", sizeof(in.token));
-    in.port = cJSON_IsNumber(port) && port->valueint > 0 && port->valueint < 65536 ? port->valueint : 3456;
+    esp_err_t err = settings_set_mike(url ? url : "", token ? token : "");
     cJSON_Delete(root);
-
-    if (settings_set_mike(&in) != ESP_OK) {
+    if (err == ESP_ERR_INVALID_ARG) {
+        return fail(req, "400 Bad Request", "Not a server URL. Use e.g. https://mike.example.com:3456");
+    }
+    if (err != ESP_OK) {
         return fail(req, "500 Internal Server Error", "Could not save.");
     }
     ESP_LOGI(TAG, "Mike settings saved, restarting");

@@ -5,7 +5,7 @@
  *
  *   GET  /                    the page
  *   GET  /info                status as JSON (no password)
- *   POST /api/mike            { host, port, tls_name, token }   saves and restarts
+ *   POST /api/mike            { url, token }                    saves and restarts
  *   POST /api/claude/start    -> { url }                        Claude login, step 1
  *   POST /api/claude/finish   { code }                          step 2
  *   POST /update              the raw firmware .bin

@@ -15,19 +15,24 @@
 #include "esp_err.h"
 
 typedef struct {
-    char host[64];      /* LAN address of the Mike server */
-    uint16_t port;
-    char tls_name[96];  /* name on its certificate; empty for plain ws:// */
+    char url[128];      /* as entered: https://mike.example.com:3456 */
     char token[96];
+    /* Parsed from url. */
+    char host[96];
+    uint16_t port;
+    bool tls;           /* https:// or wss://; the certificate is checked against host */
 } mike_settings_t;
 
 void settings_init(void);
 
-/* True when a host and a token are set. */
+/* True when a valid URL and a token are set. */
 bool settings_get_mike(mike_settings_t *out);
 
-/* An empty token keeps the stored one. */
-esp_err_t settings_set_mike(const mike_settings_t *in);
+/* An empty token keeps the stored one. ESP_ERR_INVALID_ARG for a URL that does not parse. */
+esp_err_t settings_set_mike(const char *url, const char *token);
+
+/* Splits http(s)://host[:port][/...] (ws:// and wss:// too; no scheme means https). */
+bool settings_parse_url(const char *url, char *host, size_t host_len, uint16_t *port, bool *tls);
 
 /* The password for the web page and firmware updates. */
 bool settings_admin_password_set(void);
