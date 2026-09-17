@@ -22,6 +22,11 @@
 #ifndef KEYBOARD_DEBUG
 #define KEYBOARD_DEBUG 0
 #endif
+/* Mike's env file wins over secrets.h (main/CMakeLists.txt passes it in). */
+#ifdef MIKE_ENV_OTA_PASSWORD
+#undef OTA_PASSWORD
+#define OTA_PASSWORD MIKE_ENV_OTA_PASSWORD
+#endif
 #ifndef OTA_PASSWORD
 #define OTA_PASSWORD ""
 #endif

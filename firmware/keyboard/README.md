@@ -109,8 +109,10 @@ idf.py -p PORT flash monitor
 
 ### Over WiFi
 
-Once flashed by USB, the board updates over WiFi. Set `OTA_PASSWORD` in
-`main/secrets.h`, then either:
+Once flashed by USB, the board updates over WiFi. The password is
+`MIKE_KEYBOARD_OTA_PASSWORD` in Mike's env file (`~/.config/mike/env`, or the
+file `$MIKE_ENV` names), read when the firmware is built and by
+`tools/ota.sh`. Then either:
 
 - open `http://claude-usage.local/` (`OTA_HOSTNAME`), choose
   `build/claude_usage_monitor.bin` and upload it, or

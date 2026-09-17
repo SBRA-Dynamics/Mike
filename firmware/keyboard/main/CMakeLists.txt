@@ -14,6 +14,22 @@ idf_component_register(SRCS "claude_usage_main.c" "usage_client.c" "mike_link.c"
                        INCLUDE_DIRS "."
                        REQUIRES ${requires})
 
+# The OTA password lives with Mike's other secrets, in his env file.
+if(DEFINED ENV{MIKE_ENV})
+    set(mike_env "$ENV{MIKE_ENV}")
+else()
+    set(mike_env "$ENV{HOME}/.config/mike/env")
+endif()
+if(EXISTS "${mike_env}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mike_env}")
+    file(STRINGS "${mike_env}" ota_line REGEX "^MIKE_KEYBOARD_OTA_PASSWORD=")
+    if(ota_line)
+        string(REGEX REPLACE "^MIKE_KEYBOARD_OTA_PASSWORD=" "" ota_password "${ota_line}")
+        string(STRIP "${ota_password}" ota_password)
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE "MIKE_ENV_OTA_PASSWORD=\"${ota_password}\"")
+    endif()
+endif()
+
 idf_build_get_property(build_components BUILD_COMPONENTS)
 if("lvgl__lvgl" IN_LIST build_components)
     idf_component_get_property(LVGL_LIB lvgl__lvgl COMPONENT_LIB)

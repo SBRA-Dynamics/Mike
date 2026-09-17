@@ -64,9 +64,10 @@
 
 /*
  * Firmware updates over WiFi: http://OTA_HOSTNAME.local/ (or tools/ota.sh).
- * Empty password turns them off. A new image that does not reach WiFi within
- * OTA_CONFIRM_S seconds is rolled back.
+ * The password is MIKE_KEYBOARD_OTA_PASSWORD in Mike's env file
+ * (~/.config/mike/env, or $MIKE_ENV), read at build time; without it updates
+ * over WiFi are off. A new image that does not reach WiFi within OTA_CONFIRM_S
+ * seconds is rolled back.
  */
-#define OTA_PASSWORD ""
 #define OTA_HOSTNAME "claude-usage"
 #define OTA_CONFIRM_S 90
