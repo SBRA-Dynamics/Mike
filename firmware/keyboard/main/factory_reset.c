@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "settings_ui.h"
 #include "nvs.h"
 
 static const char *TAG = "factory_reset";
@@ -119,11 +120,25 @@ static void finish(countdown_ui_t *ui)
 static void watch_task(void *arg)
 {
     for (;;) {
-        /* Wait for a hold of FACTORY_RESET_HOLD_S. */
+        /*
+         * One button, two lengths: the settings screen at FACTORY_RESET_MENU_S,
+         * and - if the finger stays on - the reset countdown at
+         * FACTORY_RESET_HOLD_S. Letting go in between leaves the settings up.
+         */
         int held_ms = 0;
+        bool menu_shown = false;
         while (held_ms < FACTORY_RESET_HOLD_S * 1000) {
             vTaskDelay(pdMS_TO_TICKS(POLL_MS));
             held_ms = pressed() ? held_ms + POLL_MS : 0;
+            if (held_ms == 0) {
+                menu_shown = false;
+            } else if (!menu_shown && held_ms >= FACTORY_RESET_MENU_S * 1000) {
+                menu_shown = true;
+                ESP_LOGI(TAG, "BOOT held for %d s, opening the settings", FACTORY_RESET_MENU_S);
+                if (!settings_ui_active()) {
+                    settings_ui_open("Keep holding BOOT to reset every setting.");
+                }
+            }
         }
         ESP_LOGW(TAG, "BOOT held for %d s, counting down", FACTORY_RESET_HOLD_S);
 

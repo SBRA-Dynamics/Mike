@@ -25,7 +25,9 @@
 /* The board's name on the network: http://OTA_HOSTNAME.local/ */
 #define OTA_HOSTNAME "claude-usage"
 
-/* Hold BOOT this long, then a countdown of this long, to erase every setting. */
+/* Hold BOOT this long for the settings screen, this long for the reset countdown,
+ * and the countdown itself runs this long before every setting is erased. */
+#define FACTORY_RESET_MENU_S 5
 #define FACTORY_RESET_HOLD_S 10
 #define FACTORY_RESET_COUNTDOWN_S 5
 
