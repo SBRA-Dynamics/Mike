@@ -11,9 +11,7 @@
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_random.h"
-#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "app_config.h"
 #include "keyboard_input.h"
@@ -22,11 +20,13 @@
 #include "mike_link.h"
 #include "nvs_flash.h"
 #include "ota_server.h"
+#include "settings.h"
+#include "settings_ui.h"
 #include "usage_client.h"
+#include "wifi.h"
 
 static const char *TAG = "claude_usage";
 
-#define WIFI_CONNECTED_BIT BIT0
 #define RETRY_AFTER_ERROR_S 30
 #define PIXEL_SHIFT_PERIOD_MS (5 * 60 * 1000)
 #define SCREEN_MARGIN 6
@@ -40,7 +40,6 @@ static const char *TAG = "claude_usage";
 #define COLOR_CRIT lv_color_hex(0xE5484D)
 #define COLOR_OK lv_color_hex(0x46A758)
 
-static EventGroupHandle_t s_wifi_events;
 static TaskHandle_t s_poll_task;
 
 /* Everything below is only touched with the LVGL lock held. */
@@ -52,51 +51,6 @@ static usage_data_t s_data;
 static bool s_have_data;
 static char s_error[128];
 static char s_status[96];
-
-/* ---------------------------------------------------------------- WiFi -- */
-
-static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT);
-        ESP_LOGW(TAG, "WiFi disconnected (reason %d), reconnecting",
-                 ((wifi_event_sta_disconnected_t *)data)->reason);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        esp_wifi_connect();
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = data;
-        ESP_LOGI(TAG, "got IP " IPSTR, IP2STR(&event->ip_info.ip));
-        xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
-        /* On the network means OTA can reach this image: it may stay. */
-        ota_confirm();
-    }
-}
-
-static void wifi_start(void)
-{
-    s_wifi_events = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
-
-    wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&init));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL, NULL));
-
-    wifi_config_t cfg = {0};
-    strlcpy((char *)cfg.sta.ssid, WIFI_SSID, sizeof(cfg.sta.ssid));
-    strlcpy((char *)cfg.sta.password, WIFI_PASSWORD, sizeof(cfg.sta.password));
-    cfg.sta.threshold.authmode = WIFI_PASSWORD[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
-    cfg.sta.pmf_cfg.capable = true;
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-}
 
 /* ------------------------------------------------------------------ UI -- */
 
@@ -223,7 +177,7 @@ static void render(void)
         }
     }
 
-    bool wifi_up = (xEventGroupGetBits(s_wifi_events) & WIFI_CONNECTED_BIT) != 0;
+    bool wifi_up = wifi_connected();
     lv_color_t dot = COLOR_OK;
     if (!wifi_up || (s_error[0] && !s_have_data)) {
         dot = COLOR_CRIT;
@@ -331,10 +285,16 @@ static void ui_set_status(const char *status)
 
 static void poll_task(void *arg)
 {
+    char ssid[33];
+    wifi_stored_ssid(ssid, sizeof(ssid));
     char status[96];
-    snprintf(status, sizeof(status), "Connecting to WiFi\n\"%s\"...", WIFI_SSID);
+    if (ssid[0] == '\0') {
+        snprintf(status, sizeof(status), "No WiFi set.\nPress F2 on the keyboard.");
+    } else {
+        snprintf(status, sizeof(status), "Connecting to WiFi\n\"%s\"...", ssid);
+    }
     ui_set_status(status);
-    xEventGroupWaitBits(s_wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    wifi_wait_connected(0);
 
     ui_set_status("Syncing time...");
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
@@ -346,18 +306,29 @@ static void poll_task(void *arg)
     ui_set_status("Fetching usage...");
     usage_data_t *data = heap_caps_malloc(sizeof(usage_data_t), MALLOC_CAP_SPIRAM);
     char err[128];
+    uint32_t backoff_s = 0;
 
     while (true) {
         uint32_t wait_s = USAGE_POLL_INTERVAL_S;
-        if ((xEventGroupGetBits(s_wifi_events) & WIFI_CONNECTED_BIT) == 0) {
+        TickType_t fetched_at = xTaskGetTickCount();
+        if (!wifi_connected()) {
             strlcpy(err, "WiFi disconnected", sizeof(err));
             wait_s = 5;
         } else if (usage_client_fetch(data, err, sizeof(err)) == ESP_OK) {
             ESP_LOGI(TAG, "usage: %d limits, first %s %d%%", data->limit_count, data->limits[0].title,
                      data->limits[0].percent);
+            backoff_s = 0;
+        } else if (strstr(err, "429") != NULL) {
+            /* Rate limited: honour Retry-After, and back off harder each time it repeats. */
+            backoff_s = backoff_s ? backoff_s * 2 : USAGE_BACKOFF_MIN_S;
+            backoff_s = backoff_s > USAGE_BACKOFF_MAX_S ? USAGE_BACKOFF_MAX_S : backoff_s;
+            int retry_after = usage_client_retry_after_s();
+            wait_s = retry_after > (int)backoff_s ? (uint32_t)retry_after : backoff_s;
+            snprintf(err, sizeof(err), "Rate limited, next try in %lu min", (unsigned long)((wait_s + 59) / 60));
+            ESP_LOGW(TAG, "rate limited, waiting %lu s", (unsigned long)wait_s);
         } else {
             ESP_LOGW(TAG, "fetch failed: %s", err);
-            wait_s = strstr(err, "429") ? USAGE_POLL_INTERVAL_S * 2 : RETRY_AFTER_ERROR_S;
+            wait_s = RETRY_AFTER_ERROR_S;
         }
 
         if (bsp_display_lock(0)) {
@@ -373,9 +344,32 @@ static void poll_task(void *arg)
             bsp_display_unlock();
         }
 
-        /* Sleep until the next poll, or until the screen is tapped. */
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_s * 1000));
+        /* Sleep until the next poll. A tap brings it forward, but never closer than
+         * USAGE_TAP_MIN_S to the last fetch, and not at all while rate limited. */
+        TickType_t due = fetched_at + pdMS_TO_TICKS(wait_s * 1000);
+        for (;;) {
+            TickType_t now = xTaskGetTickCount();
+            if (now >= due) {
+                break;
+            }
+            if (ulTaskNotifyTake(pdTRUE, due - now) && backoff_s == 0) {
+                TickType_t earliest = fetched_at + pdMS_TO_TICKS(USAGE_TAP_MIN_S * 1000);
+                if (earliest < due) {
+                    due = earliest;
+                }
+            }
+        }
     }
+}
+
+/* Keystrokes: F2 and the settings screen first, everything else to Mike. */
+static void on_key(const key_event_t *event)
+{
+    if (event->action == KEY_SETTINGS || settings_ui_active()) {
+        settings_ui_key(event);
+        return;
+    }
+    line_editor_key(event);
 }
 
 void app_main(void)
@@ -387,6 +381,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
     ota_watchdog_start();
+    settings_init();
 
     setenv("TZ", LOCAL_TIMEZONE, 1);
     tzset();
@@ -396,12 +391,10 @@ void app_main(void)
     ota_server_start();
     usage_client_init();
 
-    /* The keyboard for Mike: keystrokes -> line editor -> the text box on the glasses. */
-    if (mike_link_enabled()) {
-        line_editor_init();
-        mike_link_start();
-        keyboard_input_start(line_editor_key);
-    }
+    /* The keyboard: settings on F2, everything else -> line editor -> the text box on the glasses. */
+    mike_link_start();
+    line_editor_init();
+    keyboard_input_start(on_key);
 
     /*
      * The panel and touch reset lines sit on the TCA9554 expander (pins 0-2), and the BSP
@@ -438,7 +431,14 @@ void app_main(void)
 
     if (bsp_display_lock(0)) {
         ui_create();
+        settings_ui_create();
         bsp_display_unlock();
+    }
+
+    char ssid[33];
+    wifi_stored_ssid(ssid, sizeof(ssid));
+    if (ssid[0] == '\0') {
+        settings_ui_open("No WiFi yet. Choose a network, then set an admin password for the web page.");
     }
 
     xTaskCreate(poll_task, "usage_poll", 10240, NULL, 5, &s_poll_task);

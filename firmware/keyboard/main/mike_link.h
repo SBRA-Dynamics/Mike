@@ -19,7 +19,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Starts the link task. Waits for WiFi by itself and reconnects forever. */
+/* Reads the settings and starts the link task if Mike is configured. Call before any other function here. */
 void mike_link_start(void);
 
 /* The line being typed, as code points, and the cursor position in code points. */
@@ -38,5 +38,5 @@ void mike_link_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* True while the socket is open and hello was answered. */
 bool mike_link_connected(void);
 
-/* True when MIKE_HOST is configured at all. */
+/* True when a Mike address and token are set (settings.h). */
 bool mike_link_enabled(void);

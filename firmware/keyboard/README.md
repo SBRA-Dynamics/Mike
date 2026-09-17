@@ -8,40 +8,32 @@ No computer is needed once it is flashed.
 Firmware for the Waveshare ESP32-S3-Touch-AMOLED-1.8, ESP-IDF 5.5, built on the
 `14_lvgl_demo_v9` example from Waveshare's board repository (managed BSP + LVGL 9).
 
-## Configuration
+## Setting it up
 
-All settings live in `main/secrets.h`, created from `main/secrets.example.h` on the
-first build and ignored by git:
+Nothing secret is compiled in. Everything is set on the board and kept in its
+NVS, so a firmware update keeps it:
 
-| Define | Meaning |
-| --- | --- |
-| `WIFI_SSID`, `WIFI_PASSWORD` | 2.4 GHz network to join |
-| `CLAUDE_REFRESH_TOKEN` | OAuth refresh token, see below |
-| `CLAUDE_ACCESS_TOKEN` | Optional short-lived token, used only without a refresh token |
-| `USAGE_POLL_INTERVAL_S` | Poll interval (default 120 s) |
-| `LOCAL_TIMEZONE` | POSIX TZ string |
-| `DISPLAY_BRIGHTNESS` | Brightness in percent |
+1. **On the board** — connect the keyboard and press **F2** (the settings
+   screen also opens by itself when no WiFi is set). Choose the WiFi network
+   from the list (or type one under *Other network*), type its password, and
+   set an **admin password** of at least six characters. Up/Down chooses,
+   Enter opens and saves, Esc goes back, Tab shows a password while typing it.
+2. **On the web page** — open `http://claude-usage.local/` (the settings
+   screen also shows the board's address) and enter the admin password.
+   - **Mike**: the server's LAN address, its port, the name on its
+     certificate (empty for a server without TLS) and its token (`MIKE_TOKEN`
+     in `~/.config/mike/env`). Saving restarts the board.
+   - **Claude login**: *Start login* opens claude.ai; authorize, paste the code
+     it shows and press *Finish login*. The board then renews the 8-hour access
+     token by itself and keeps the rotated tokens.
 
-### Getting a token
-
-The usage endpoint (`api.anthropic.com/api/oauth/usage`) accepts the OAuth tokens
-Claude Code uses. `tools/claude_login.py` runs that login for the board, so it gets
-its own token and does not interfere with Claude Code on your computer:
-
-```bash
-python3 tools/claude_login.py --write
-```
-
-It opens the login page. Authorize, paste the code shown, and the script prints the
-current usage and writes `CLAUDE_REFRESH_TOKEN` into `main/secrets.h`. Without a
-terminal, use `--start` followed by `--code 'CODE#STATE' --write`.
-
-The board refreshes the 8-hour access token by itself and stores rotated tokens in
-NVS. Changing the tokens in `secrets.h` makes it drop what it stored and start over.
+`main/app_config.h` holds the few build-time settings: poll interval and
+back-off, time zone, brightness, host name, and the keyboard test and debug
+switches.
 
 ## Keyboard for Mike (optional)
 
-With `MIKE_HOST` and `MIKE_TOKEN` set, the board is also a keyboard for
+With Mike's address and token set on the web page, the board is also a keyboard for
 Mike on Even Realities G2 glasses (see "A keyboard" in the repository README): a USB keyboard on the
 board's USB-C port types into the conversation on the glasses, and the line
 being typed is shown on the lens as a text box (`╰─ > line| ───╯`) while it is
@@ -54,19 +46,15 @@ keyboard and Mike are connected.
 | Backspace / Delete | delete (Ctrl+Backspace, Ctrl+W: a word; Ctrl+U / Ctrl+K: to start / end) |
 | Up / Down | earlier lines, like a shell history (kept across reboots) |
 | Enter | send the line to Mike |
+| F2 | settings screen |
 | Esc | clear the line |
 | Ctrl+C | interrupt the running turn |
 
 The layout is Swedish, with dead keys for accents (´ ` ¨ ^ ~).
 
-| Define | Meaning |
-| --- | --- |
-| `MIKE_HOST` | the Mike server's LAN address |
-| `MIKE_PORT` | `MIKE_PORT` from `~/.config/mike/env` |
-| `MIKE_TLS_NAME` | the name on the server's certificate; empty for plain `ws://` |
-| `MIKE_TOKEN` | `MIKE_TOKEN` from `~/.config/mike/env` |
-| `KEYBOARD_SERIAL_TEST` | `1`: take keystrokes from a terminal on the USB serial port instead |
-| `KEYBOARD_DEBUG` | `1`: USB interfaces, raw key reports and transfer errors go to the Mike server's log |
+`KEYBOARD_SERIAL_TEST` in `main/app_config.h` takes keystrokes from a terminal
+on the USB serial port instead, and `KEYBOARD_DEBUG` sends USB interfaces, raw
+key reports and transfer errors to the Mike server's log.
 
 The link is a minimal WebSocket client on esp-tls with Nagle turned off, so a
 keystroke leaves as one TLS record at once; drafts that pile up behind a slow
@@ -109,15 +97,12 @@ idf.py -p PORT flash monitor
 
 ### Over WiFi
 
-Once flashed by USB, the board updates over WiFi. The password is
-`MIKE_KEYBOARD_OTA_PASSWORD` in Mike's env file (`~/.config/mike/env`, or the
-file `$MIKE_ENV` names), read when the firmware is built and by
-`tools/ota.sh`. Then either:
+Once flashed by USB, the board updates over WiFi with its admin password:
 
-- open `http://claude-usage.local/` (`OTA_HOSTNAME`), choose
-  `build/claude_usage_monitor.bin` and upload it, or
-- run `idf.py build && tools/ota.sh` (an address instead of the `.local` name
-  can be given as the argument).
+- on the web page, under *Firmware*, upload `build/claude_usage_monitor.bin`, or
+- run `idf.py build && tools/ota.sh` (it asks for the password, or reads
+  `$KEYBOARD_ADMIN_PASSWORD`; an address instead of `claude-usage.local` can be
+  given as the argument).
 
 The flash holds two app partitions. The upload goes to the one not running and
 is validated before it is marked bootable; a failed upload leaves the running
@@ -126,15 +111,13 @@ firmware as it was. A new image boots on probation and must reach WiFi within
 so an update cannot take away the ability to update. `GET /info` says which
 version and partition are running.
 
-Moving an older USB-flashed board to this layout needs one more USB flash,
-because the partition table and bootloader change; NVS keeps its place, so
-tokens and history survive it.
-
 ## Usage
 
 - The status dot is green when data is current, orange when the last fetch failed
   and red without WiFi or data. Errors are shown at the bottom.
-- Tap the screen to fetch right away.
+- Usage is fetched every 5 minutes. A tap fetches right away, at most once a
+  minute. When the usage endpoint answers 429 the board waits for its
+  Retry-After, and at least 5 minutes, doubling up to 30 while it repeats.
 - The layout moves a few pixels every five minutes to limit AMOLED burn-in.
 
 ## Notes

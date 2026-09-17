@@ -4,19 +4,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
-#include "esp_rom_crc.h"
+#include "esp_random.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "mbedtls/base64.h"
+#include "mbedtls/sha256.h"
 #include "nvs.h"
-#include "secrets.h"
 
 static const char *TAG = "usage_client";
 
 #define USAGE_URL "https://api.anthropic.com/api/oauth/usage"
+#define AUTHORIZE_URL "https://claude.com/cai/oauth/authorize"
+#define REDIRECT_URI "https://platform.claude.com/oauth/code/callback"
 #define TOKEN_URL "https://platform.claude.com/v1/oauth/token"
 /* Public OAuth client id of Claude Code; the usage endpoint only accepts its tokens. */
 #define OAUTH_CLIENT_ID "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -24,6 +30,8 @@ static const char *TAG = "usage_client";
 #define OAUTH_BETA "oauth-2025-04-20"
 #define USER_AGENT "claude-usage-monitor/1.0 (ESP32-S3)"
 
+#include "app_config.h"
+#define OTA_HOSTNAME_FOR_MESSAGES OTA_HOSTNAME
 #define NVS_NAMESPACE "claude"
 #define TOKEN_MAX 512
 #define RESPONSE_MAX (32 * 1024)
@@ -32,6 +40,11 @@ static const char *TAG = "usage_client";
 static char s_refresh_token[TOKEN_MAX];
 static char s_access_token[TOKEN_MAX];
 static int64_t s_access_expires; /* UTC epoch seconds, 0 = unknown */
+/* Held while tokens are used or replaced: a fetch and a web login must not interleave. */
+static SemaphoreHandle_t s_token_lock;
+/* The login in progress (PKCE), kept in RAM only. */
+static char s_login_verifier[64];
+static char s_login_state[64];
 
 static bool time_is_valid(void)
 {
@@ -54,50 +67,46 @@ static void nvs_save_tokens(void)
 
 void usage_client_init(void)
 {
-    /* Fingerprint of the compiled-in tokens, to notice when secrets.h was edited. */
-    uint32_t seed_crc = esp_rom_crc32_le(0, (const uint8_t *)CLAUDE_REFRESH_TOKEN, strlen(CLAUDE_REFRESH_TOKEN));
-    seed_crc = esp_rom_crc32_le(seed_crc, (const uint8_t *)CLAUDE_ACCESS_TOKEN, strlen(CLAUDE_ACCESS_TOKEN));
-
+    s_token_lock = xSemaphoreCreateMutex();
     nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_open failed, using compiled-in tokens only");
-        strlcpy(s_refresh_token, CLAUDE_REFRESH_TOKEN, sizeof(s_refresh_token));
-        strlcpy(s_access_token, CLAUDE_ACCESS_TOKEN, sizeof(s_access_token));
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
+        ESP_LOGI(TAG, "no Claude login yet");
         return;
     }
-
-    uint32_t stored_crc = 0;
     size_t len = sizeof(s_refresh_token);
-    bool have_stored = nvs_get_u32(nvs, "seed_crc", &stored_crc) == ESP_OK && stored_crc == seed_crc &&
-                       nvs_get_str(nvs, "rt", s_refresh_token, &len) == ESP_OK;
-
-    if (have_stored) {
-        len = sizeof(s_access_token);
-        if (nvs_get_str(nvs, "at", s_access_token, &len) != ESP_OK) {
-            s_access_token[0] = '\0';
-        }
-        if (nvs_get_i64(nvs, "exp", &s_access_expires) != ESP_OK) {
-            s_access_expires = 0;
-        }
-        ESP_LOGI(TAG, "using tokens stored in NVS");
-    } else {
-        /* New (or first) token in secrets.h: forget whatever was rotated before. */
-        strlcpy(s_refresh_token, CLAUDE_REFRESH_TOKEN, sizeof(s_refresh_token));
-        strlcpy(s_access_token, CLAUDE_ACCESS_TOKEN, sizeof(s_access_token));
+    if (nvs_get_str(nvs, "rt", s_refresh_token, &len) != ESP_OK) {
+        s_refresh_token[0] = '\0';
+    }
+    len = sizeof(s_access_token);
+    if (nvs_get_str(nvs, "at", s_access_token, &len) != ESP_OK) {
+        s_access_token[0] = '\0';
+    }
+    if (nvs_get_i64(nvs, "exp", &s_access_expires) != ESP_OK) {
         s_access_expires = 0;
-        nvs_set_u32(nvs, "seed_crc", seed_crc);
-        nvs_set_str(nvs, "rt", s_refresh_token);
-        nvs_set_str(nvs, "at", s_access_token);
-        nvs_set_i64(nvs, "exp", 0);
-        nvs_commit(nvs);
-        ESP_LOGI(TAG, "seeded tokens from secrets.h");
     }
     nvs_close(nvs);
+    ESP_LOGI(TAG, "Claude login %s", s_refresh_token[0] ? "stored" : "missing");
 }
 
 bool usage_client_has_credentials(void)
 {
     return s_refresh_token[0] != '\0' || s_access_token[0] != '\0';
+}
+
+/* Retry-After of the last response that had one, in seconds. */
+static int s_retry_after_s;
+
+static esp_err_t on_http_event(esp_http_client_event_t *evt)
+{
+    if (evt->event_id == HTTP_EVENT_ON_HEADER && strcasecmp(evt->header_key, "retry-after") == 0) {
+        s_retry_after_s = atoi(evt->header_value);
+    }
+    return ESP_OK;
+}
+
+int usage_client_retry_after_s(void)
+{
+    return s_retry_after_s;
 }
 
 /* Performs one HTTPS request and collects the body into buf (NUL terminated). */
@@ -111,6 +120,7 @@ static esp_err_t http_request(esp_http_client_method_t method, const char *url, 
         .buffer_size = 4096,
         .buffer_size_tx = 2048,
         .crt_bundle_attach = esp_crt_bundle_attach,
+        .event_handler = on_http_event,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (client == NULL) {
@@ -164,7 +174,7 @@ static esp_err_t http_request(esp_http_client_method_t method, const char *url, 
 static esp_err_t refresh_access_token(char *buf, size_t cap, char *err, size_t err_len)
 {
     if (s_refresh_token[0] == '\0') {
-        snprintf(err, err_len, "Access token expired.\nSet CLAUDE_REFRESH_TOKEN.");
+        snprintf(err, err_len, "Claude login expired.\nLog in on http://%s.local/", OTA_HOSTNAME_FOR_MESSAGES);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -186,7 +196,7 @@ static esp_err_t refresh_access_token(char *buf, size_t cap, char *err, size_t e
     if (status != 200) {
         ESP_LOGE(TAG, "token refresh HTTP %d: %.200s", status, buf);
         if (status == 400 || status == 401) {
-            snprintf(err, err_len, "Refresh token rejected (%d).\nRun tools/claude_login.py", status);
+            snprintf(err, err_len, "Claude login rejected (%d).\nLog in again on the web page.", status);
         } else {
             snprintf(err, err_len, "Token refresh failed (HTTP %d)", status);
         }
@@ -360,7 +370,7 @@ esp_err_t usage_client_fetch(usage_data_t *out, char *err, size_t err_len)
 {
     err[0] = '\0';
     if (!usage_client_has_credentials()) {
-        snprintf(err, err_len, "No Claude token.\nEdit main/secrets.h");
+        snprintf(err, err_len, "Not logged in to Claude.\nOpen http://%s.local/", OTA_HOSTNAME_FOR_MESSAGES);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -370,6 +380,8 @@ esp_err_t usage_client_fetch(usage_data_t *out, char *err, size_t err_len)
         return ESP_ERR_NO_MEM;
     }
 
+    xSemaphoreTake(s_token_lock, portMAX_DELAY);
+    s_retry_after_s = 0;
     esp_err_t ret = ESP_OK;
     bool refreshed = false;
     bool expired = s_access_expires != 0 && time_is_valid() && time(NULL) >= s_access_expires - REFRESH_MARGIN_S;
@@ -394,6 +406,7 @@ esp_err_t usage_client_fetch(usage_data_t *out, char *err, size_t err_len)
         if (status != 200) {
             ESP_LOGE(TAG, "usage HTTP %d: %.200s", status, buf);
             if (status == 429) {
+                ESP_LOGW(TAG, "rate limited, Retry-After %d s", s_retry_after_s);
                 snprintf(err, err_len, "Rate limited (HTTP 429)");
             } else {
                 snprintf(err, err_len, "Usage request failed (HTTP %d)", status);
@@ -410,5 +423,115 @@ esp_err_t usage_client_fetch(usage_data_t *out, char *err, size_t err_len)
     }
 
     free(buf);
+    xSemaphoreGive(s_token_lock);
+    return ret;
+}
+
+/* ------------------------------------------------------------------ login -- */
+
+static void base64url(const uint8_t *in, size_t len, char *out, size_t cap)
+{
+    size_t n = 0;
+    mbedtls_base64_encode((unsigned char *)out, cap, &n, in, len);
+    out[n] = '\0';
+    for (size_t i = 0; i < n; i++) {
+        out[i] = out[i] == '+' ? '-' : out[i] == '/' ? '_' : out[i];
+    }
+    while (n > 0 && out[n - 1] == '=') {
+        out[--n] = '\0';
+    }
+}
+
+esp_err_t usage_client_login_start(char *url, size_t len)
+{
+    uint8_t random[32];
+    esp_fill_random(random, sizeof(random));
+    base64url(random, sizeof(random), s_login_verifier, sizeof(s_login_verifier));
+    esp_fill_random(random, sizeof(random));
+    base64url(random, sizeof(random), s_login_state, sizeof(s_login_state));
+
+    uint8_t digest[32];
+    mbedtls_sha256((const unsigned char *)s_login_verifier, strlen(s_login_verifier), digest, 0);
+    char challenge[64];
+    base64url(digest, sizeof(digest), challenge, sizeof(challenge));
+
+    int n = snprintf(url, len,
+                     AUTHORIZE_URL "?code=true&client_id=" OAUTH_CLIENT_ID
+                     "&response_type=code&redirect_uri=https%%3A%%2F%%2Fplatform.claude.com%%2Foauth%%2Fcode%%2Fcallback"
+                     "&scope=user%%3Aprofile%%20user%%3Ainference&code_challenge=%s&code_challenge_method=S256&state=%s",
+                     challenge, s_login_state);
+    return n > 0 && (size_t)n < len ? ESP_OK : ESP_ERR_INVALID_SIZE;
+}
+
+esp_err_t usage_client_login_finish(const char *pasted, char *err, size_t err_len)
+{
+    if (s_login_verifier[0] == '\0') {
+        snprintf(err, err_len, "Start the login first.");
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* What the page shows is CODE#STATE. */
+    char code[512];
+    strlcpy(code, pasted, sizeof(code));
+    char *hash = strchr(code, '#');
+    if (hash != NULL) {
+        *hash = '\0';
+        if (strcmp(hash + 1, s_login_state) != 0) {
+            snprintf(err, err_len, "That code belongs to another login; start again.");
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "grant_type", "authorization_code");
+    cJSON_AddStringToObject(req, "code", code);
+    cJSON_AddStringToObject(req, "state", s_login_state);
+    cJSON_AddStringToObject(req, "client_id", OAUTH_CLIENT_ID);
+    cJSON_AddStringToObject(req, "redirect_uri", REDIRECT_URI);
+    cJSON_AddStringToObject(req, "code_verifier", s_login_verifier);
+    char *body = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+
+    char *buf = heap_caps_malloc(RESPONSE_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf == NULL || body == NULL) {
+        free(buf);
+        cJSON_free(body);
+        snprintf(err, err_len, "Out of memory");
+        return ESP_ERR_NO_MEM;
+    }
+
+    xSemaphoreTake(s_token_lock, portMAX_DELAY);
+    int status = 0;
+    esp_err_t ret = http_request(HTTP_METHOD_POST, TOKEN_URL, NULL, body, &status, buf, RESPONSE_MAX);
+    cJSON_free(body);
+    if (ret != ESP_OK) {
+        snprintf(err, err_len, "Network error talking to Claude.");
+    } else if (status != 200) {
+        ESP_LOGE(TAG, "login HTTP %d: %.200s", status, buf);
+        snprintf(err, err_len, "Claude refused the code (HTTP %d). Start the login again.", status);
+        ret = ESP_FAIL;
+    } else {
+        cJSON *root = cJSON_Parse(buf);
+        const char *access = cJSON_GetStringValue(cJSON_GetObjectItem(root, "access_token"));
+        const char *refresh = cJSON_GetStringValue(cJSON_GetObjectItem(root, "refresh_token"));
+        cJSON *expires_in = cJSON_GetObjectItem(root, "expires_in");
+        if (access == NULL || refresh == NULL) {
+            snprintf(err, err_len, "Unexpected answer from Claude.");
+            ret = ESP_FAIL;
+        } else {
+            strlcpy(s_access_token, access, sizeof(s_access_token));
+            strlcpy(s_refresh_token, refresh, sizeof(s_refresh_token));
+            s_access_expires = (time_is_valid() && cJSON_IsNumber(expires_in))
+                                   ? (int64_t)time(NULL) + (int64_t)expires_in->valuedouble
+                                   : 0;
+            nvs_save_tokens();
+            ESP_LOGI(TAG, "logged in to Claude");
+        }
+        cJSON_Delete(root);
+    }
+    xSemaphoreGive(s_token_lock);
+    free(buf);
+    if (ret == ESP_OK) {
+        s_login_verifier[0] = '\0';
+    }
     return ret;
 }

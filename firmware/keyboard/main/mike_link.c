@@ -16,7 +16,7 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "mbedtls/base64.h"
-#include "app_config.h"
+#include "settings.h"
 
 static const char *TAG = "mike_link";
 
@@ -41,10 +41,13 @@ static int s_outbox_len;
 static char *s_last_draft;
 static TaskHandle_t s_task;
 static volatile bool s_connected;
+/* Read once at start; changing them on the web page restarts the board. */
+static mike_settings_t s_cfg;
+static bool s_enabled;
 
 bool mike_link_enabled(void)
 {
-    return MIKE_HOST[0] != '\0' && MIKE_TOKEN[0] != '\0';
+    return s_enabled;
 }
 
 bool mike_link_connected(void)
@@ -264,7 +267,7 @@ static bool ws_handshake(esp_tls_t *tls)
     int n = snprintf(req, sizeof(req),
                      "GET /ws HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                      "Sec-WebSocket-Key: %.*s\r\nSec-WebSocket-Version: 13\r\n\r\n",
-                     MIKE_TLS_NAME[0] ? MIKE_TLS_NAME : MIKE_HOST, MIKE_PORT, (int)key_len, key);
+                     s_cfg.tls_name[0] ? s_cfg.tls_name : s_cfg.host, s_cfg.port, (int)key_len, key);
     if (!tls_write_all(tls, (const uint8_t *)req, n)) {
         return false;
     }
@@ -384,16 +387,16 @@ static esp_tls_t *connect_tls(void)
 {
     esp_tls_cfg_t cfg = {
         .timeout_ms = 10000,
-        .is_plain_tcp = MIKE_TLS_NAME[0] == '\0',
-        .crt_bundle_attach = MIKE_TLS_NAME[0] ? esp_crt_bundle_attach : NULL,
+        .is_plain_tcp = s_cfg.tls_name[0] == '\0',
+        .crt_bundle_attach = s_cfg.tls_name[0] ? esp_crt_bundle_attach : NULL,
         /* Connected by LAN address, verified against the certificate's own name. */
-        .common_name = MIKE_TLS_NAME[0] ? MIKE_TLS_NAME : NULL,
+        .common_name = s_cfg.tls_name[0] ? s_cfg.tls_name : NULL,
     };
     esp_tls_t *tls = esp_tls_init();
     if (tls == NULL) {
         return NULL;
     }
-    if (esp_tls_conn_new_sync(MIKE_HOST, strlen(MIKE_HOST), MIKE_PORT, &cfg, tls) != 1) {
+    if (esp_tls_conn_new_sync(s_cfg.host, strlen(s_cfg.host), s_cfg.port, &cfg, tls) != 1) {
         esp_tls_conn_destroy(tls);
         return NULL;
     }
@@ -452,7 +455,7 @@ static void link_task(void *arg)
     for (;;) {
         esp_tls_t *tls = connect_tls();
         if (tls == NULL || !ws_handshake(tls)) {
-            ESP_LOGW(TAG, "cannot reach Mike at %s:%d, retrying in %d ms", MIKE_HOST, MIKE_PORT, backoff_ms);
+            ESP_LOGW(TAG, "cannot reach Mike at %s:%d, retrying in %d ms", s_cfg.host, s_cfg.port, backoff_ms);
             if (tls != NULL) {
                 esp_tls_conn_destroy(tls);
             }
@@ -463,7 +466,7 @@ static void link_task(void *arg)
 
         char hello[256];
         snprintf(hello, sizeof(hello), "{\"type\":\"hello\",\"protocol\":%d,\"token\":\"%s\",\"role\":\"keyboard\"}",
-                 PROTOCOL_VERSION, MIKE_TOKEN);
+                 PROTOCOL_VERSION, s_cfg.token);
         bool ok = ws_send_text(tls, hello);
 
         /* Whatever was typed while offline is stale; only the current line is worth sending. */
@@ -481,7 +484,7 @@ static void link_task(void *arg)
         rx->len = 0;
         TickType_t heard = xTaskGetTickCount();
         backoff_ms = 1000;
-        ESP_LOGI(TAG, "connected to Mike at %s:%d", MIKE_HOST, MIKE_PORT);
+        ESP_LOGI(TAG, "connected to Mike at %s:%d", s_cfg.host, s_cfg.port);
 
         while (ok) {
             /* Woken at once by a keystroke; otherwise a short nap between socket checks. */
@@ -519,8 +522,9 @@ static void link_task(void *arg)
 
 void mike_link_start(void)
 {
-    if (!mike_link_enabled()) {
-        ESP_LOGI(TAG, "MIKE_HOST or MIKE_TOKEN not set, keyboard link disabled");
+    s_enabled = settings_get_mike(&s_cfg);
+    if (!s_enabled) {
+        ESP_LOGI(TAG, "no Mike address or token set (web page), keyboard link off");
         return;
     }
     s_lock = xSemaphoreCreateMutex();

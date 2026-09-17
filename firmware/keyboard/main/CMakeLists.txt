@@ -1,34 +1,12 @@
-# main/secrets.h holds WiFi credentials and the Claude token. It is git-ignored,
-# so create it from the template on the first configure.
-if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/secrets.h")
-    configure_file("${CMAKE_CURRENT_LIST_DIR}/secrets.example.h" "${CMAKE_CURRENT_LIST_DIR}/secrets.h" COPYONLY)
-endif()
-
 set(requires esp32_s3_touch_amoled_1_8 lvgl__lvgl esp_wifi esp_netif esp_event nvs_flash esp_http_client esp-tls
              mbedtls esp_driver_usb_serial_jtag usb esp_http_server app_update esp_timer)
 if("${IDF_VERSION_MAJOR}" LESS 6)
     list(APPEND requires json)
 endif()
 
-idf_component_register(SRCS "claude_usage_main.c" "usage_client.c" "mike_link.c" "keyboard_input.c" "line_editor.c" "ota_server.c"
+idf_component_register(SRCS "claude_usage_main.c" "usage_client.c" "mike_link.c" "keyboard_input.c" "line_editor.c" "ota_server.c" "settings.c" "settings_ui.c" "wifi.c"
                        INCLUDE_DIRS "."
                        REQUIRES ${requires})
-
-# The OTA password lives with Mike's other secrets, in his env file.
-if(DEFINED ENV{MIKE_ENV})
-    set(mike_env "$ENV{MIKE_ENV}")
-else()
-    set(mike_env "$ENV{HOME}/.config/mike/env")
-endif()
-if(EXISTS "${mike_env}")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mike_env}")
-    file(STRINGS "${mike_env}" ota_line REGEX "^MIKE_KEYBOARD_OTA_PASSWORD=")
-    if(ota_line)
-        string(REGEX REPLACE "^MIKE_KEYBOARD_OTA_PASSWORD=" "" ota_password "${ota_line}")
-        string(STRIP "${ota_password}" ota_password)
-        target_compile_definitions(${COMPONENT_LIB} PRIVATE "MIKE_ENV_OTA_PASSWORD=\"${ota_password}\"")
-    endif()
-endif()
 
 idf_build_get_property(build_components BUILD_COMPONENTS)
 if("lvgl__lvgl" IN_LIST build_components)

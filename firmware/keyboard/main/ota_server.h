@@ -1,15 +1,21 @@
 #pragma once
 
 /*
- * Firmware updates over WiFi.
+ * The board's web page: http://<OTA_HOSTNAME>.local/
  *
- *   http://<OTA_HOSTNAME>.local/        a page to pick a .bin and upload it
- *   POST /update                        the raw .bin, header X-OTA-Password
- *   GET  /info                          version and running partition, as JSON
+ *   GET  /                    the page
+ *   GET  /info                status as JSON (no password)
+ *   POST /api/mike            { host, port, tls_name, token }   saves and restarts
+ *   POST /api/claude/start    -> { url }                        Claude login, step 1
+ *   POST /api/claude/finish   { code }                          step 2
+ *   POST /update              the raw firmware .bin
  *
- * A new image boots on probation: it has to reach WiFi within OTA_CONFIRM_S,
- * or the board restarts and the bootloader goes back to the previous image.
- * So an update can never take OTA itself away.
+ * Everything but the page and /info needs header X-Admin-Password: the admin
+ * password set on the board (F2). Without one set, all of it is refused.
+ *
+ * A new firmware image boots on probation: it has to reach WiFi within
+ * OTA_CONFIRM_S, or the board restarts and the bootloader goes back to the
+ * previous image. So an update can never take updating away.
  */
 
 /* Starts the web server and mDNS. Call once the network stack is up. */

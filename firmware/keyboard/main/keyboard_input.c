@@ -115,6 +115,7 @@ static void escape_sequence(void)
     case 'C': emit(ctrl ? KEY_WORD_RIGHT : KEY_RIGHT, 0); break;
     case 'D': emit(ctrl ? KEY_WORD_LEFT : KEY_LEFT, 0); break;
     case 'H': emit(KEY_HOME, 0); break;
+    case 'Q': emit(KEY_SETTINGS, 0); break; /* F2 */
     case 'F': emit(KEY_END, 0); break;
     case '~':
         if (strcmp(params, "3") == 0) {
@@ -123,6 +124,8 @@ static void escape_sequence(void)
             emit(KEY_HOME, 0);
         } else if (strcmp(params, "4") == 0 || strcmp(params, "8") == 0) {
             emit(KEY_END, 0);
+        } else if (strcmp(params, "12") == 0) {
+            emit(KEY_SETTINGS, 0);
         }
         break;
     default:
@@ -168,6 +171,7 @@ static void serial_task(void *arg)
         case 0x08: emit(KEY_BACKSPACE, 0); break;
         case 0x1B: escape_sequence(); break;
         case 0x03: emit(KEY_INTERRUPT, 0); break;
+        case 0x09: emit(KEY_TAB, 0); break;
         case 0x15: emit(KEY_KILL_START, 0); break;
         case 0x0B: emit(KEY_KILL_END, 0); break;
         case 0x17: emit(KEY_DELETE_WORD, 0); break;
@@ -255,7 +259,7 @@ static const keymap_t KEYMAP[] = {
 /* Is this key worth repeating while held? */
 static bool repeats(uint8_t usage)
 {
-    return usage != HID_KEY_ENTER && usage != 0x58 && usage != HID_KEY_ESC && usage != 0x39;
+    return usage != HID_KEY_ENTER && usage != 0x58 && usage != HID_KEY_ESC && usage != 0x39 && usage != 0x3B && usage != 0x2B;
 }
 
 /* One key press, translated and handed on. */
@@ -278,6 +282,8 @@ static void press(uint8_t mods, uint8_t usage)
     case 0x4A: emit(KEY_HOME, 0); return;
     case 0x4D: emit(KEY_END, 0); return;
     case 0x39: s_caps = !s_caps; return;
+    case 0x2B: emit(KEY_TAB, 0); return;
+    case 0x3B: emit(KEY_SETTINGS, 0); return; /* F2 */
     default: break;
     }
 

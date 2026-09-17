@@ -324,8 +324,8 @@ const env = {
 	MIKE_WHISPER_DEVICE: device,
 	MIKE_WHISPER_COMPUTE: compute
 };
-// Settings the wizard does not ask about stay as they were — the keyboard
-// firmware's OTA password (firmware/keyboard) lives in this file too.
+// Settings the wizard does not ask about stay as they were: a line added to
+// this file by hand must survive the next run.
 for (const [k, v] of Object.entries(previous)) if (!(k in env)) env[k] = v;
 write(ENV_FILE, [
 	"# Mike — written by `npm run setup`. Read by `npm start` and the systemd units.",

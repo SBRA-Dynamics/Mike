@@ -29,6 +29,8 @@ typedef enum {
     KEY_KILL_END,    /* Ctrl+K */
     KEY_ESCAPE,      /* clears the line */
     KEY_INTERRUPT,   /* Ctrl+C */
+    KEY_TAB,
+    KEY_SETTINGS,    /* F2: the settings screen */
 } key_action_t;
 
 typedef struct {
