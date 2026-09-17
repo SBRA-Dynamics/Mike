@@ -251,8 +251,8 @@ static void wifi_render(void)
         }
         lv_obj_set_style_bg_color(s_wifi_bars[i], color, 0);
     }
-    /* The battery glyph is 10 px on a 16 px line with a 3 px descender: rows 3-12. */
-    lv_obj_align_to(s_wifi, s_battery, LV_ALIGN_OUT_LEFT_TOP, -12, 3);
+    /* The battery glyph is 10 px on a 16 px line; placed by eye one row above its computed rows 3-12. */
+    lv_obj_align_to(s_wifi, s_battery, LV_ALIGN_OUT_LEFT_TOP, -12, 2);
 }
 
 static void battery_timer_cb(lv_timer_t *timer)
