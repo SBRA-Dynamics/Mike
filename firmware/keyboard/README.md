@@ -124,6 +124,12 @@ version and partition are running.
 
 ## Usage
 
+- The header shows the battery: level and percent from the AXP2101's fuel
+  gauge, a bolt while charging, red at 15 % and below on battery, and a USB
+  symbol when running from USB with no battery. The gauge estimates the charge
+  from the battery voltage and the current in and out; it needs a few full
+  cycles to become accurate and starts over whenever the battery has been
+  disconnected. `/info` has percent, voltage and charging state too.
 - The status dot is green when data is current, orange when the last fetch failed
   and red without WiFi or data. Errors are shown at the bottom.
 - Usage is fetched every 5 minutes. A tap fetches right away, at most once a

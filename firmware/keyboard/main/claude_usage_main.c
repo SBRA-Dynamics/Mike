@@ -21,6 +21,7 @@
 #include "mike_link.h"
 #include "nvs_flash.h"
 #include "ota_server.h"
+#include "power.h"
 #include "settings.h"
 #include "settings_ui.h"
 #include "usage_client.h"
@@ -48,6 +49,7 @@ static lv_obj_t *s_root;
 static lv_obj_t *s_content;
 static lv_obj_t *s_footer;
 static lv_obj_t *s_status_dot;
+static lv_obj_t *s_battery;
 static usage_data_t s_data;
 static bool s_have_data;
 static char s_error[128];
@@ -206,6 +208,39 @@ static void render(void)
     }
 }
 
+/* The battery in the header: level and percent, a bolt while charging, USB without a battery. */
+static void battery_render(void)
+{
+    power_status_t p;
+    power_get(&p);
+    char text[32] = "";
+    lv_color_t color = COLOR_MUTED;
+    if (p.ok && p.battery && p.percent >= 0) {
+        const char *level = p.percent >= 85   ? LV_SYMBOL_BATTERY_FULL
+                            : p.percent >= 60 ? LV_SYMBOL_BATTERY_3
+                            : p.percent >= 35 ? LV_SYMBOL_BATTERY_2
+                            : p.percent >= 10 ? LV_SYMBOL_BATTERY_1
+                                              : LV_SYMBOL_BATTERY_EMPTY;
+        if (p.flow == POWER_CHARGING) {
+            snprintf(text, sizeof(text), LV_SYMBOL_CHARGE " %s %d%%", level, p.percent);
+            color = COLOR_OK;
+        } else {
+            snprintf(text, sizeof(text), "%s %d%%", level, p.percent);
+            color = p.percent <= 15 && !p.usb_power ? COLOR_CRIT : COLOR_MUTED;
+        }
+    } else if (p.ok && p.usb_power) {
+        strlcpy(text, LV_SYMBOL_USB, sizeof(text));
+    }
+    lv_label_set_text(s_battery, text);
+    lv_obj_set_style_text_color(s_battery, color, 0);
+    lv_obj_align_to(s_battery, s_status_dot, LV_ALIGN_OUT_LEFT_MID, -10, 0);
+}
+
+static void battery_timer_cb(lv_timer_t *timer)
+{
+    battery_render();
+}
+
 static void tick_timer_cb(lv_timer_t *timer)
 {
     render(); /* keeps the "Resets in" countdowns current */
@@ -254,6 +289,8 @@ static void ui_create(void)
     lv_obj_set_style_bg_opa(s_status_dot, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(s_status_dot, COLOR_MUTED, 0);
     lv_obj_align(s_status_dot, LV_ALIGN_RIGHT_MID, 0, 0);
+    s_battery = label(header, &lv_font_montserrat_14, COLOR_MUTED, "");
+    lv_obj_align_to(s_battery, s_status_dot, LV_ALIGN_OUT_LEFT_MID, -10, 0);
 
     s_content = plain_container(s_root);
     lv_obj_set_flex_flow(s_content, LV_FLEX_FLOW_COLUMN);
@@ -268,6 +305,7 @@ static void ui_create(void)
 
     render();
     lv_timer_create(tick_timer_cb, 20 * 1000, NULL);
+    lv_timer_create(battery_timer_cb, 5 * 1000, NULL);
     lv_timer_create(pixel_shift_cb, PIXEL_SHIFT_PERIOD_MS, NULL);
 }
 
@@ -439,6 +477,7 @@ void app_main(void)
         bsp_display_unlock();
     }
     factory_reset_start();
+    power_start();
 
     char ssid[33];
     wifi_stored_ssid(ssid, sizeof(ssid));

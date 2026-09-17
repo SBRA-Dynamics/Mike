@@ -1,10 +1,10 @@
 set(requires esp32_s3_touch_amoled_1_8 lvgl__lvgl esp_wifi esp_netif esp_event nvs_flash esp_http_client esp-tls
-             mbedtls esp_driver_usb_serial_jtag esp_driver_gpio usb esp_http_server app_update esp_timer)
+             mbedtls esp_driver_usb_serial_jtag esp_driver_gpio esp_driver_i2c usb esp_http_server app_update esp_timer)
 if("${IDF_VERSION_MAJOR}" LESS 6)
     list(APPEND requires json)
 endif()
 
-idf_component_register(SRCS "claude_usage_main.c" "usage_client.c" "mike_link.c" "keyboard_input.c" "line_editor.c" "ota_server.c" "settings.c" "settings_ui.c" "wifi.c" "factory_reset.c"
+idf_component_register(SRCS "claude_usage_main.c" "usage_client.c" "mike_link.c" "keyboard_input.c" "line_editor.c" "ota_server.c" "settings.c" "settings_ui.c" "wifi.c" "factory_reset.c" "power.c"
                        INCLUDE_DIRS "."
                        REQUIRES ${requires})
 

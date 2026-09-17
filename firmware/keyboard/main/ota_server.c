@@ -20,6 +20,7 @@
 #include "keyboard_input.h"
 #include "mdns.h"
 #include "mike_link.h"
+#include "power.h"
 #include "settings.h"
 #include "usage_client.h"
 
@@ -111,6 +112,8 @@ static const char PAGE[] =
     "$('status').textContent=`Firmware ${i.version} (${i.partition})\\nWiFi ${i.wifi.ssid||'not set'} ${i.wifi.ip||''}\\n`+"
     "`Mike ${i.mike.url||'not set'}${i.mike.connected?' - connected':''}\\n`+"
     "`Claude ${i.claude.logged_in?'logged in':'not logged in'}\\n`+"
+    "`Battery ${i.battery.present?i.battery.percent+'%, '+(i.battery.millivolts/1000).toFixed(2)+' V, '+i.battery.state:'none'}`+"
+    "`${i.battery.usb_power?' (USB power)':''}\\n`+"
     "`Keyboard ${i.keyboard.attached?'connected':'not connected'}`+"
     /* The counters only when something is wrong: they are for finding a wiring fault. */
     "((!i.keyboard.attached||i.keyboard.transfer_errors)?` (${i.keyboard.interfaces} USB interfaces, `+"
@@ -255,6 +258,18 @@ static esp_err_t info_get(httpd_req_t *req)
 
     cJSON *c = cJSON_AddObjectToObject(root, "claude");
     cJSON_AddBoolToObject(c, "logged_in", usage_client_has_credentials());
+
+    power_status_t pw;
+    power_get(&pw);
+    cJSON *b = cJSON_AddObjectToObject(root, "battery");
+    cJSON_AddBoolToObject(b, "present", pw.battery);
+    cJSON_AddNumberToObject(b, "percent", pw.percent);
+    cJSON_AddNumberToObject(b, "millivolts", pw.millivolts);
+    cJSON_AddBoolToObject(b, "usb_power", pw.usb_power);
+    cJSON_AddStringToObject(b, "state", pw.flow == POWER_CHARGING      ? "charging"
+                                        : pw.flow == POWER_DISCHARGING ? "discharging"
+                                        : pw.charge_done               ? "full"
+                                                                       : "idle");
 
     keyboard_stats_t kb;
     keyboard_input_stats(&kb);
