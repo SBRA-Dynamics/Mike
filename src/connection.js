@@ -4,14 +4,16 @@
 // disposable and a session is not — nothing here may own conversation state,
 // and a socket dying must never disturb work in flight.
 
-import { C2S, CLOSE, CONTROL, PROTOCOL_VERSION, msg, validateC2S } from "./protocol.js";
+import { C2S, CLOSE, CONTROL, PROTOCOL_VERSION, ROLE, msg, validateC2S } from "./protocol.js";
 
 /** A connection must say hello before anything else, and quickly. */
 const HELLO_TIMEOUT_MS = 10_000;
 
-export function attachConnection({ ws, req, store, config, handler, log, registry, mcp }) {
+export function attachConnection({ ws, req, store, config, handler, log, registry, mcp, keyboards }) {
 	const peer = req.socket.remoteAddress;
 	let session = null;
+	/** A keyboard (keyboard.js) has no session of its own; it types into one. */
+	let keyboard = false;
 	let alive = true;
 	let helloTimer = null;
 
@@ -21,7 +23,7 @@ export function attachConnection({ ws, req, store, config, handler, log, registr
 	};
 
 	helloTimer = setTimeout(() => {
-		if (!session) { log.warn(`no hello from ${peer} within ${HELLO_TIMEOUT_MS}ms`); fail(CLOSE.BAD_PROTOCOL, "no hello"); }
+		if (!session && !keyboard) { log.warn(`no hello from ${peer} within ${HELLO_TIMEOUT_MS}ms`); fail(CLOSE.BAD_PROTOCOL, "no hello"); }
 	}, HELLO_TIMEOUT_MS);
 
 	// Keepalive. ws answers pings itself; this detects a peer that has gone away
@@ -44,6 +46,7 @@ export function attachConnection({ ws, req, store, config, handler, log, registr
 		if (!v.ok) {
 			// A bad message after hello is reported but not fatal: one malformed
 			// frame should not cost the user their conversation.
+			if (keyboard) { log.warn(`bad message from keyboard ${peer}: ${v.error}`); return send(msg.error(v.error)); }
 			if (!session) return fail(CLOSE.BAD_MESSAGE, v.error);
 			log.warn(`bad message from ${peer}: ${v.error}`);
 			return session.emit(msg.error(v.error));
@@ -51,9 +54,11 @@ export function attachConnection({ ws, req, store, config, handler, log, registr
 		const m = v.msg;
 
 		if (m.type === C2S.HELLO) {
+			if (keyboard) return send(msg.error("already said hello"));
 			if (session) return session.emit(msg.error("already said hello"));
 			return onHello(m);
 		}
+		if (keyboard) return onKeyboard(m);
 		if (!session) return fail(CLOSE.BAD_PROTOCOL, "say hello first");
 
 		if (m.type === C2S.CONTROL && handleTransportControl(m)) return;
@@ -76,6 +81,17 @@ export function attachConnection({ ws, req, store, config, handler, log, registr
 
 		if (m.protocol !== PROTOCOL_VERSION) {
 			return fail(CLOSE.BAD_PROTOCOL, `protocol ${m.protocol} not supported, server speaks ${PROTOCOL_VERSION}`);
+		}
+
+		if (m.role === ROLE.KEYBOARD) {
+			if (!keyboards) return fail(CLOSE.BAD_PROTOCOL, "this server takes no keyboards");
+			keyboard = true;
+			const target = keyboards.attach(ws);
+			// No cursor and no replay: a keyboard is sent nothing of the
+			// conversation. The session id is only there to be logged.
+			send(msg.ready(target?.id ?? null, 0, { role: ROLE.KEYBOARD }));
+			log.info(`hello from keyboard ${peer} typing into ${target ? target.id.slice(0, 8) : "nothing yet"}`);
+			return;
 		}
 
 		session = store.getOrCreate(m.sessionId);
@@ -111,6 +127,51 @@ export function attachConnection({ ws, req, store, config, handler, log, registr
 
 		log.info(`hello from ${peer} session=${session.id.slice(0, 8)} resumeFrom=${from} missed=${missed.length}${gapped ? " GAP" : ""}`);
 		handler.onOpen?.(session, { peer, resumed: asked });
+		keyboards?.clientsChanged();
+		keyboards?.greet(session, send);
+	}
+
+	/**
+	 * Everything a keyboard may do: show its line, send it, stop a turn. Each is
+	 * addressed to wherever the keyboard types NOW, resolved per message, so a
+	 * phone that reconnected under another session is followed rather than
+	 * typed past.
+	 */
+	async function onKeyboard(m) {
+		switch (m.type) {
+			case C2S.DRAFT:
+				keyboards.draft(ws, m.text, m.cursor);
+				return;
+
+			case C2S.SAY:
+			case C2S.INTERRUPT: {
+				const target = keyboards.resolve(ws);
+				if (!target) return send(msg.error("no conversation to type into"));
+				// The box empties the moment the line leaves it, ahead of the
+				// turn: the turn then shows the line where the box was.
+				if (m.type === C2S.SAY) keyboards.draft(ws, "", 0);
+				try {
+					// Typed, whatever the message claims: this is a keyboard, and
+					// typed is what skips the addressing gate (PRD 5a R5a.4).
+					await handler.onMessage(target, m.type === C2S.SAY ? { ...m, origin: "typed" } : m, { peer });
+				} catch (e) {
+					log.error(`handler threw on keyboard ${m.type}: ${e.stack || e.message}`);
+					send(msg.error(`internal error handling ${m.type}`));
+				}
+				return;
+			}
+
+			case C2S.CONTROL:
+				if (m.action === CONTROL.CLIENT_LOG) {
+					const text = String(m.args?.text ?? "").replace(/\s+/g, " ").slice(0, 500);
+					if (text) log[m.args?.level === "error" ? "error" : "info"](`keyboard ${peer}: ${text}`);
+					return;
+				}
+				return send(msg.error(`a keyboard cannot ${String(m.action).slice(0, 30)}`));
+
+			default:
+				return send(msg.error(`a keyboard cannot send ${m.type}`));
+		}
 	}
 
 	/** Control actions the transport owns (PRD 1 R1.5). Returns true when handled. */
@@ -193,13 +254,17 @@ export function attachConnection({ ws, req, store, config, handler, log, registr
 	ws.on("close", (code, reason) => {
 		clearInterval(ping);
 		clearTimeout(helloTimer);
-		if (session) {
+		if (keyboard) {
+			keyboards.detach(ws);
+			log.info(`closed keyboard ${peer} code=${code}`);
+		} else if (session) {
 			session.detach(ws);
 			log.info(`closed ${peer} session=${session.id.slice(0, 8)} code=${code}${reason?.length ? " " + reason : ""} remaining=${session.connectionCount}`);
 			// Deliberately no cancellation here: a turn in flight keeps running
 			// and its output lands in the session, ready to be replayed when the
 			// client comes back. PRD 1 R1.3.
 			handler.onClose?.(session, { peer });
+			keyboards?.clientsChanged();
 		} else {
 			log.info(`closed ${peer} before hello code=${code}`);
 		}

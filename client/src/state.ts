@@ -8,7 +8,7 @@
 
 import { DEFAULT_MODE, MODE_LABEL, MODES } from "../../src/routing.js";
 import { BODY_ROWS, wrapText } from "./lens/render.ts";
-import type { LensCorners, LensMic } from "./lens/render.ts";
+import type { LensCorners, LensInput, LensMic } from "./lens/render.ts";
 import type { VoiceStatus } from "./audio/voice.ts";
 import type { ConnectionStatus } from "./connection.ts";
 import type { EventMsg, ReadyMsg, SeqMsg, WorkerInfo } from "./protocol.ts";
@@ -122,6 +122,10 @@ export type AppState = {
 	 *  pairing screen waits on this: a blip while the phone was in a pocket is
 	 *  not a reason to put a QR button over the conversation. */
 	offlineSince: number | null;
+	/** A keyboard typing into this conversation (the server's keyboard.js): its
+	 *  line as it stands and where the cursor is, in code points. The lens has
+	 *  a text box on its bottom row for exactly as long as `connected` is true. */
+	keyboard: { connected: boolean; text: string; cursor: number };
 };
 
 export type Pending = {
@@ -291,7 +295,8 @@ export class Store {
 		displayOff: false,
 		commandNote: null,
 		beacon: [],
-		offlineSince: null
+		offlineSince: null,
+		keyboard: { connected: false, text: "", cursor: 0 }
 	};
 
 	/** When the user last asked to see the lens — see #wake. */
@@ -442,6 +447,10 @@ export class Store {
 	}
 
 	applyReady(ready: ReadyMsg): void {
+		// Forgotten on every (re)attach: the server says again, straight after
+		// `ready`, if a keyboard is typing here — and a box left standing from
+		// before a reconnect would be a keyboard that may have gone.
+		this.state.keyboard = { connected: false, text: "", cursor: 0 };
 		this.state.sessionId = ready.sessionId;
 		this.state.worker = ready.worker ?? null;
 		this.state.mode = ready.mode ?? this.state.mode;
@@ -594,6 +603,12 @@ export class Store {
 	 *  there is no microphone to speak of yet. Live rather than enabled, so
 	 *  that a hold shows as hearing and a switch left on with nothing open —
 	 *  paused, or backgrounded — does not. */
+	/** The text box on the bottom row, while a keyboard is typing here. */
+	lensInput(): LensInput | null {
+		const k = this.state.keyboard;
+		return k.connected ? { text: k.text, cursor: k.cursor } : null;
+	}
+
 	lensMic(): LensMic {
 		const v = this.state.voice;
 		if (!v) return null;
@@ -616,6 +631,9 @@ export class Store {
 	 *  and blanking under the user's own finger would read as a dropped hold. */
 	idleFor(now = Date.now()): number {
 		if (this.state.voice?.held) return 0;
+		// A line being typed is the keyboard's hold: the user is in the middle
+		// of saying something, and the box must not go dark under their hands.
+		if (this.state.keyboard.connected && this.state.keyboard.text) return 0;
 		const last = Math.max(this.state.lensAt, this.state.heard?.at ?? 0, this.#wokeAt);
 		return last ? now - last : 0;
 	}
@@ -1204,6 +1222,24 @@ export class Store {
 				if (d.previousName && d.worker?.name) this.#renameWorker(String(d.previousName), d.worker as WorkerInfo);
 				else if (d.worker?.name) this.#rememberWorker(d.worker as WorkerInfo);
 				this.state.lastEvent = d.previousName ? `${d.previousName} is now ${d.worker?.name}` : m.kind;
+				break;
+
+			case "keyboard": {
+				// Carries the line too, so a client attaching mid-line shows it
+				// at once rather than at the next keystroke.
+				const connected = d.connected === true;
+				this.state.keyboard = connected
+					? { connected, text: String(d.text ?? ""), cursor: Number(d.cursor) || 0 }
+					: { connected: false, text: "", cursor: 0 };
+				break;
+			}
+
+			case "draft":
+				// One per keystroke. It lights the lens, the way speech starting
+				// does (wake): typing is asking to see the box. Nothing else is
+				// touched — not lastEvent, which would become a keystroke counter.
+				this.state.keyboard = { connected: true, text: String(d.text ?? ""), cursor: Number(d.cursor) || 0 };
+				if (this.#live) this.#wokeAt = Date.now();
 				break;
 
 			case "micRequested":

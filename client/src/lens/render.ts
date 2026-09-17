@@ -98,6 +98,27 @@ export const BODY_PX = FRAME_PX;
 
 export type LensMic = "live" | "off" | null;
 
+/** A keyboard's line: the text and the cursor, in code points. */
+export type LensInput = { text: string; cursor: number };
+
+/**
+ * The text box, drawn in the bottom edge of the frame the way the title is
+ * drawn in the top one: `╰─ > line being typed| ──────╯`.
+ *
+ * The cursor is `|`. It is the one caret the firmware font has that is thin:
+ * the block and bar glyphs (`▌`, `▏`, `│`) all advance a full 20 px, which on
+ * a proportional font pushes the rest of the line a letter's width to the right
+ * every time the cursor moves. It does not blink — a blink is a BLE round trip
+ * every half second, spent on nothing.
+ */
+const INPUT_L = `${CORNER_BL}${EDGE_H} > `;
+const INPUT_R = ` ${EDGE_H}${CORNER_BR}`;
+export const CARET = "|";
+/** How much of the line past the cursor stays in view when the line is too
+ *  long for the row, so the cursor is never pinned against the right edge
+ *  with nothing after it while there is more. */
+const INPUT_AHEAD = 8;
+
 export type LensView = {
 	/** Who is speaking: "Mike", a worker's name, or a system label. */
 	from: string;
@@ -114,6 +135,8 @@ export type LensView = {
 	blank?: boolean;
 	/** On a blank lens only: what its top row carries. */
 	corners?: LensCorners;
+	/** A keyboard is typing: the bottom row is its text box. */
+	input?: LensInput | null;
 };
 
 export type LensFrame = {
@@ -272,6 +295,36 @@ const fillRow = (left: string, right: string, filler = " "): Row => {
 	};
 };
 
+/**
+ * The part of a long line that is on the row: a window around the cursor, cut
+ * with an ellipsis on whichever side there is more. Stateless — the window is
+ * a function of the line and the cursor alone — so the preview and the glasses
+ * agree, and a lost frame cannot leave the view scrolled somewhere stale.
+ */
+export const inputWindow = (input: LensInput, cols: number, px: number): string => {
+	const chars = Array.from(input.text);
+	const cursor = Math.max(0, Math.min(input.cursor, chars.length));
+	const show = (from: number, to: number) =>
+		(from > 0 ? ELLIPSIS : "") + chars.slice(from, cursor).join("") + CARET + chars.slice(cursor, to).join("") + (to < chars.length ? ELLIPSIS : "");
+	if (fits(show(0, chars.length), cols, px)) return show(0, chars.length);
+
+	let from = cursor;
+	let to = cursor;
+	// A little of what follows the cursor, then as much as fits before it, then
+	// whatever room is left after it.
+	while (to < chars.length && to - cursor < INPUT_AHEAD && fits(show(from, to + 1), cols, px)) to++;
+	while (from > 0 && fits(show(from - 1, to), cols, px)) from--;
+	while (to < chars.length && fits(show(from, to + 1), cols, px)) to++;
+	return show(from, to);
+};
+
+/** The bottom edge as a text box. */
+const inputRow = (input: LensInput): Row => {
+	const cols = LENS.cols - INPUT_L.length - INPUT_R.length;
+	const px = FRAME_PX - getTextWidth(INPUT_L) - getTextWidth(INPUT_R);
+	return fillRow(`${INPUT_L}${inputWindow(input, cols, px)} `, CORNER_BR, EDGE_H);
+};
+
 /** The whole frame. `page` is clamped, so a stale page index from a previous,
  *  longer reply cannot show an empty lens. */
 export const renderLens = (view: LensView): LensFrame => {
@@ -301,7 +354,7 @@ export const renderLens = (view: LensView): LensFrame => {
 	// Body rows are the text and nothing else: with no side edges there is
 	// nothing to pad them out to, and an empty row costs one newline.
 	for (let i = 0; i < BODY_ROWS; i++) { const line = shown[i] ?? ""; rows.push({ cols: line, px: line }); }
-	rows.push(fillRow(CORNER_BL, CORNER_BR, EDGE_H));
+	rows.push(view.input ? inputRow(view.input) : fillRow(CORNER_BL, CORNER_BR, EDGE_H));
 
 	return {
 		header,

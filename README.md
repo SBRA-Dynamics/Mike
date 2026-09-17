@@ -303,6 +303,40 @@ aimed at the machine), the microphone switch and a hold-to-talk button. There
 are no settings: with no server it shows one button, Scan QR, and that is the
 whole configuration.
 
+### A keyboard
+
+A line typed on a real keyboard, shown on the lens while it is typed. The
+keyboard is a separate device — an ESP32 board with a USB keyboard on it —
+that connects to the server with `role: "keyboard"` in its hello and sends the
+whole line after every keystroke:
+
+```
+→ { type: "hello", protocol: 1, token, role: "keyboard" }
+→ { type: "draft", text: "kör testerna", cursor: 3 }    after every keystroke
+→ { type: "say", text: "kör testerna" }                 Enter; typed, so no name is needed
+→ { type: "interrupt" }                                 Ctrl+C
+```
+
+It never names a session. `src/keyboard.js` types into the conversation that
+has a client attached, stays there while it does, and follows the phone when
+it comes back under another one. Drafts are transient — never in the
+transcript, never replayed — and a keyboard is sent nothing but `ready` and
+errors.
+
+While a keyboard is connected the bottom edge of the frame is its text box:
+
+```
+╰─ > kör| testerna ─────────────────────────────╯
+```
+
+`|` is the cursor, and a line too long for the row scrolls around it with an
+ellipsis at the cut. The box is there only while a keyboard is; everything else
+— voice, gestures, the idle lens — is unchanged, except that a draft lights the
+lens the way speech does and a non-empty line keeps it lit.
+
+The firmware is `examples/esp-idf/15_claude_usage_monitor` in the
+ESP32-S3-Touch-AMOLED-1.8 repository.
+
 ## Deployment
 
 The wizard writes two systemd units to `~/.config/mike/systemd/` and, if you

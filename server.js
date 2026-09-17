@@ -28,6 +28,7 @@ import { WebSocketServer } from "ws";
 import { log } from "./src/log.js";
 import { SessionStore } from "./src/sessions.js";
 import { attachConnection } from "./src/connection.js";
+import { createKeyboards } from "./src/keyboard.js";
 import { createEchoHandler, createMikeHandler, DEFAULT_HOLD_MS } from "./src/handler.js";
 import { PROTOCOL_VERSION } from "./src/protocol.js";
 import { WorkerRegistry } from "./src/workers.js";
@@ -372,7 +373,9 @@ if (config.cert && config.key) {
 server.on("connection", (socket) => socket.setNoDelay(true));
 
 const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 4 * 1024 * 1024 });
-wss.on("connection", (ws, req) => attachConnection({ ws, req, store, config, handler, log, registry, mcp }));
+// Keyboards type into whichever conversation is open (src/keyboard.js).
+const keyboards = createKeyboards({ store, log });
+wss.on("connection", (ws, req) => attachConnection({ ws, req, store, config, handler, log, registry, mcp, keyboards }));
 
 server.on("clientError", (err, socket) => {
 	log.warn(`client error: ${err.code || err.message}`);

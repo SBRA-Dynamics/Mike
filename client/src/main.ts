@@ -370,7 +370,7 @@ const paint = (): void => {
 	mark("render");
 	const view = store.lensView();
 	const dark = store.lensDark();
-	frame = renderLens({ from: view.from, text: view.text, status: store.lensStatus(), mic: store.lensMic(), page: view.page, blank: dark, corners: store.lensCorners() });
+	frame = renderLens({ from: view.from, text: view.text, status: store.lensStatus(), mic: store.lensMic(), page: view.page, blank: dark, corners: store.lensCorners(), input: store.lensInput() });
 	mark("companion");
 	companion.render(s, frame, store.listening(), store.needsPairing());
 	mark(`glasses ${frame.content.length}c`);

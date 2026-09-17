@@ -8,14 +8,26 @@ export const PROTOCOL_VERSION = 1;
 
 /** Client -> server */
 export const C2S = {
-	HELLO: "hello",         // { protocol, token, sessionId?, resumeFrom? }
+	HELLO: "hello",         // { protocol, token, sessionId?, resumeFrom?, role? }
 	SAY: "say",             // { text, origin? }
 	AUDIO: "audio",         // { pcm, final, sampleRate?, durationMs? }  (PRD 5a)
 	NOISE: "noise",         // { pcm, sampleRate?, device? }  — raw background noise, for the car test
 	SPEAKING: "speaking",   // { on }  — the microphone hears speech / stopped hearing it (PRD 6)
 	INTERRUPT: "interrupt", // {}
-	CONTROL: "control"      // { action, args }
+	CONTROL: "control",     // { action, args }
+	DRAFT: "draft"          // { text, cursor }  — a keyboard's unsent line (keyboard.js)
 };
+
+/** What a connection is. Absent means a conversation client — the glasses, a
+ *  browser. A keyboard is a line editor on a desk: it types into whichever
+ *  conversation is open and is sent nothing of it. */
+export const ROLE = {
+	KEYBOARD: "keyboard"
+};
+
+/** The longest line a keyboard may hold. The lens shows fifty characters of
+ *  it; this is room for a paragraph, and a bound on what one draft can cost. */
+export const MAX_DRAFT = 2000;
 
 /** Control actions the transport itself owns (PRD 1 R1.5). */
 export const CONTROL = {
@@ -96,6 +108,7 @@ export function validateC2S(raw) {
 			if (!isStr(raw.token) || !raw.token) return { ok: false, error: "hello needs a token" };
 			if (raw.sessionId !== undefined && !isSessionId(raw.sessionId)) return { ok: false, error: "sessionId must be a UUID issued by the server" };
 			if (raw.resumeFrom !== undefined && !Number.isInteger(raw.resumeFrom)) return { ok: false, error: "resumeFrom must be an integer" };
+			if (raw.role !== undefined && raw.role !== ROLE.KEYBOARD) return { ok: false, error: "role must be keyboard" };
 			return { ok: true, msg: raw };
 
 		case C2S.SAY:
@@ -156,6 +169,16 @@ export function validateC2S(raw) {
 			return { ok: true, msg: raw };
 
 		case C2S.INTERRUPT:
+			return { ok: true, msg: raw };
+
+		case C2S.DRAFT:
+			// The whole line every time, never an edit to it: a lost frame then
+			// costs one stale keystroke on the lens, not a line out of step.
+			if (!isStr(raw.text)) return { ok: false, error: "draft needs text" };
+			if (raw.text.length > MAX_DRAFT) return { ok: false, error: "draft too long" };
+			// In code points, which is what a line editor moves over and what
+			// Array.from() gives back on the client.
+			if (!Number.isInteger(raw.cursor) || raw.cursor < 0 || raw.cursor > MAX_DRAFT) return { ok: false, error: "draft needs a cursor" };
 			return { ok: true, msg: raw };
 
 		case C2S.CONTROL:
