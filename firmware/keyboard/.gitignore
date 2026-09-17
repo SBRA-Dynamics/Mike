@@ -1,0 +1,10 @@
+# WiFi password, Claude token, Mike token and OTA password: created from
+# main/secrets.example.h on the first build and never committed.
+main/secrets.h
+
+# ESP-IDF build output and generated files
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+dependencies.lock

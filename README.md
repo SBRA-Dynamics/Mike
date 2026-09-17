@@ -334,8 +334,9 @@ ellipsis at the cut. The box is there only while a keyboard is; everything else
 — voice, gestures, the idle lens — is unchanged, except that a draft lights the
 lens the way speech does and a non-empty line keeps it lit.
 
-The firmware is `examples/esp-idf/15_claude_usage_monitor` in the
-ESP32-S3-Touch-AMOLED-1.8 repository.
+The firmware is in [`firmware/keyboard/`](firmware/keyboard/): a Waveshare
+ESP32-S3-Touch-AMOLED-1.8 that also shows the claude.ai plan usage, updates
+over WiFi, and takes a USB keyboard or a wireless receiver.
 
 ## Deployment
 
