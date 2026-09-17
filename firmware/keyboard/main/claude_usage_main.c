@@ -251,7 +251,7 @@ static void wifi_render(void)
         }
         lv_obj_set_style_bg_color(s_wifi_bars[i], color, 0);
     }
-    lv_obj_align_to(s_wifi, s_battery, LV_ALIGN_OUT_LEFT_BOTTOM, -12, 0);
+    lv_obj_align_to(s_wifi, s_battery, LV_ALIGN_OUT_LEFT_MID, -12, 0);
 }
 
 static void battery_timer_cb(lv_timer_t *timer)
@@ -313,11 +313,11 @@ static void ui_create(void)
 
     s_wifi = lv_obj_create(header);
     lv_obj_remove_style_all(s_wifi);
-    lv_obj_set_size(s_wifi, 4 * 4 + 3 * 2, 14);
+    lv_obj_set_size(s_wifi, 4 * 4 + 3 * 2, 21);
     for (int i = 0; i < 4; i++) {
         s_wifi_bars[i] = lv_obj_create(s_wifi);
         lv_obj_remove_style_all(s_wifi_bars[i]);
-        lv_obj_set_size(s_wifi_bars[i], 4, 5 + i * 3);
+        lv_obj_set_size(s_wifi_bars[i], 4, 8 + (i * 13) / 3);
         lv_obj_set_style_radius(s_wifi_bars[i], 1, 0);
         lv_obj_set_style_bg_opa(s_wifi_bars[i], LV_OPA_COVER, 0);
         lv_obj_align(s_wifi_bars[i], LV_ALIGN_BOTTOM_LEFT, i * 6, 0);
