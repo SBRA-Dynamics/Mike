@@ -51,9 +51,16 @@ static const compose_t COMPOSE[] = {
     {'~', "anoANO", TILDE},
 };
 
+static void emit_mods(key_action_t action, uint32_t codepoint, uint8_t modifiers)
+{
+    key_event_t event = {action, codepoint, modifiers};
+    s_dead = 0;
+    s_handler(&event);
+}
+
 static void emit(key_action_t action, uint32_t codepoint)
 {
-    key_event_t event = {action, codepoint};
+    key_event_t event = {action, codepoint, 0};
     if (action != KEY_CHAR) {
         s_dead = 0;
         s_handler(&event);
@@ -76,7 +83,7 @@ static void emit(key_action_t action, uint32_t codepoint)
         }
     }
     /* No composition: the accent itself, then the key (space gives the accent alone). */
-    key_event_t spacing = {KEY_CHAR, accent};
+    key_event_t spacing = {KEY_CHAR, accent, 0};
     s_handler(&spacing);
     if (codepoint != ' ') {
         s_handler(&event);
@@ -122,7 +129,10 @@ static void escape_sequence(void)
     case 'C': emit(ctrl ? KEY_WORD_RIGHT : KEY_RIGHT, 0); break;
     case 'D': emit(ctrl ? KEY_WORD_LEFT : KEY_LEFT, 0); break;
     case 'H': emit(KEY_HOME, 0); break;
-    case 'Q': emit(KEY_SETTINGS, 0); break; /* F2 */
+    case 'P': emit(KEY_FUNCTION, 1); break; /* SS3 P-S: F1-F4 */
+    case 'Q': emit(KEY_FUNCTION, 2); break;
+    case 'R': emit(KEY_FUNCTION, 3); break;
+    case 'S': emit(KEY_FUNCTION, 4); break;
     case 'F': emit(KEY_END, 0); break;
     case '~':
         if (strcmp(params, "3") == 0) {
@@ -131,8 +141,17 @@ static void escape_sequence(void)
             emit(KEY_HOME, 0);
         } else if (strcmp(params, "4") == 0 || strcmp(params, "8") == 0) {
             emit(KEY_END, 0);
-        } else if (strcmp(params, "12") == 0) {
-            emit(KEY_SETTINGS, 0);
+        } else {
+            /* CSI n~ for F5-F12. */
+            static const struct { const char *code; uint32_t number; } FKEYS[] = {
+                {"15", 5}, {"17", 6}, {"18", 7}, {"19", 8}, {"20", 9}, {"21", 10}, {"23", 11}, {"24", 12},
+            };
+            for (size_t i = 0; i < sizeof(FKEYS) / sizeof(FKEYS[0]); i++) {
+                if (strcmp(params, FKEYS[i].code) == 0) {
+                    emit(KEY_FUNCTION, FKEYS[i].number);
+                    break;
+                }
+            }
         }
         break;
     default:
@@ -267,7 +286,8 @@ static const keymap_t KEYMAP[] = {
 /* Is this key worth repeating while held? */
 static bool repeats(uint8_t usage)
 {
-    return usage != HID_KEY_ENTER && usage != 0x58 && usage != HID_KEY_ESC && usage != 0x39 && usage != 0x3B && usage != 0x2B;
+    return usage != HID_KEY_ENTER && usage != 0x58 && usage != HID_KEY_ESC && usage != 0x39 && usage != 0x2B &&
+           !(usage >= 0x3A && usage <= 0x45);
 }
 
 /* One key press, translated and handed on. */
@@ -291,12 +311,19 @@ static void press(uint8_t mods, uint8_t usage)
     case 0x4D: emit(KEY_END, 0); return;
     case 0x39: s_caps = !s_caps; return;
     case 0x2B: emit(KEY_TAB, 0); return;
-    case 0x3B: emit(KEY_SETTINGS, 0); return; /* F2 */
     default: break;
     }
 
     s_stats.keys++;
     s_stats.last_usage = usage;
+
+    /* F1-F12 (usages 0x3A-0x45) go to Mike with their modifiers, not to the line. */
+    if (usage >= 0x3A && usage <= 0x45) {
+        uint8_t held = (ctrl ? KEY_MOD_CTRL : 0) | (shift ? KEY_MOD_SHIFT : 0) |
+                       ((mods & (MOD_LALT | MOD_RALT)) && !altgr ? KEY_MOD_ALT : 0);
+        emit_mods(KEY_FUNCTION, usage - 0x3A + 1, held);
+        return;
+    }
 
     if (usage >= HID_KEY_A && usage <= HID_KEY_Z) {
         char letter = 'a' + (usage - HID_KEY_A);

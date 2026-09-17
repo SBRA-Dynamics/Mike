@@ -140,7 +140,7 @@ static void render(void)
                  !mike_set ? "not set (web page)" : mike_link_connected() ? "connected" : "not connected",
                  usage_client_has_credentials() ? "logged in" : "not logged in (web page)");
         info(text);
-        lv_label_set_text(s_help, "Up/Down choose   Enter open   Esc or F2 close");
+        lv_label_set_text(s_help, "Up/Down choose   Enter open   Esc close");
     } else if (s_mode == MODE_SCAN) {
         lv_label_set_text(s_title, "Choose a network");
         if (s_scanning) {

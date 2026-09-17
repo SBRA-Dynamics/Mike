@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "mbedtls/base64.h"
+#include "keyboard_input.h"
 #include "settings.h"
 
 static const char *TAG = "mike_link";
@@ -189,6 +190,16 @@ static void log_line(const char *text)
     }
     sb_str(&sb, "\"}}");
     enqueue(MSG_LOG, sb.buf);
+}
+
+void mike_link_key(uint32_t function_number, uint8_t modifiers)
+{
+    char json[160];
+    snprintf(json, sizeof(json),
+             "{\"type\":\"control\",\"action\":\"key\",\"args\":{\"key\":\"f%u\",\"ctrl\":%s,\"shift\":%s,\"alt\":%s}}",
+             (unsigned)function_number, modifiers & KEY_MOD_CTRL ? "true" : "false",
+             modifiers & KEY_MOD_SHIFT ? "true" : "false", modifiers & KEY_MOD_ALT ? "true" : "false");
+    enqueue(MSG_OTHER, strdup(json));
 }
 
 void mike_link_log(const char *fmt, ...)

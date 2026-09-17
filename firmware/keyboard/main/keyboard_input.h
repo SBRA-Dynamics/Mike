@@ -30,12 +30,19 @@ typedef enum {
     KEY_ESCAPE,      /* clears the line */
     KEY_INTERRUPT,   /* Ctrl+C */
     KEY_TAB,
-    KEY_SETTINGS,    /* F2: the settings screen */
+    KEY_FUNCTION,    /* F1-F12; codepoint holds the number */
+    KEY_SETTINGS,    /* Ctrl+Alt+S: the settings screen (BOOT does it too) */
 } key_action_t;
+
+/* Modifiers, for the keys where they are part of the key rather than the letter. */
+#define KEY_MOD_CTRL 0x01
+#define KEY_MOD_SHIFT 0x02
+#define KEY_MOD_ALT 0x04
 
 typedef struct {
     key_action_t action;
     uint32_t codepoint;
+    uint8_t modifiers;
 } key_event_t;
 
 typedef void (*key_handler_t)(const key_event_t *event);

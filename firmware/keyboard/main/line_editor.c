@@ -349,6 +349,10 @@ void line_editor_key(const key_event_t *event)
     case KEY_TAB:
     case KEY_SETTINGS:
         return;
+    case KEY_FUNCTION:
+        /* Not part of the line: Mike decides what F1-F12 do. */
+        mike_link_key(event->codepoint, event->modifiers);
+        return;
     case KEY_ENTER:
         submit();
         return; /* the server empties the box itself when the line arrives */

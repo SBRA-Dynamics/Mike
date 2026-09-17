@@ -60,11 +60,21 @@ keyboard and Mike are connected.
 | Backspace / Delete | delete (Ctrl+Backspace, Ctrl+W: a word; Ctrl+U / Ctrl+K: to start / end) |
 | Up / Down | earlier lines, like a shell history (kept across reboots) |
 | Enter | send the line to Mike |
-| F2 | settings screen |
+| F1-F12 | sent to Mike as they are, with their modifiers (see below) |
 | Esc | clear the line |
 | Ctrl+C | interrupt the running turn |
 
-The layout is Swedish, with dead keys for accents (´ ` ¨ ^ ~).
+The layout is Swedish, with dead keys for accents (´ ` ¨ ^ ~). The settings
+screen is opened with the BOOT button (or Ctrl+Alt+S), not with an F-key.
+
+The F-keys are not part of the line. They go to the server as
+
+```json
+{ "type": "control", "action": "key", "args": { "key": "f3", "ctrl": false, "shift": false, "alt": false } }
+```
+
+so a server that does not know the action answers with an error and the
+connection carries on. What they do is for the server to decide.
 
 `KEYBOARD_SERIAL_TEST` in `main/app_config.h` takes keystrokes from a terminal
 on the USB serial port instead, and `KEYBOARD_DEBUG` sends USB interfaces, raw

@@ -31,6 +31,14 @@ void mike_link_say(const uint32_t *text, size_t len);
 /* Stops the running turn. */
 void mike_link_interrupt(void);
 
+/*
+ * A key that is not text: F1-F12, with the modifiers held with it. Sent as
+ *   { type: "control", action: "key", args: { key: "f3", ctrl, shift, alt } }
+ * so that a server which does not know the action answers with an error
+ * rather than dropping the connection.
+ */
+void mike_link_key(uint32_t function_number, uint8_t modifiers);
+
 /* A line in the Mike server's log, for diagnosing the board when its USB port
  * is a host and it has no serial console. printf-style, ASCII. */
 void mike_link_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
