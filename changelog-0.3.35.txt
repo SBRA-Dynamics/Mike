@@ -1,0 +1,6 @@
+Type to Mike on a keyboard and see the line on the lens.
+
+- While a keyboard is connected, the bottom edge of the lens is a text box showing the line as it is typed, with a cursor.
+- A long line scrolls around the cursor.
+- Enter sends the line to whoever you are talking to, no name needed. Voice works as before.
+- Typing lights the lens, and a half-typed line keeps it lit.
