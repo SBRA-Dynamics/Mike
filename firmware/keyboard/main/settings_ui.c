@@ -259,6 +259,18 @@ void settings_ui_open(const char *note)
     }
 }
 
+void settings_ui_close(void)
+{
+    if (!s_active || !bsp_display_lock(0)) {
+        return;
+    }
+    if (s_active) {
+        s_active = false;
+        lv_screen_load(s_previous);
+    }
+    bsp_display_unlock();
+}
+
 /* ------------------------------------------------------------------ keys -- */
 
 static void start_edit(field_t field)

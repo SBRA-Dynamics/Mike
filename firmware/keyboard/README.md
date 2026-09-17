@@ -30,8 +30,8 @@ NVS, so a firmware update keeps it:
      it shows and press *Finish login*. The board then renews the 8-hour access
      token by itself and keeps the rotated tokens.
 
-**BOOT button.** Holding it for 5 seconds opens the settings screen, which is
-also how to reach the settings without a keyboard.
+**BOOT button.** Holding it for 5 seconds opens the settings screen, and a
+short press closes it again - the way in and out without a keyboard.
 
 **Forgotten admin password, or a keyboard that does not work?** Keep holding
 **BOOT** past 10 seconds. The screen then counts down 5 more

@@ -18,5 +18,8 @@ bool settings_ui_active(void);
 /* Shows the screen, with an optional line of explanation at the top. */
 void settings_ui_open(const char *note);
 
+/* Puts the previous screen back. Safe to call when it is not showing. */
+void settings_ui_close(void);
+
 /* One keystroke while the screen is showing. Called from the keyboard task. */
 void settings_ui_key(const key_event_t *event);

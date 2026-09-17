@@ -129,10 +129,19 @@ static void watch_task(void *arg)
         bool menu_shown = false;
         while (held_ms < FACTORY_RESET_HOLD_S * 1000) {
             vTaskDelay(pdMS_TO_TICKS(POLL_MS));
-            held_ms = pressed() ? held_ms + POLL_MS : 0;
-            if (held_ms == 0) {
+            if (!pressed()) {
+                /* A short press closes the settings again: without a keyboard there
+                 * is no other way out of them. */
+                if (held_ms > 0 && !menu_shown && settings_ui_active()) {
+                    ESP_LOGI(TAG, "BOOT tapped, closing the settings");
+                    settings_ui_close();
+                }
+                held_ms = 0;
                 menu_shown = false;
-            } else if (!menu_shown && held_ms >= FACTORY_RESET_MENU_S * 1000) {
+                continue;
+            }
+            held_ms += POLL_MS;
+            if (!menu_shown && held_ms >= FACTORY_RESET_MENU_S * 1000) {
                 menu_shown = true;
                 ESP_LOGI(TAG, "BOOT held for %d s, opening the settings", FACTORY_RESET_MENU_S);
                 if (!settings_ui_active()) {
