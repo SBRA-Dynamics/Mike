@@ -51,6 +51,10 @@ These are settled and not revisited by the phase PRDs:
 | **7** | Mail, provider-neutral: accounts, tokens, the provider contract, quarantined reading | Mail text reaching a model that has Bash |
 | **7a** | Gmail provider | Google's 7-day refresh tokens for unverified apps |
 | **7b** | Outlook provider (Microsoft Graph) | `$search` and `$filter` cannot be combined |
+| **8.0** | The watch (ESP32-S3-Touch-AMOLED-2.06): why, the hardware as it is, the order of work | — |
+| **8.1** | Watch status and remote control, sleep and wake | A working day on 400 mAh |
+| **8.2** | Watch push-to-talk into 5a's pipeline | Transcription quality from a wrist |
+| **8.3** | The voder: local speech synthesis for any client with a speaker | Swedish voice quality, first-sentence latency |
 
 Phases 1–3 need no glasses. Phase 4 makes the client real.
 
