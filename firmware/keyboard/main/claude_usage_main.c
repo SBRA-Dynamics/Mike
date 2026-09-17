@@ -11,6 +11,7 @@
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_random.h"
+#include "factory_reset.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "app_config.h"
@@ -437,6 +438,7 @@ void app_main(void)
         settings_ui_create();
         bsp_display_unlock();
     }
+    factory_reset_start();
 
     char ssid[33];
     wifi_stored_ssid(ssid, sizeof(ssid));

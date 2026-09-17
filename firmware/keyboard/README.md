@@ -27,6 +27,14 @@ NVS, so a firmware update keeps it:
      it shows and press *Finish login*. The board then renews the 8-hour access
      token by itself and keeps the rotated tokens.
 
+**Forgotten admin password, or a keyboard that does not work?** Hold the
+**BOOT** button for 10 seconds. The screen then counts down 5 more
+("Resetting settings in 5s"); keep holding and every setting is erased — WiFi,
+admin password, Mike, the Claude login and the typing history — and the board
+restarts as new. Let go during the countdown to cancel. With no admin password
+set, the first one can also be set on the web page, so the board never needs
+the keyboard to be reached again.
+
 `main/app_config.h` holds the few build-time settings: poll interval and
 back-off, time zone, brightness, host name, and the keyboard test and debug
 switches.

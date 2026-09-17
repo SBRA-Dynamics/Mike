@@ -25,6 +25,10 @@
 /* The board's name on the network: http://OTA_HOSTNAME.local/ */
 #define OTA_HOSTNAME "claude-usage"
 
+/* Hold BOOT this long, then a countdown of this long, to erase every setting. */
+#define FACTORY_RESET_HOLD_S 10
+#define FACTORY_RESET_COUNTDOWN_S 5
+
 /* A new firmware image must reach WiFi within this many seconds or it is rolled back. */
 #define OTA_CONFIRM_S 90
 
