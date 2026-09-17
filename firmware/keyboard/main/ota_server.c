@@ -111,8 +111,10 @@ static const char PAGE[] =
     "$('status').textContent=`Firmware ${i.version} (${i.partition})\\nWiFi ${i.wifi.ssid||'not set'} ${i.wifi.ip||''}\\n`+"
     "`Mike ${i.mike.url||'not set'}${i.mike.connected?' - connected':''}\\n`+"
     "`Claude ${i.claude.logged_in?'logged in':'not logged in'}\\n`+"
-    "`Keyboard ${i.keyboard.attached?'attached':'not attached'}, ${i.keyboard.interfaces} USB interfaces, `+"
-    "`${i.keyboard.reports} reports, ${i.keyboard.keys} keys, ${i.keyboard.transfer_errors} transfer errors`;"
+    "`Keyboard ${i.keyboard.attached?'connected':'not connected'}`+"
+    /* The counters only when something is wrong: they are for finding a wiring fault. */
+    "((!i.keyboard.attached||i.keyboard.transfer_errors)?` (${i.keyboard.interfaces} USB interfaces, `+"
+    "`${i.keyboard.reports} reports, ${i.keyboard.transfer_errors} transfer errors)`:'');"
     "$('first').hidden=i.admin_set;"
     "if(!$('url').value){$('url').value=i.mike.url}"
     "$('token').placeholder=i.mike.token_set?'stored':'';return i});"
