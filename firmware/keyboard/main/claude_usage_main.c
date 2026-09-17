@@ -251,7 +251,8 @@ static void wifi_render(void)
         }
         lv_obj_set_style_bg_color(s_wifi_bars[i], color, 0);
     }
-    lv_obj_align_to(s_wifi, s_battery, LV_ALIGN_OUT_LEFT_MID, -12, 0);
+    /* The battery glyph is 10 px on a 16 px line with a 3 px descender: rows 3-12. */
+    lv_obj_align_to(s_wifi, s_battery, LV_ALIGN_OUT_LEFT_TOP, -12, 3);
 }
 
 static void battery_timer_cb(lv_timer_t *timer)
@@ -313,11 +314,11 @@ static void ui_create(void)
 
     s_wifi = lv_obj_create(header);
     lv_obj_remove_style_all(s_wifi);
-    lv_obj_set_size(s_wifi, 4 * 4 + 3 * 2, 7);
+    lv_obj_set_size(s_wifi, 4 * 4 + 3 * 2, 10);
     for (int i = 0; i < 4; i++) {
         s_wifi_bars[i] = lv_obj_create(s_wifi);
         lv_obj_remove_style_all(s_wifi_bars[i]);
-        lv_obj_set_size(s_wifi_bars[i], 4, 3 + (i * 4) / 3);
+        lv_obj_set_size(s_wifi_bars[i], 4, 4 + i * 2);
         lv_obj_set_style_radius(s_wifi_bars[i], 1, 0);
         lv_obj_set_style_bg_opa(s_wifi_bars[i], LV_OPA_COVER, 0);
         lv_obj_align(s_wifi_bars[i], LV_ALIGN_BOTTOM_LEFT, i * 6, 0);
