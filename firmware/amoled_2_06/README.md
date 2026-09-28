@@ -146,6 +146,9 @@ version and partition are running.
   minute. When the usage endpoint answers 429 the board waits for its
   Retry-After, and at least 5 minutes, doubling up to 30 while it repeats.
 - The layout moves a few pixels every five minutes to limit AMOLED burn-in.
+- The screen goes dark after 15 seconds (`SCREEN_OFF_S`) without a touch, a key
+  or a button. A touch, BOOT, the PWR key or a key on a USB keyboard lights it;
+  the touch or BOOT press that wakes it does nothing else.
 
 ## Notes
 
