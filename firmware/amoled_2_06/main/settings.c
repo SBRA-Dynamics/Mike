@@ -17,6 +17,7 @@ static const char *TAG = "settings";
 static SemaphoreHandle_t s_lock;
 static mike_settings_t s_mike;
 static char s_admin[64];
+static bool s_usb_to_computer;
 
 static void load_str(nvs_handle_t nvs, const char *key, char *out, size_t len)
 {
@@ -75,6 +76,9 @@ void settings_init(void)
     load_str(nvs, "mike_url", s_mike.url, sizeof(s_mike.url));
     load_str(nvs, "mike_token", s_mike.token, sizeof(s_mike.token));
     load_str(nvs, "admin", s_admin, sizeof(s_admin));
+    uint8_t usb_pc = 0;
+    nvs_get_u8(nvs, "usb_pc", &usb_pc);
+    s_usb_to_computer = usb_pc != 0;
     if (s_mike.url[0] == '\0') {
         /* Settings from before the single URL: the certificate name is the address to use. */
         char host[64] = "";
@@ -169,5 +173,26 @@ esp_err_t settings_set_admin_password(const char *password)
     xSemaphoreGive(s_lock);
     err = nvs_commit(nvs);
     nvs_close(nvs);
+    return err;
+}
+
+bool settings_usb_to_computer(void)
+{
+    return s_usb_to_computer;
+}
+
+esp_err_t settings_set_usb_to_computer(bool on)
+{
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        return err;
+    }
+    nvs_set_u8(nvs, "usb_pc", on ? 1 : 0);
+    err = nvs_commit(nvs);
+    nvs_close(nvs);
+    if (err == ESP_OK) {
+        s_usb_to_computer = on;
+    }
     return err;
 }

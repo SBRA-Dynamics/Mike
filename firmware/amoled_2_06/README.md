@@ -99,12 +99,21 @@ board to a client of the server.
   the keyboard, the board plugs into the hub's host side.
 - The port is no longer a serial port. To flash again, hold **BOOT** while
   plugging in (the watch has no RESET button), then flash as usual.
-- A wireless receiver can instead be wired to the `USB_P` (GPIO20) and `USB_N`
-  (GPIO19) pads, which are the same lines as the USB-C port. Power it with 5 V
+- A wireless receiver can instead be wired to the test points TP18 (`USB'_P`,
+  GPIO20) and TP12 (`USB'_N`, GPIO19), which are the same lines as the USB-C
+  port behind its 22 Ω resistors. Power it with 5 V
   and GND only, share GND with the board, and connect nothing else to its
   D+/D−: a USB cable's data wires left on a hub, or the board's USB-C port on a
   computer, put a second host on the bus and the receiver reconnects every
   half second. Power the board from its battery or a charger.
+- **USB to computer** in the settings lets go of the USB pins after the next
+  restart: no host, no serial device, no pull resistors on D+/D-. A receiver
+  wired to those test points then reaches a
+  computer on the USB-C port as if it were plugged in there - to pair devices
+  with Logitech's software, for example. The board has no keyboard meanwhile,
+  and for the half second of every restart before the app runs, the ROM's own
+  USB device shares the wire with the receiver. The choice is kept across
+  restarts and erased by the BOOT reset.
 - Try the editor without a keyboard first with `KEYBOARD_SERIAL_TEST 1` and a
   terminal: `python3 -m serial.tools.miniterm PORT 115200`.
 

@@ -50,6 +50,13 @@ typedef void (*key_handler_t)(const key_event_t *event);
 /* Starts the configured source. The handler runs on the keyboard's own task. */
 void keyboard_input_start(key_handler_t handler);
 
+/*
+ * Instead of keyboard_input_start(): lets go of the USB pins entirely - no
+ * host, no USB-Serial-JTAG device, no pull resistors - so a receiver wired to
+ * D+/D- reaches a computer on the USB-C port as if it were plugged in there.
+ */
+void keyboard_input_release_usb(void);
+
 /* True while a keyboard is attached (always true for the serial source). */
 bool keyboard_input_attached(void);
 

@@ -590,3 +590,28 @@ void keyboard_input_start(key_handler_t handler)
     xTaskCreatePinnedToCore(keyboard_task, "keyboard", 6144, NULL, 7, NULL, 1);
 }
 #endif
+
+/* =========================================================== pass-through ===
+ * The ROM and the bootloader leave the internal PHY on the pins as the
+ * USB-Serial-JTAG device, with its 1.5 k pull-up on D+. Taking the pull-ups
+ * and -downs away and the PHY off the pads leaves two inputs with nothing on
+ * them, and the wire to the computer belongs to the receiver alone.
+ */
+#include "driver/gpio.h"
+#include "hal/usb_serial_jtag_ll.h"
+
+void keyboard_input_release_usb(void)
+{
+    const usb_serial_jtag_pull_override_vals_t none = {0};
+    usb_serial_jtag_ll_phy_enable_pull_override(&none);
+    usb_serial_jtag_ll_phy_enable_pad(false);
+
+    const gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << GPIO_NUM_19) | (1ULL << GPIO_NUM_20),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    };
+    gpio_config(&cfg);
+    ESP_LOGI(TAG, "USB pins released: the port belongs to the receiver");
+}

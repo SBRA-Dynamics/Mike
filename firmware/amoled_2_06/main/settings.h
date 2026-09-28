@@ -38,3 +38,8 @@ bool settings_parse_url(const char *url, char *host, size_t host_len, uint16_t *
 bool settings_admin_password_set(void);
 bool settings_check_admin_password(const char *given);
 esp_err_t settings_set_admin_password(const char *password);
+
+/* USB to computer: the USB pins are let go, so the receiver on them reaches a
+ * computer on the USB-C port instead of this board. Takes effect on restart. */
+bool settings_usb_to_computer(void);
+esp_err_t settings_set_usb_to_computer(bool on);

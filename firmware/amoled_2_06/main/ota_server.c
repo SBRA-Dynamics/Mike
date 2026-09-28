@@ -235,6 +235,7 @@ static esp_err_t info_get(httpd_req_t *req)
     cJSON_AddStringToObject(root, "built", built);
     cJSON_AddStringToObject(root, "partition", esp_ota_get_running_partition()->label);
     cJSON_AddBoolToObject(root, "admin_set", settings_admin_password_set());
+    cJSON_AddBoolToObject(root, "usb_to_computer", settings_usb_to_computer());
 
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
     wifi_config_t cfg;

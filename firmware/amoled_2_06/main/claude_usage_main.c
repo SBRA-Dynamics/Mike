@@ -472,7 +472,11 @@ void app_main(void)
         mike_link_forward_logs();
     }
     line_editor_init();
-    keyboard_input_start(on_key);
+    if (settings_usb_to_computer()) {
+        keyboard_input_release_usb();
+    } else {
+        keyboard_input_start(on_key);
+    }
 
 #if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0)
     esp_log_level_t i2c_log_level = esp_log_level_get("i2c.master");

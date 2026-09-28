@@ -6,6 +6,7 @@
 #include "app_config.h"
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
@@ -29,7 +30,7 @@ static const char *TAG = "settings_ui";
 
 typedef enum { MODE_MENU, MODE_SCAN, MODE_EDIT } ui_mode_t;
 typedef enum { FIELD_SSID, FIELD_WIFI_PASSWORD, FIELD_ADMIN_PASSWORD } field_t;
-typedef enum { ITEM_NETWORK, ITEM_WIFI_PASSWORD, ITEM_ADMIN_PASSWORD, ITEM_CLOSE, ITEM_COUNT } item_t;
+typedef enum { ITEM_NETWORK, ITEM_WIFI_PASSWORD, ITEM_ADMIN_PASSWORD, ITEM_USB, ITEM_CLOSE, ITEM_COUNT } item_t;
 
 /* All of this is touched with the LVGL lock held. */
 static lv_obj_t *s_screen;
@@ -207,6 +208,7 @@ static void render(void)
         row(ITEM_NETWORK, "WiFi network", ssid[0] ? ssid : "not set");
         row(ITEM_WIFI_PASSWORD, "WiFi password", "change");
         row(ITEM_ADMIN_PASSWORD, "Admin password", settings_admin_password_set() ? "set" : "not set");
+        row(ITEM_USB, "USB to computer", settings_usb_to_computer() ? "on" : "off");
         row(ITEM_CLOSE, "Close", "");
 
         char ip[16];
@@ -385,6 +387,25 @@ static void save_edit(void)
     }
 }
 
+static void restart_cb(lv_timer_t *timer)
+{
+    esp_restart();
+}
+
+/* The USB port changes hands only at startup, so the choice is saved and the board restarts. */
+static void toggle_usb(void)
+{
+    bool on = !settings_usb_to_computer();
+    if (settings_set_usb_to_computer(on) != ESP_OK) {
+        strlcpy(s_note_text, "Could not save the choice.", sizeof(s_note_text));
+        return;
+    }
+    strlcpy(s_note_text, on ? "USB goes to the computer. Restarting..." : "USB comes back to the board. Restarting...",
+            sizeof(s_note_text));
+    lv_timer_t *timer = lv_timer_create(restart_cb, 1500, NULL);
+    lv_timer_set_repeat_count(timer, 1);
+}
+
 /* What Enter, or a tap on the selected line, does. Renders unless it scanned. */
 static void activate(void)
 {
@@ -403,6 +424,8 @@ static void activate(void)
             }
         } else if (s_selected == ITEM_ADMIN_PASSWORD) {
             start_edit(FIELD_ADMIN_PASSWORD);
+        } else if (s_selected == ITEM_USB) {
+            toggle_usb();
         } else {
             close_locked();
             return;
