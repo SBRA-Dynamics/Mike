@@ -21,6 +21,7 @@
 #include "nvs_flash.h"
 #include "ota_server.h"
 #include "power.h"
+#include "screen_sleep.h"
 #include "settings.h"
 #include "settings_ui.h"
 #include "usage_client.h"
@@ -438,6 +439,7 @@ static void poll_task(void *arg)
 /* Keystrokes: F2 and the settings screen first, everything else to Mike. */
 static void on_key(const key_event_t *event)
 {
+    screen_sleep_wake();
     if (event->action == KEY_SETTINGS || settings_ui_active()) {
         settings_ui_key(event);
         return;
@@ -493,6 +495,7 @@ void app_main(void)
     if (bsp_display_lock(0)) {
         ui_create();
         settings_ui_create();
+        screen_sleep_start();
         bsp_display_unlock();
     }
     factory_reset_start();

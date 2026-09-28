@@ -4,7 +4,7 @@ if("${IDF_VERSION_MAJOR}" LESS 6)
     list(APPEND requires json)
 endif()
 
-idf_component_register(SRCS "claude_usage_main.c" "usage_client.c" "mike_link.c" "keyboard_input.c" "line_editor.c" "ota_server.c" "settings.c" "settings_ui.c" "wifi.c" "factory_reset.c" "power.c"
+idf_component_register(SRCS "claude_usage_main.c" "usage_client.c" "mike_link.c" "keyboard_input.c" "line_editor.c" "ota_server.c" "settings.c" "settings_ui.c" "wifi.c" "factory_reset.c" "power.c" "screen_sleep.c"
                        INCLUDE_DIRS "."
                        REQUIRES ${requires})
 

@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "screen_sleep.h"
 #include "settings_ui.h"
 #include "nvs.h"
 
@@ -127,18 +128,24 @@ static void watch_task(void *arg)
          */
         int held_ms = 0;
         bool menu_shown = false;
+        bool woke = false;
         while (held_ms < FACTORY_RESET_HOLD_S * 1000) {
             vTaskDelay(pdMS_TO_TICKS(POLL_MS));
             if (!pressed()) {
                 /* A short press closes the settings again: without a keyboard there
                  * is no other way out of them. */
-                if (held_ms > 0 && !menu_shown && settings_ui_active()) {
+                if (held_ms > 0 && !menu_shown && !woke && settings_ui_active()) {
                     ESP_LOGI(TAG, "BOOT tapped, closing the settings");
                     settings_ui_close();
                 }
                 held_ms = 0;
                 menu_shown = false;
+                woke = false;
                 continue;
+            }
+            if (held_ms == 0) {
+                /* A press on a dark screen only lights it. */
+                woke = screen_sleep_wake();
             }
             held_ms += POLL_MS;
             if (!menu_shown && held_ms >= FACTORY_RESET_MENU_S * 1000) {

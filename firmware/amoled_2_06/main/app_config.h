@@ -25,6 +25,9 @@
 /* Display brightness in percent. */
 #define DISPLAY_BRIGHTNESS 60
 
+/* The screen goes dark after this long without a touch, a key or a button. */
+#define SCREEN_OFF_S 15
+
 /* The board's name on the network: http://OTA_HOSTNAME.local/ */
 #define OTA_HOSTNAME "claude-watch"
 
