@@ -283,8 +283,8 @@ void settings_ui_create(void)
     s_screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_screen, COLOR_BG, 0);
     lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(s_screen, 22, 0);
-    lv_obj_set_style_pad_ver(s_screen, 18, 0);
+    lv_obj_set_style_pad_hor(s_screen, CORNER_INSET + 22, 0);
+    lv_obj_set_style_pad_ver(s_screen, CORNER_INSET + 18, 0);
     lv_obj_set_flex_flow(s_screen, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_screen, 10, 0);
     lv_obj_set_scrollable(s_screen, false);

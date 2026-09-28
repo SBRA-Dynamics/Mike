@@ -270,7 +270,7 @@ static void pixel_shift_cb(lv_timer_t *timer)
     /* AMOLED burn-in protection: nudge the static layout a few pixels. */
     int dx = (int)(esp_random() % (2 * SCREEN_MARGIN + 1)) - SCREEN_MARGIN;
     int dy = (int)(esp_random() % (2 * SCREEN_MARGIN + 1)) - SCREEN_MARGIN;
-    lv_obj_set_pos(s_root, SCREEN_MARGIN + dx, SCREEN_MARGIN + dy);
+    lv_obj_set_pos(s_root, CORNER_INSET + SCREEN_MARGIN + dx, CORNER_INSET + SCREEN_MARGIN + dy);
 }
 
 static void touch_cb(lv_event_t *e)
@@ -291,9 +291,9 @@ static void ui_create(void)
     s_root = lv_obj_create(scr);
     lv_obj_remove_style_all(s_root);
     lv_obj_set_event_bubble(s_root, true);
-    lv_obj_set_size(s_root, lv_display_get_horizontal_resolution(NULL) - 2 * SCREEN_MARGIN,
-                    lv_display_get_vertical_resolution(NULL) - 2 * SCREEN_MARGIN);
-    lv_obj_set_pos(s_root, SCREEN_MARGIN, SCREEN_MARGIN);
+    lv_obj_set_size(s_root, lv_display_get_horizontal_resolution(NULL) - 2 * (CORNER_INSET + SCREEN_MARGIN),
+                    lv_display_get_vertical_resolution(NULL) - 2 * (CORNER_INSET + SCREEN_MARGIN));
+    lv_obj_set_pos(s_root, CORNER_INSET + SCREEN_MARGIN, CORNER_INSET + SCREEN_MARGIN);
     lv_obj_set_style_pad_hor(s_root, 16, 0);
     lv_obj_set_style_pad_ver(s_root, 14, 0);
     lv_obj_set_flex_flow(s_root, LV_FLEX_FLOW_COLUMN);

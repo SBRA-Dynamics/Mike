@@ -19,6 +19,9 @@
 /* POSIX TZ string used for reset times. */
 #define LOCAL_TIMEZONE "CET-1CEST,M3.5.0,M10.5.0/3"
 
+/* The 2.06 panel has rounded corners: every screen keeps this far in from the edges. */
+#define CORNER_INSET 12
+
 /* Display brightness in percent. */
 #define DISPLAY_BRIGHTNESS 60
 
