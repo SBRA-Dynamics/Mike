@@ -16,7 +16,7 @@ goes dark by itself and the watch lasts a working day.
 
 ## Scope
 
-No audio, in either direction. No typing — the keyboard (`firmware/keyboard/`)
+No audio, in either direction. No typing — the keyboard (`firmware/amoled_1_8/`)
 does that, and keeps doing it while the watch is in use. What is new is a
 client in C that is sent the conversation rather than only sending to it, a
 server that places two kinds of device without either one pulling the other
@@ -39,7 +39,7 @@ on top.
 
 ### R8.1.0 — Shared firmware first, with the keyboard as the test
 
-Before any watch screen exists, the parts of `firmware/keyboard/main/` that
+Before any watch screen exists, the parts of `firmware/amoled_1_8/main/` that
 PRD 8.0 marks as reused move to `firmware/components/`, one ESP-IDF component
 each, and both projects list that directory in `EXTRA_COMPONENT_DIRS`:
 
@@ -371,8 +371,8 @@ logged every second. None needs the UI.
 ## Files
 
 ```
-firmware/components/                 R8.1.0 — moved from firmware/keyboard/main, shared
-firmware/keyboard/                   rebuilt on the shared components, behavior unchanged
+firmware/components/                 R8.1.0 — moved from firmware/amoled_1_8/main, shared
+firmware/amoled_1_8/                 rebuilt on the shared components, behavior unchanged
 firmware/watch/                      ESP-IDF project (idf.py -C firmware/watch build)
 firmware/watch/main/app.c            startup order: WiFi, then display, then UI
 firmware/watch/main/model.c          worker list and waiting marks — host-buildable

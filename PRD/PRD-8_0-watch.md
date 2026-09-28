@@ -53,7 +53,7 @@ around:
 ## What already exists: the keyboard
 
 Mike already has an ESP32 device, built and running before this PRD:
-[`firmware/keyboard/`](../firmware/keyboard/), an ESP32-S3-Touch-AMOLED-1.8
+[`firmware/amoled_1_8/`](../firmware/amoled_1_8/), an ESP32-S3-Touch-AMOLED-1.8
 (the original SH8601/FT3168 revision, BSP 1.1.4) with a USB keyboard on it. It
 types into the conversation on the glasses (`role: "keyboard"`,
 `src/keyboard.js`), shows the claude.ai plan usage, and updates over WiFi. It
@@ -64,7 +64,7 @@ It is the first template for the watch, ahead of anything from a vendor,
 because it is ours, it speaks this server's protocol, and every part of it has
 run on real hardware:
 
-| in `firmware/keyboard/main/` | what it does | for the watch |
+| in `firmware/amoled_1_8/main/` | what it does | for the watch |
 |---|---|---|
 | `mike_link.c` | WebSocket client on esp-tls, hand-framed; hello, outbox, reconnect with back-off, 65 s silence timeout, Nagle off, `clientLog` forwarding. Measured 2–7 ms board to client on the LAN | **reused**, extended: receive and parse the conversation, `resumeFrom`, frames larger than its 8 KB receive buffer, and a wait on the socket instead of its 20 ms poll loop, which would keep a sleeping watch awake |
 | `settings.c` | Mike as one URL (`https://kontoret.onvo.se:3456`) plus token, and an admin password, in NVS; the certificate checked against the URL's host | **reused as it is** |
@@ -194,7 +194,7 @@ for this board is read from in PRD 8.2.
 | Settings | As on the keyboard: WiFi and an admin password on the device, Mike's URL and token on its web page, all in NVS; nothing compiled in |
 | Updates | Over WiFi with rollback, as on the keyboard |
 | Audio on the wire | 16 kHz s16le mono PCM, as PRD 5a fixed it. Opus is a later optimization |
-| Location | `firmware/watch/`, next to `firmware/keyboard/`; shared code in `firmware/components/` |
+| Location | `firmware/watch/`, next to `firmware/amoled_1_8/`; shared code in `firmware/components/` |
 
 ### Why the same token
 

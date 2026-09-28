@@ -334,7 +334,7 @@ ellipsis at the cut. The box is there only while a keyboard is; everything else
 — voice, gestures, the idle lens — is unchanged, except that a draft lights the
 lens the way speech does and a non-empty line keeps it lit.
 
-The firmware is in [`firmware/keyboard/`](firmware/keyboard/): a Waveshare
+The firmware is in [`firmware/amoled_1_8/`](firmware/amoled_1_8/): a Waveshare
 ESP32-S3-Touch-AMOLED-1.8 that also shows the claude.ai plan usage, updates
 over WiFi, and takes a USB keyboard or a wireless receiver.
 
